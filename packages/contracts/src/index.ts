@@ -19,3 +19,4 @@ export {
 export * from "./evidence.js";
 export * from "./saved-scope.js";
 export * from "./target-normalization.js";
+export * from "./nmap.js";

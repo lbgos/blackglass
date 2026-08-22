@@ -30,3 +30,4 @@ export {
   normalizeScopeRules,
   selectExecutionRepresentation,
 } from "./saved-scope.js";
+export { buildNmapArgv } from "./nmap-argv.js";
