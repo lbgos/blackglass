@@ -695,9 +695,10 @@ describe("evidence grant admission", () => {
         "slot-a",
       );
     expect(interrupted.changes).toBe(1);
+    // 'published' is a valid grant state; an unknown state must still fail.
     expect(() =>
       db
-        .prepare(base.replace("'in_progress'", "'published'"))
+        .prepare(base.replace("'in_progress'", "'orphaned'"))
         .run("dddddddd-bbbb-4ccc-8ddd-cccccccccccc", "u7", runId, "slot-e"),
     ).toThrow();
     expect(() =>

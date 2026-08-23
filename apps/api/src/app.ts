@@ -19,12 +19,14 @@ import type {
 
 import { registerActionMutationRoutes } from "./action-mutation-routes.js";
 import { registerActionRoutes } from "./action-routes.js";
+import type { EvidencePublicationService } from "./evidence/evidence-publication.js";
 import { registerEngagementMutationRoutes } from "./engagement-mutation-routes.js";
 import { registerEngagementRoutes } from "./engagement-routes.js";
 import { registerRunnerAuthHook, stripAuthorizationHeader } from "./runner-http.js";
 import { registerRunnerEnrollmentRoutes } from "./runner-enrollment-routes.js";
 import { registerRunnerControlRoutes } from "./runner-routes.js";
 import { registerRunnerEvidenceGrantRoutes } from "./runner-evidence-grant-routes.js";
+import { registerRunnerEvidenceUploadRoutes } from "./runner-evidence-upload-routes.js";
 
 interface BuildAppOptions {
   getDevelopmentStorageReadiness: () => Readiness | Promise<Readiness>;
@@ -55,6 +57,7 @@ interface BuildAppOptions {
     | "requireAcceptedSession"
   >;
   evidenceGrantRepository?: Pick<EvidenceGrantRepository, "createGrant">;
+  evidencePublication?: EvidencePublicationService;
   logger?: FastifyServerOptions["logger"];
   now?: () => Date;
 }
@@ -66,6 +69,7 @@ export function buildApp({
   runRepository,
   runnerRepository,
   evidenceGrantRepository,
+  evidencePublication,
   logger = false,
   now,
 }: BuildAppOptions): FastifyInstance {
@@ -142,6 +146,17 @@ export function buildApp({
         commandRepository: operatorCommandRepository,
         evidenceGrantRepository,
       });
+      if (evidencePublication !== undefined) {
+        // Runner artifact uploads stream raw bytes. Without parseAs options
+        // the parser receives the raw request stream and hands it to the
+        // publication service untouched.
+        app.addContentTypeParser("application/octet-stream", (_request, payload, done) => {
+          done(null, payload);
+        });
+        registerRunnerEvidenceUploadRoutes(app, {
+          publication: evidencePublication,
+        });
+      }
     }
   }
 

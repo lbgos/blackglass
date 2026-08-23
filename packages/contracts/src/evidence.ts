@@ -366,4 +366,7 @@ export type EvidenceObservationReference = z.infer<
   typeof EvidenceObservationReferenceSchema
 >;
 export type EvidenceQuotaConfig = z.infer<typeof EvidenceQuotaConfigSchema>;
+export type CompleteEvidenceUploadErrorCode = z.infer<
+  typeof CompleteEvidenceUploadErrorCodeSchema
+>;
 export type EvidenceErrorCode = z.infer<typeof EvidenceErrorCodeSchema>;

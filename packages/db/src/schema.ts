@@ -798,7 +798,9 @@ export const evidenceGrants = sqliteTable(
     declaredDigest: text("declared_digest"),
     originalFileName: text("original_file_name"),
     declaredContentType: text("declared_content_type"),
-    state: text("state", { enum: ["in_progress", "upload_interrupted"] }).notNull(),
+    state: text("state", {
+      enum: ["in_progress", "upload_interrupted", "published"],
+    }).notNull(),
     reservationBytes: integer("reservation_bytes").notNull(),
     putFinalized: integer("put_finalized", { mode: "boolean" }).notNull(),
     acceptedBytes: integer("accepted_bytes").notNull(),
@@ -867,7 +869,7 @@ export const evidenceGrants = sqliteTable(
     ),
     check(
       "evidence_grant_state",
-      sql`${table.state} in ('in_progress', 'upload_interrupted')`,
+      sql`${table.state} in ('in_progress', 'upload_interrupted', 'published')`,
     ),
     // Reservation upper bound follows the perArtifactBytes contract maximum,
     // not the default quota, so approved custom quotas stay representable.
@@ -898,6 +900,108 @@ export const evidenceGrants = sqliteTable(
   ],
 );
 
+// D3 published artifacts. Immutable durable identity bound to its Run;
+// the unique key is (runId, fence, eventSequence, artifactSlot). Rows are
+// inserted only after the published file and directory are fsynced.
+export const evidenceArtifacts = sqliteTable(
+  "evidence_artifacts",
+  {
+    artifactId: text("artifact_id").primaryKey(),
+    contractVersion: integer("contract_version").notNull(),
+    profile: text("profile").notNull(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "restrict" }),
+    fence: text("fence").notNull(),
+    eventSequence: integer("event_sequence").notNull(),
+    artifactSlot: text("artifact_slot").notNull(),
+    kind: text("kind", {
+      enum: ["stdout", "stderr", "tool_raw", "tool_parsed_input"],
+    }).notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    digest: text("digest").notNull(),
+    relativePath: text("relative_path").notNull(),
+    completeness: text("completeness", {
+      enum: ["complete", "partial", "truncated"],
+    }).notNull(),
+    redactionApplied: integer("redaction_applied", { mode: "boolean" }).notNull(),
+    redactionBoundary: text("redaction_boundary", {
+      enum: ["runner_stream", "none"],
+    }).notNull(),
+    rawBytesPreserved: integer("raw_bytes_preserved", { mode: "boolean" }).notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    check("evidence_artifact_contract_version", sql`${table.contractVersion} = 1`),
+    check("evidence_artifact_profile", sql`${table.profile} = 'd3-v1'`),
+    check(
+      "evidence_artifact_artifact_id",
+      sql`length(${table.artifactId}) between 1 and 127 and substr(${table.artifactId}, 1, 1) glob '[a-z0-9]' and ${table.artifactId} not glob '*[^a-z0-9-]*'`,
+    ),
+    check(
+      "evidence_artifact_run_id_length",
+      sql`length(${table.runId}) between 1 and 255`,
+    ),
+    check(
+      "evidence_artifact_fence_canonical_int64",
+      sql`length(${table.fence}) between 1 and 19 and ${table.fence} not glob '*[^0-9]*' and substr(${table.fence}, 1, 1) between '1' and '9' and (length(${table.fence}) < 19 or ${table.fence} <= '9223372036854775807')`,
+    ),
+    check(
+      "evidence_artifact_event_sequence",
+      sql`${table.eventSequence} between 1 and 9007199254740991`,
+    ),
+    check(
+      "evidence_artifact_artifact_slot",
+      sql`length(${table.artifactSlot}) between 1 and 127 and substr(${table.artifactSlot}, 1, 1) glob '[a-z0-9]' and ${table.artifactSlot} not glob '*[^a-z0-9-]*'`,
+    ),
+    check(
+      "evidence_artifact_kind",
+      sql`${table.kind} in ('stdout', 'stderr', 'tool_raw', 'tool_parsed_input')`,
+    ),
+    check(
+      "evidence_artifact_size_bytes",
+      sql`${table.sizeBytes} between 0 and 1073741824`,
+    ),
+    check(
+      "evidence_artifact_digest",
+      sql`length(${table.digest}) = 71 and ${table.digest} glob 'sha256:[0-9a-f]*' and ${table.digest} not glob 'sha256:*[^0-9a-f]*'`,
+    ),
+    check(
+      "evidence_artifact_relative_path",
+      sql`${table.relativePath} = 'published/' || ${table.artifactId}`,
+    ),
+    check(
+      "evidence_artifact_completeness",
+      sql`${table.completeness} in ('complete', 'partial', 'truncated')`,
+    ),
+    check(
+      "evidence_artifact_redaction_flags",
+      sql`${table.redactionApplied} in (0, 1) and ${table.redactionBoundary} in ('runner_stream', 'none') and ${table.rawBytesPreserved} in (0, 1)`,
+    ),
+    check(
+      "evidence_artifact_redaction_tuple",
+      sql`(
+        ${table.kind} in ('stdout', 'stderr') and
+        ${table.redactionApplied} = 1 and
+        ${table.redactionBoundary} = 'runner_stream' and
+        ${table.rawBytesPreserved} = 0
+      ) or (
+        ${table.kind} in ('tool_raw', 'tool_parsed_input') and
+        ${table.redactionApplied} = 0 and
+        ${table.redactionBoundary} = 'none' and
+        ${table.rawBytesPreserved} = 1
+      )`,
+    ),
+    uniqueIndex("evidence_artifact_identity_unique").on(
+      table.runId,
+      table.fence,
+      table.eventSequence,
+      table.artifactSlot,
+    ),
+    index("evidence_artifact_run_created_idx").on(table.runId, table.createdAt),
+  ],
+);
+
 export type RunRow = typeof runs.$inferSelect;
 export type RunLeaseRow = typeof runLeases.$inferSelect;
 export type RunEventRow = typeof runEvents.$inferSelect;
@@ -906,3 +1010,4 @@ export type RunnerEnrollmentChallengeRow =
   typeof runnerEnrollmentChallenges.$inferSelect;
 export type RunnerSessionRow = typeof runnerSessions.$inferSelect;
 export type EvidenceGrantRow = typeof evidenceGrants.$inferSelect;
+export type EvidenceArtifactRow = typeof evidenceArtifacts.$inferSelect;

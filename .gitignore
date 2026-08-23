@@ -4,6 +4,7 @@ coverage/
 .turbo/
 .vite/
 *.tsbuildinfo
+packages/evidence-native/build/
 
 .env
 .env.*
