@@ -45,6 +45,7 @@ import {
   type RunLeaseRow,
   type RunRow,
 } from "./schema.js";
+import { hasInProgressGrantAtSequence } from "./evidence-grant.js";
 
 type DatabaseSchema = typeof schema;
 export type RunWriteClient = Parameters<
@@ -55,6 +56,7 @@ export type RunQueryClient = RunWriteClient | BetterSQLite3Database<DatabaseSche
 export type RunRepositoryError =
   | { code: "action_not_found" }
   | { code: "action_not_queued" }
+  | { code: "artifact_upload_in_progress" }
   | { code: "event_replay_conflict" }
   | { code: "event_sequence_exhausted" }
   | { code: "event_sequence_gap"; expectedSequence: number }
@@ -872,6 +874,18 @@ export function appendRunEvent(
     currentTerminalKind: runRow.terminalKind,
   });
   if (!sequence.ok) return failed(mapDomainError(sequence.error));
+  // An event at a sequence bound by an in-progress upload grant waits until
+  // the grant finalizes; the artifact identity owns that sequence slot.
+  if (
+    hasInProgressGrantAtSequence(
+      context.client,
+      runRow.id,
+      current.fence,
+      parsed.data.sequence,
+    )
+  ) {
+    return failed({ code: "artifact_upload_in_progress" });
+  }
 
   const transition = transitionRunState({ from: runRow.state, to: "running" });
   if (!transition.ok) return failed(mapDomainError(transition.error));
@@ -1006,6 +1020,16 @@ export function completePersistedRun(
         storedRow,
       );
     }
+    if (
+      hasInProgressGrantAtSequence(
+        context.client,
+        runRow.id,
+        current.fence,
+        presentedSequence,
+      )
+    ) {
+      return failed({ code: "artifact_upload_in_progress" });
+    }
     const transition = transitionRunState({
       from: runRow.state,
       to: parsed.data.terminalKind,
@@ -1074,8 +1098,14 @@ export function completePersistedRun(
   if (!transition.ok) return failed(mapDomainError(transition.error));
   const action = loadAction(context.client, runRow.actionId);
   if (action === undefined) return failed({ code: "action_not_found" });
+  // Effective fence is computed once and reused for gating and insertion.
   const fence = current?.fence ?? runRow.currentFence;
   if (fence === "0") return failed({ code: "invalid_run_transition" });
+  // Non-presented completions also wait behind an in-progress upload grant
+  // bound to the effective fence and target sequence.
+  if (hasInProgressGrantAtSequence(context.client, runRow.id, fence, presentedSequence)) {
+    return failed({ code: "artifact_upload_in_progress" });
+  }
   const inserted = insertEvent(context.client, {
     runId: runRow.id,
     sequence: presentedSequence,

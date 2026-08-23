@@ -36,6 +36,13 @@
       "when": 1787127231663,
       "tag": "0004_runner_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1787558400000,
+      "tag": "0005_evidence_grant_persistence",
+      "breakpoints": true
     }
   ]
 }

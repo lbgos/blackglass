@@ -10,6 +10,7 @@ import {
 } from "@blackglass/contracts";
 import type {
   EngagementWriteTransaction,
+  EvidenceGrantRepositoryError,
   OperatorCommandRepository,
   RunRepositoryError,
   RunnerRepository,
@@ -120,6 +121,7 @@ export function mapRunRepositoryError(
     case "event_replay_conflict":
     case "run_already_terminal":
     case "invalid_run_transition":
+    case "artifact_upload_in_progress":
       return { status: 409, body: { code: error.code } };
     case "event_sequence_gap":
       return {
@@ -132,6 +134,41 @@ export function mapRunRepositoryError(
     case "storage_busy":
       return { status: 503, body: { code: "storage_busy" } };
     default:
+      return { status: 500, body: { code: "invalid_persisted_data" } };
+  }
+}
+
+export function mapEvidenceGrantRepositoryError(
+  error: EvidenceGrantRepositoryError,
+): { status: number; body: RunnerMutationError } {
+  switch (error.code) {
+    case "invalid_repository_input":
+      return { status: 400, body: { code: "invalid_request" } };
+    case "run_not_found":
+      return { status: 404, body: { code: "invalid_request" } };
+    case "lease_owner_mismatch":
+      return { status: 403, body: { code: "lease_owner_mismatch" } };
+    case "stale_fence":
+    case "lease_expired":
+    case "run_already_terminal":
+    case "artifact_upload_in_progress":
+    case "artifact_quota_exceeded":
+    case "concurrent_upload_limit":
+    case "staging_quota_exceeded":
+    case "run_quota_exceeded":
+    case "total_quota_exceeded":
+      return { status: 409, body: { code: error.code } };
+    case "event_sequence_gap":
+      return {
+        status: 409,
+        body: {
+          code: "event_sequence_gap",
+          expectedSequence: error.expectedSequence,
+        },
+      };
+    case "storage_busy":
+      return { status: 503, body: { code: "storage_busy" } };
+    case "invalid_persisted_data":
       return { status: 500, body: { code: "invalid_persisted_data" } };
   }
 }
@@ -156,6 +193,15 @@ export function registerRunnerAuthHook(
 
     if (runnerRoute) {
       if (!credential.ok || runnerRepository === undefined) {
+        // D3 evidence routes distinguish presented non-runner credentials
+        // (operator or browser) from absent credentials.
+        if (
+          !credential.ok &&
+          header !== undefined &&
+          request.url.startsWith("/api/v1/runner/artifacts/")
+        ) {
+          return sendRunnerError(reply, 403, { code: "runner_identity_required" });
+        }
         return sendRunnerError(reply, 401, { code: "runner_unauthorized" });
       }
       const authenticated = runnerRepository.authenticate(

@@ -1,5 +1,6 @@
 import {
   EngagementRepository,
+  EvidenceGrantRepository,
   OperatorCommandRepository,
   RunRepository,
   RunnerRepository,
@@ -35,6 +36,7 @@ export async function buildStorageBackedApp(
     const engagementRepository = new EngagementRepository(database.db);
     const runRepository = new RunRepository(database.db);
     const runnerRepository = new RunnerRepository(database.db);
+    const evidenceGrantRepository = new EvidenceGrantRepository(database.db);
     const app = createApp({
       engagementRepository,
       operatorCommandRepository: new OperatorCommandRepository(
@@ -42,6 +44,7 @@ export async function buildStorageBackedApp(
       ),
       runRepository,
       runnerRepository,
+      evidenceGrantRepository,
       async getDevelopmentStorageReadiness() {
         await checkDevelopmentStorage(dataDirectory);
         return "ready" as const;

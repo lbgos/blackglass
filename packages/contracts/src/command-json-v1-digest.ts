@@ -442,6 +442,20 @@ export const CommandJsonV1RunnerCompleteBodyDigestSchema = z.object({
   reason: jsonField,
 });
 
+export const CommandJsonV1RunnerArtifactGrantBodyDigestSchema = z.object({
+  runId: jsonField,
+  leaseId: jsonField,
+  sessionId: jsonField,
+  fence: jsonField,
+  eventSequence: jsonField,
+  artifactSlot: jsonField,
+  kind: jsonField,
+  declaredSizeBytes: jsonField,
+  declaredDigest: jsonField,
+  originalFileName: jsonField,
+  declaredContentType: jsonField,
+});
+
 export const commandJsonV1StartEnrollmentChallengeDigest = digestProjection({
   path: CommandJsonV1EmptyObjectDigestSchema,
   query: CommandJsonV1EmptyObjectDigestSchema,
@@ -470,4 +484,10 @@ export const commandJsonV1RunnerCompleteDigest = digestProjection({
   path: CommandJsonV1RunnerLeaseIdPathDigestSchema,
   query: CommandJsonV1EmptyObjectDigestSchema,
   body: objectProjection(CommandJsonV1RunnerCompleteBodyDigestSchema),
+});
+
+export const commandJsonV1RunnerArtifactGrantDigest = digestProjection({
+  path: CommandJsonV1EmptyObjectDigestSchema,
+  query: CommandJsonV1EmptyObjectDigestSchema,
+  body: objectProjection(CommandJsonV1RunnerArtifactGrantBodyDigestSchema),
 });

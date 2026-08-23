@@ -199,6 +199,24 @@ const RunnerRevisionConflictSchema = z.strictObject({
   currentRevision: z.number().int().positive(),
 });
 
+// Codes returned only by the D3 evidence grant admission route.
+export const RunnerEvidenceGrantErrorCodeSchema = z.enum([
+  "artifact_upload_in_progress",
+  "artifact_quota_exceeded",
+  "concurrent_upload_limit",
+  "staging_quota_exceeded",
+  "run_quota_exceeded",
+  "total_quota_exceeded",
+]);
+
+export const RunnerEvidenceGrantErrorSchema = z.strictObject({
+  code: RunnerEvidenceGrantErrorCodeSchema,
+});
+
+const RunnerIdentityRequiredErrorSchema = z.strictObject({
+  code: z.literal("runner_identity_required"),
+});
+
 export const RunnerProtocolUnsupportedErrorSchema = z.strictObject({
   code: z.literal("runner_protocol_unsupported"),
   supported: z.tuple([z.literal(RUNNER_CONTROL_PROTOCOL)]),
@@ -230,6 +248,8 @@ export const RunnerMutationErrorSchema = z.union([
   }),
   z.strictObject({ code: z.literal("run_already_terminal") }),
   z.strictObject({ code: z.literal("invalid_run_transition") }),
+  RunnerIdentityRequiredErrorSchema,
+  RunnerEvidenceGrantErrorSchema,
   z.strictObject({ code: z.literal("idempotency_conflict") }),
   RunnerRevisionConflictSchema,
   z.strictObject({ code: z.literal("invalid_persisted_data") }),
@@ -268,6 +288,12 @@ export type RunnerAppendStartedRequest = z.infer<
 >;
 export type RunnerCompleteRequest = z.infer<typeof RunnerCompleteRequestSchema>;
 export type RunnerMutationError = z.infer<typeof RunnerMutationErrorSchema>;
+export type RunnerEvidenceGrantErrorCode = z.infer<
+  typeof RunnerEvidenceGrantErrorCodeSchema
+>;
+export type RunnerEvidenceGrantError = z.infer<
+  typeof RunnerEvidenceGrantErrorSchema
+>;
 export type RunnerVerifierRecord = z.infer<typeof RunnerVerifierRecordSchema>;
 export type RunnerAuthorization =
   | { ok: true; runnerId: string; secret: string }
