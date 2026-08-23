@@ -12,7 +12,7 @@ packages/evidence-native/build/
 
 .blackglass/
 data/
-evidence/
+/evidence/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
