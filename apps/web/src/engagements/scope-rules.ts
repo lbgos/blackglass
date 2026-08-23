@@ -7,6 +7,8 @@ import type {
 } from "@blackglass/contracts";
 import { normalizeScopePortRanges, normalizeTarget } from "@blackglass/domain";
 
+import { createBrowserUuid } from "../lib/browser-uuid.js";
+
 export const SCOPE_TARGET_FIELD_ERROR =
   "Enter a valid IP, CIDR, hostname, or HTTP(S) URL.";
 export const SCOPE_PORT_FIELD_ERROR =
@@ -24,7 +26,7 @@ export type DraftScopeRuleResult =
 
 export function createDraftScopeRule(
   input: DraftScopeRuleInput,
-  createId: () => string = () => crypto.randomUUID(),
+  createId: () => string = createBrowserUuid,
 ): DraftScopeRuleResult {
   if (input.rawTarget.trim().length === 0) {
     return { ok: false, field: "rawTarget", message: SCOPE_TARGET_FIELD_ERROR };
