@@ -139,6 +139,12 @@ async function renderApp(initialEntry = "/", { strict = false }: RenderAppOption
   return { ...result, queryClient, router };
 }
 
+// Theme controls live in the Appearance section, while Settings opens on General.
+async function openAppearanceSection() {
+  fireEvent.click(screen.getByRole("button", { name: "Appearance" }));
+  await screen.findByRole("heading", { level: 1, name: "Appearance" });
+}
+
 let media: MediaHarness;
 
 beforeEach(() => {
@@ -736,6 +742,7 @@ describe("App theme preference", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
 
     await renderApp("/settings");
+    await openAppearanceSection();
 
     expect((screen.getByRole("radio", { name: "Dark" }) as HTMLInputElement).checked).toBe(true);
     expect(document.documentElement.dataset.theme).toBe("dark");
@@ -751,6 +758,7 @@ describe("App theme preference", () => {
     window.localStorage.setItem(THEME_STORAGE_KEY, "sepia");
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     const first = await renderApp("/settings");
+    await openAppearanceSection();
     expect((screen.getByRole("radio", { name: "System" }) as HTMLInputElement).checked).toBe(
       true,
     );
@@ -760,6 +768,7 @@ describe("App theme preference", () => {
       throw new Error("blocked");
     });
     await renderApp("/settings");
+    await openAppearanceSection();
     expect((screen.getByRole("radio", { name: "System" }) as HTMLInputElement).checked).toBe(
       true,
     );
@@ -768,6 +777,7 @@ describe("App theme preference", () => {
   it("reacts to OS changes only while system is selected and cleans up the listener", async () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     const { unmount } = await renderApp("/settings");
+    await openAppearanceSection();
 
     act(() => media.dispatch(true));
     expect(document.documentElement.dataset.theme).toBe("dark");
@@ -784,6 +794,7 @@ describe("App theme preference", () => {
   it("synchronizes valid storage events and ignores malformed values", async () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     await renderApp("/settings");
+    await openAppearanceSection();
 
     act(() => {
       window.dispatchEvent(
@@ -807,6 +818,7 @@ describe("App theme preference", () => {
       throw new Error("full");
     });
     await renderApp("/settings");
+    await openAppearanceSection();
 
     fireEvent.click(screen.getByRole("radio", { name: "Dark" }));
     expect((screen.getByRole("radio", { name: "Dark" }) as HTMLInputElement).checked).toBe(true);
@@ -816,6 +828,7 @@ describe("App theme preference", () => {
   it("shows native checked state for every scheme selection", async () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     await renderApp("/settings");
+    await openAppearanceSection();
 
     for (const preference of ["Light", "Dark", "System"]) {
       const radio = screen.getByRole("radio", { name: preference }) as HTMLInputElement;
@@ -838,6 +851,7 @@ describe("App theme preference", () => {
   it("persists theme family separately from scheme and applies both to the document", async () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     await renderApp("/settings");
+    await openAppearanceSection();
 
     expect(document.documentElement.dataset.themeFamily).toBe("smoked");
     fireEvent.click(screen.getByRole("button", { name: "Void dark" }));
@@ -864,6 +878,7 @@ describe("App theme preference", () => {
     window.localStorage.setItem(THEME_STORAGE_KEY, "dark");
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     await renderApp("/settings");
+    await openAppearanceSection();
 
     expect(document.documentElement.dataset.themeFamily).toBe("iris");
     fireEvent.click(screen.getByRole("radio", { name: "Light" }));
@@ -893,6 +908,7 @@ describe("App theme preference", () => {
   it("synchronizes valid family storage events and ignores malformed values", async () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     await renderApp("/settings");
+    await openAppearanceSection();
 
     act(() => {
       window.dispatchEvent(
@@ -918,6 +934,7 @@ describe("App theme preference", () => {
   it("leaves radio arrow navigation and Tab exit to native browser behavior", async () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     await renderApp("/settings");
+    await openAppearanceSection();
 
     const system = screen.getByRole("radio", { name: "System" }) as HTMLInputElement;
     const light = screen.getByRole("radio", { name: "Light" }) as HTMLInputElement;
@@ -946,7 +963,8 @@ describe("App theme preference", () => {
     expect(light.dispatchEvent(tab)).toBe(true);
     expect(tab.defaultPrevented).toBe(false);
     // jsdom also omits sequential Tab movement; verify the following browser tab stop accepts focus.
-    const nextTabStop = screen.getByRole("separator", { name: "Resize console" });
+    // Settings hides the console, so the next stop is the sidebar's Back control.
+    const nextTabStop = screen.getByTestId("settings-back");
     nextTabStop.focus();
     expect(document.activeElement).toBe(nextTabStop);
   });
@@ -954,6 +972,7 @@ describe("App theme preference", () => {
   it("reports the live resolved appearance on the System preview", async () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     await renderApp("/settings");
+    await openAppearanceSection();
 
     expect(screen.getByText("Currently light")).toBeTruthy();
     act(() => media.dispatch(true));
@@ -968,21 +987,24 @@ describe("App theme preference", () => {
   it("updates the whole app theme and preserves it across navigation without remounting the shell", async () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     await renderApp("/settings");
+    await openAppearanceSection();
     const shell = screen.getByTestId("application-shell");
 
     fireEvent.click(screen.getByRole("radio", { name: "Dark" }));
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
 
-    fireEvent.click(screen.getByRole("link", { name: "Dashboard" }));
+    // Settings has no Dashboard link; Back returns to the last non-settings route.
+    fireEvent.click(screen.getByTestId("settings-back"));
     expect(await screen.findByRole("heading", { level: 1, name: "Workspace" })).toBeTruthy();
     expect(screen.getByTestId("application-shell")).toBe(shell);
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(screen.queryByRole("radio")).toBeNull();
 
     fireEvent.click(screen.getByRole("link", { name: "Settings" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "General" })).toBeTruthy();
     expect(screen.getByTestId("application-shell")).toBe(shell);
+    await openAppearanceSection();
     expect((screen.getByRole("radio", { name: "Dark" }) as HTMLInputElement).checked).toBe(true);
   });
 
@@ -1003,28 +1025,42 @@ describe("Application routes", () => {
   it.each([
     ["/", "Workspace", "Dashboard"],
     ["/engagements", "Engagements", "Engagements"],
-    ["/plugins", "Plugins", "Plugins"],
-    ["/settings", "Settings", "Settings"],
-  ])("renders a direct entry for %s inside the shell", async (path, heading, activeLabel) => {
-    await renderApp(path);
+    ["/plugins", "Plugins", null],
+    ["/settings", "General", null],
+  ])(
+    "renders a direct entry for %s inside the shell",
+    async (path, heading, globalActiveLabel) => {
+      await renderApp(path);
 
-    expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeTruthy();
-    expect(screen.getByTestId("application-shell")).toBeTruthy();
+      expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeTruthy();
+      expect(screen.getByTestId("application-shell")).toBeTruthy();
 
-    const globalNavigation = screen.getByRole("navigation", { name: "Global" });
-    const activeGlobalLinks = within(globalNavigation)
-      .getAllByRole("link")
-      .filter((link) => link.getAttribute("aria-current") === "page");
-    if (path === "/settings") {
-      expect(activeGlobalLinks).toHaveLength(0);
-      expect(screen.getByRole("link", { name: activeLabel }).getAttribute("aria-current")).toBe(
-        "page",
-      );
-    } else {
-      expect(activeGlobalLinks).toHaveLength(1);
-      expect(activeGlobalLinks[0]?.textContent).toBe(activeLabel);
-    }
-  });
+      if (path === "/settings") {
+        // The v5 settings sidebar intentionally replaces the global navigation
+        // and has no footer links while Settings is open.
+        const generalItem = screen.getByRole("button", { name: "General" });
+        expect(generalItem.getAttribute("aria-current")).toBe("true");
+        expect(screen.getByRole("button", { name: "Diagnostics" })).toBeTruthy();
+        expect(screen.getByTestId("settings-back")).toBeTruthy();
+        return;
+      }
+
+      const globalNavigation = screen.getByRole("navigation", { name: "Global" });
+      const activeGlobalLinks = within(globalNavigation)
+        .getAllByRole("link")
+        .filter((link) => link.getAttribute("aria-current") === "page");
+      if (globalActiveLabel === null) {
+        // Plugins lives in the sidebar footer, not the global navigation.
+        expect(activeGlobalLinks).toHaveLength(0);
+        expect(screen.getByRole("link", { name: "Plugins" }).getAttribute("aria-current")).toBe(
+          "page",
+        );
+      } else {
+        expect(activeGlobalLinks).toHaveLength(1);
+        expect(activeGlobalLinks[0]?.textContent).toBe(globalActiveLabel);
+      }
+    },
+  );
 
   it("navigates with exact active state while preserving the shell node", async () => {
     await renderApp();
@@ -1050,7 +1086,8 @@ describe("Application routes", () => {
         .getAttribute("aria-current"),
     ).toBe("page");
 
-    fireEvent.click(within(globalNavigation).getByRole("link", { name: "Plugins" }));
+    // Plugins moved into the sidebar footer next to Settings.
+    fireEvent.click(screen.getByRole("link", { name: "Plugins" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Plugins" })).toBeTruthy();
     expect(screen.getByTestId("application-shell")).toBe(shell);
     expect(
@@ -1058,15 +1095,16 @@ describe("Application routes", () => {
         .getByRole("link", { name: "Engagements" })
         .getAttribute("aria-current"),
     ).toBeNull();
-    expect(
-      within(globalNavigation).getByRole("link", { name: "Plugins" }).getAttribute("aria-current"),
-    ).toBe("page");
+    expect(screen.getByRole("link", { name: "Plugins" }).getAttribute("aria-current")).toBe("page");
   });
 
-  it("renders one Appearance section, scheme radios, and the theme orb grid on direct Settings entry", async () => {
+  it("renders the reference appearance layout with scheme radios, theme orbs, and truthful theme actions", async () => {
     await renderApp("/settings");
 
-    expect(screen.getAllByRole("region", { name: "Appearance" })).toHaveLength(1);
+    // Settings opens on General; theme controls live under Appearance.
+    expect(screen.getByRole("heading", { level: 1, name: "General" })).toBeTruthy();
+    await openAppearanceSection();
+
     expect(screen.getAllByRole("group", { name: "Scheme" })).toHaveLength(1);
     const radios = screen.getAllByRole("radio") as HTMLInputElement[];
     expect(radios).toHaveLength(3);
@@ -1079,13 +1117,53 @@ describe("Application routes", () => {
       expect(document.activeElement).toBe(radio);
     }
     expect(
-      screen.getByText("Choose a theme family, then lock light or dark, or follow your system setting."),
+      screen.getByText("Choose how Blackglass looks. Use a built-in theme or make your own."),
     ).toBeTruthy();
     expect(screen.getByText("Left bubble is dark. Right bubble is light.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Smoked lime dark" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Iris light" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Create theme" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Import theme" })).toBeNull();
+    // Theme creation has no product behavior yet, so both actions render disabled.
+    const createTheme = screen.getByRole("button", { name: "Create theme" }) as HTMLButtonElement;
+    const importTheme = screen.getByRole("button", { name: "Import theme" }) as HTMLButtonElement;
+    expect(createTheme.disabled).toBe(false);
+    expect(createTheme.getAttribute("aria-disabled")).toBe("true");
+    expect(importTheme.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("renders the reference settings navigation with section switching, search, and Back", async () => {
+    await renderApp("/settings");
+
+    for (const label of [
+      "General",
+      "Appearance",
+      "Engagements",
+      "Plugins",
+      "Runner",
+      "Advisor",
+      "Evidence",
+      "Diagnostics",
+    ]) {
+      expect(screen.getByRole("button", { name: label })).toBeTruthy();
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "Runner" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Runner" })).toBeTruthy();
+
+    const search = screen.getByRole("combobox", { name: "Search settings" });
+    fireEvent.change(search, { target: { value: "retention" } });
+    // Scope to the search listbox; rendered sections also expose native select options.
+    const results = screen.getByRole("listbox", { name: "Settings search results" });
+    const hit = await within(results).findByRole("option", { selected: true });
+    expect(hit.textContent).toContain("Retention");
+    fireEvent.click(hit);
+    expect(await screen.findByRole("heading", { level: 1, name: "Evidence" })).toBeTruthy();
+    expect(document.getElementById("setting-retention")).toBeTruthy();
+    expect((screen.queryByRole("combobox", { name: "Search settings" }) as HTMLInputElement).value).toBe(
+      "",
+    );
+
+    fireEvent.click(screen.getByTestId("settings-back"));
+    expect(await screen.findByRole("heading", { level: 1, name: "Workspace" })).toBeTruthy();
   });
 
   it("does not render theme controls or an action spacer in desktop or mobile navigation", async () => {
@@ -1118,8 +1196,130 @@ describe("Application routes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
     dialog = await screen.findByRole("dialog", { name: "Blackglass navigation" });
     fireEvent.click(within(dialog).getByRole("link", { name: "Settings" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "General" })).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("implements the plugin Installed/Available tab pattern with truthful counts", async () => {
+    await renderApp("/plugins");
+
+    const installed = screen.getByRole("tab", { name: "Installed" });
+    const available = screen.getByRole("tab", { name: "Available" });
+    expect(installed.getAttribute("aria-selected")).toBe("true");
+    expect(installed.getAttribute("tabindex")).toBe("0");
+    expect(available.getAttribute("aria-selected")).toBe("false");
+    expect(available.getAttribute("tabindex")).toBe("-1");
+    expect(installed.getAttribute("aria-controls")).toBe("plugins-panel");
+
+    const panel = screen.getByRole("tabpanel", { name: "Installed" });
+    expect(panel.getAttribute("aria-labelledby")).toBe("plugins-tab-installed");
+    expect(screen.getByText(/bundled contract/)).toBeTruthy();
+
+    fireEvent.keyDown(installed, { key: "ArrowRight" });
+    const availableTab = screen.getByRole("tab", { name: "Available" });
+    expect(availableTab.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(availableTab);
+    expect(screen.getByRole("tabpanel", { name: "Available" })).toBeTruthy();
+    expect(screen.getByText("No registry connection")).toBeTruthy();
+
+    fireEvent.keyDown(availableTab, { key: "End" });
+    expect(availableTab.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(availableTab);
+
+    fireEvent.keyDown(availableTab, { key: "Home" });
+    const installedAgain = screen.getByRole("tab", { name: "Installed" });
+    expect(installedAgain.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(installedAgain);
+
+    fireEvent.keyDown(installedAgain, { key: "ArrowLeft" });
+    expect(screen.getByRole("tab", { name: "Available" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Available" }));
+  });
+
+  it("closes stale Advisor details on non-endpoint hits and resets on Settings re-entry", async () => {
+    await renderApp("/settings");
+    const search = () => screen.getByRole("combobox", { name: "Search settings" });
+    const results = () => screen.getByRole("listbox", { name: "Settings search results" });
+
+    // The endpoint hit expands details.
+    fireEvent.change(search(), { target: { value: "model endpoint" } });
+    const endpointHit = await within(results()).findByRole("option", { selected: true });
+    fireEvent.click(endpointHit);
+    expect(await screen.findByRole("heading", { level: 1, name: "Advisor" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Hide" })).toBeTruthy();
+
+    // A later non-endpoint advisor hit closes the stale disclosure.
+    fireEvent.change(search(), { target: { value: "default mode" } });
+    const modeHit = await within(results()).findByRole("option", { selected: true });
+    fireEvent.click(modeHit);
+    expect(await screen.findByRole("button", { name: "Details" })).toBeTruthy();
+    expect(screen.queryByLabelText("Model endpoint")).toBeNull();
+
+    // Re-entering Settings from elsewhere starts with the disclosure closed.
+    fireEvent.click(screen.getByTestId("settings-back"));
+    expect(await screen.findByRole("heading", { level: 1, name: "Workspace" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("link", { name: "Settings" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "General" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Advisor" }));
+    expect(await screen.findByRole("button", { name: "Details" })).toBeTruthy();
+  });
+
+  it("opens Advisor details when a Model endpoint search hit is activated", async () => {
+    await renderApp("/settings");
+
+    const search = screen.getByRole("combobox", { name: "Search settings" });
+    fireEvent.change(search, { target: { value: "model endpoint" } });
+    const results = screen.getByRole("listbox", { name: "Settings search results" });
+    const hit = await within(results).findByRole("option", { selected: true });
+    expect(hit.textContent).toContain("Model endpoint");
+
+    fireEvent.click(hit);
+    expect(await screen.findByRole("heading", { level: 1, name: "Advisor" })).toBeTruthy();
+    // The indexed id belongs to the visible Model endpoint row; the nested Base
+    // URL keeps a distinct non-indexed id.
+    const endpointRow = document.getElementById("setting-advisor-endpoint");
+    expect(endpointRow?.textContent).toContain("Model endpoint");
+    expect(document.getElementById("setting-advisor-endpoint-base-url")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Hide" })).toBeTruthy();
+    expect(screen.getByLabelText("Model endpoint")).toBeTruthy();
+  });
+
+  it("focuses settings search via slash only when the input is visible", async () => {
+    await renderApp("/settings");
+    const search = screen.getByRole("combobox", { name: "Search settings" }) as HTMLInputElement;
+    const rects = vi.spyOn(search, "getClientRects");
+
+    rects.mockReturnValue([] as unknown as DOMRectList);
+    fireEvent.keyDown(document.body, { key: "/" });
+    expect(document.activeElement).not.toBe(search);
+
+    rects.mockReturnValue([{}] as unknown as DOMRectList);
+    fireEvent.keyDown(document.body, { key: "/" });
+    expect(document.activeElement).toBe(search);
+  });
+
+  it("matches reference chrome visibility: Settings drops header and console, Plugins drops console only", async () => {
+    const dashboard = await renderApp("/");
+    expect(screen.getByRole("region", { name: "Console" })).toBeTruthy();
+    expect(document.querySelector(".shell-stage-header")).toBeTruthy();
+    dashboard.unmount();
+
+    const settings = await renderApp("/settings");
+    expect(screen.queryByRole("region", { name: "Console" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open console" })).toBeNull();
+    expect(document.querySelector(".shell-stage-header")).toBeNull();
+    // Mobile navigation stays usable without the desktop stage header.
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+    expect(await screen.findByRole("dialog", { name: "Blackglass navigation" })).toBeTruthy();
+    settings.unmount();
+
+    const plugins = await renderApp("/plugins");
+    expect(screen.queryByRole("region", { name: "Console" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open console" })).toBeNull();
+    expect(document.querySelector(".shell-stage-header")).toBeTruthy();
+    plugins.unmount();
   });
 
   it("keeps unknown paths inside the shell with a useful recovery link", async () => {
