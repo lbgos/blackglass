@@ -19,7 +19,9 @@ import type {
 
 import { registerActionMutationRoutes } from "./action-mutation-routes.js";
 import { registerActionRoutes } from "./action-routes.js";
+import { registerArtifactDownloadRoutes } from "./artifact-download-routes.js";
 import type { EvidencePublicationService } from "./evidence/evidence-publication.js";
+import type { EvidenceStore } from "./evidence/evidence-store.js";
 import { registerEngagementMutationRoutes } from "./engagement-mutation-routes.js";
 import { registerEngagementRoutes } from "./engagement-routes.js";
 import { registerRunnerAuthHook, stripAuthorizationHeader } from "./runner-http.js";
@@ -56,8 +58,14 @@ interface BuildAppOptions {
     | "acceptHandshake"
     | "requireAcceptedSession"
   >;
-  evidenceGrantRepository?: Pick<EvidenceGrantRepository, "createGrant">;
+  evidenceGrantRepository?: Pick<
+    EvidenceGrantRepository,
+    "createGrant" | "publishedArtifactForEngagement"
+  >;
   evidencePublication?: EvidencePublicationService;
+  // Operator artifact downloads are registered only when a verified managed
+  // store is available; without it the route does not exist.
+  evidenceStore?: Pick<EvidenceStore, "verifiedDownload">;
   logger?: FastifyServerOptions["logger"];
   now?: () => Date;
 }
@@ -70,6 +78,7 @@ export function buildApp({
   runnerRepository,
   evidenceGrantRepository,
   evidencePublication,
+  evidenceStore,
   logger = false,
   now,
 }: BuildAppOptions): FastifyInstance {
@@ -158,6 +167,13 @@ export function buildApp({
         });
       }
     }
+  }
+
+  if (evidenceStore !== undefined && evidenceGrantRepository !== undefined) {
+    registerArtifactDownloadRoutes(app, {
+      repository: evidenceGrantRepository,
+      store: evidenceStore,
+    });
   }
 
   app.get("/health", async (_request, reply) => {

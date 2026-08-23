@@ -249,6 +249,7 @@ export const RunnerMutationErrorSchema = z.union([
   z.strictObject({ code: z.literal("run_already_terminal") }),
   z.strictObject({ code: z.literal("invalid_run_transition") }),
   RunnerIdentityRequiredErrorSchema,
+  z.strictObject({ code: z.literal("operator_identity_required") }),
   RunnerEvidenceGrantErrorSchema,
   z.strictObject({ code: z.literal("idempotency_conflict") }),
   RunnerRevisionConflictSchema,

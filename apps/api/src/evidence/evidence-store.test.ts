@@ -1,4 +1,4 @@
-import { close, constants, fsync, write } from "node:fs";
+import { close, constants, fsync, write, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import {
   chmod,
@@ -22,7 +22,7 @@ import { promisify } from "node:util";
 import { O_CLOEXEC, loadEvidenceNative } from "@blackglass/evidence-native";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { EvidenceStore } from "./evidence-store.js";
+import { EvidenceStore, DOWNLOAD_CHUNK_BYTES } from "./evidence-store.js";
 
 const writeFileAt = promisify(write);
 const fsyncFd = promisify(fsync);
@@ -70,6 +70,27 @@ async function stageBytes(
 
 function sha256(bytes: string | Buffer): string {
   return `sha256:${createHash("sha256").update(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)).digest("hex")}`;
+}
+
+async function publishReady(
+  store: EvidenceStore,
+  uploadId: string,
+  artifactId: string,
+  bytes: string,
+): Promise<void> {
+  const size = await stageBytes(store, uploadId, bytes);
+  const outcome = store.publish({
+    uploadId,
+    artifactId,
+    expectedSizeBytes: size,
+  });
+  if (outcome.status !== "published") throw new Error(`publish failed: ${outcome.status}`);
+}
+
+async function collect(stream: AsyncGenerator<Buffer>): Promise<Buffer> {
+  const parts: Buffer[] = [];
+  for await (const chunk of stream) parts.push(chunk);
+  return Buffer.concat(parts);
 }
 
 describe("EvidenceStore", () => {
@@ -269,5 +290,165 @@ describe("EvidenceStore", () => {
       Buffer.from("keep"),
     );
     await unlink(path.join(directory, "evidence/staging/orphan"));
+  });
+
+  describe("verifiedDownload", () => {
+    it("streams a good artifact from the verified descriptor", async () => {
+      const { store } = await openStore();
+      const bytes = "verified-download-payload";
+      await publishReady(store, "up-good", "artifact-good", bytes);
+      const result = await store.verifiedDownload({
+        artifactId: "artifact-good",
+        expectedSizeBytes: bytes.length,
+        expectedDigest: sha256(bytes),
+      });
+      if (result.status !== "ready") throw new Error(`expected ready: ${result.status}`);
+      expect(result.sizeBytes).toBe(bytes.length);
+      expect(result.digest).toBe(sha256(bytes));
+      await expect(collect(result.stream)).resolves.toEqual(Buffer.from(bytes));
+    });
+
+    it("accepts an empty artifact and yields no chunks", async () => {
+      const { store } = await openStore();
+      await publishReady(store, "up-zero", "artifact-zero", "");
+      const result = await store.verifiedDownload({
+        artifactId: "artifact-zero",
+        expectedSizeBytes: 0,
+        expectedDigest: sha256(""),
+      });
+      if (result.status !== "ready") throw new Error(`expected ready: ${result.status}`);
+      expect(result.sizeBytes).toBe(0);
+      const parts: Buffer[] = [];
+      for await (const chunk of result.stream) parts.push(chunk);
+      expect(parts).toEqual([]);
+    });
+
+    it("reports missing for an unknown artifact id without leaking paths", async () => {
+      const { store } = await openStore();
+      await expect(
+        store.verifiedDownload({
+          artifactId: "artifact-absent",
+          expectedSizeBytes: 0,
+          expectedDigest: sha256(""),
+        }),
+      ).resolves.toEqual({ status: "missing" });
+    });
+
+    it("rejects a wrong declared size before exposing any bytes", async () => {
+      const { store } = await openStore();
+      const bytes = "size-guard";
+      await publishReady(store, "up-size", "artifact-size", bytes);
+      await expect(
+        store.verifiedDownload({
+          artifactId: "artifact-size",
+          expectedSizeBytes: bytes.length + 1,
+          expectedDigest: sha256(bytes),
+        }),
+      ).resolves.toEqual({ status: "corrupt", code: "size_mismatch" });
+    });
+
+    it("rejects a wrong digest before exposing any bytes", async () => {
+      const { store } = await openStore();
+      const bytes = "digest-guard";
+      await publishReady(store, "up-digest", "artifact-digest", bytes);
+      await expect(
+        store.verifiedDownload({
+          artifactId: "artifact-digest",
+          expectedSizeBytes: bytes.length,
+          expectedDigest: sha256("tampered"),
+        }),
+      ).resolves.toEqual({ status: "corrupt", code: "digest_mismatch" });
+    });
+
+    it("refuses a symlink planted at the published name without following it", async () => {
+      const { store, directory } = await openStore();
+      const bytes = "real-bytes";
+      await publishReady(store, "up-sym", "artifact-sym", bytes);
+      const outside = path.join(directory, "outside-secret");
+      await writeFile(outside, "secret");
+      await unlink(path.join(directory, "evidence/published/artifact-sym"));
+      await symlink(
+        outside,
+        path.join(directory, "evidence/published/artifact-sym"),
+      );
+      await expect(
+        store.verifiedDownload({
+          artifactId: "artifact-sym",
+          expectedSizeBytes: 6,
+          expectedDigest: sha256("secret"),
+        }),
+      ).resolves.toEqual({ status: "corrupt", code: "artifact_symlink_rejected" });
+      // The symlink target must be untouched.
+      await expect(readFile(outside)).resolves.toEqual(Buffer.from("secret"));
+    });
+
+    it("refuses a hardlinked published file", async () => {
+      const { store, directory } = await openStore();
+      const bytes = "hardlink-me";
+      await publishReady(store, "up-hl", "artifact-hl", bytes);
+      await link(
+        path.join(directory, "evidence/published/artifact-hl"),
+        path.join(directory, "hardlink-alias"),
+      );
+      await expect(
+        store.verifiedDownload({
+          artifactId: "artifact-hl",
+          expectedSizeBytes: bytes.length,
+          expectedDigest: sha256(bytes),
+        }),
+      ).resolves.toEqual({ status: "corrupt", code: "artifact_hardlink_rejected" });
+    });
+
+    it("fails closed as missing when the published directory was replaced after startup", async () => {
+      const { store, directory } = await openStore();
+      const bytes = "swapped";
+      await publishReady(store, "up-swap", "artifact-swap", bytes);
+      await rename(
+        path.join(directory, "evidence/published"),
+        path.join(directory, "published-old"),
+      );
+      await mkdir(path.join(directory, "evidence/published"), { mode: 0o700 });
+      await expect(
+        store.verifiedDownload({
+          artifactId: "artifact-swap",
+          expectedSizeBytes: bytes.length,
+          expectedDigest: sha256(bytes),
+        }),
+      ).resolves.toEqual({ status: "missing" });
+    });
+
+    it.runIf(process.platform === "linux")("closes the verified fd on completion and on consumer abort", async () => {
+      const { store } = await openStore();
+      const openFdCount = () => readdirSync("/proc/self/fd").length;
+      const bytes = "x".repeat(DOWNLOAD_CHUNK_BYTES * 2);
+      await publishReady(store, "up-close", "artifact-close", bytes);
+
+      const first = await store.verifiedDownload({
+        artifactId: "artifact-close",
+        expectedSizeBytes: bytes.length,
+        expectedDigest: sha256(bytes),
+      });
+      if (first.status !== "ready") throw new Error(`expected ready: ${first.status}`);
+      const baseline = openFdCount();
+      let received = 0;
+      for await (const chunk of first.stream) received += chunk.length;
+      expect(received).toBe(bytes.length);
+      // The verified fd was open at baseline and must be closed now.
+      expect(openFdCount()).toBe(baseline - 1);
+
+      // Breaking out mid-stream aborts iteration and must still close the fd.
+      const second = await store.verifiedDownload({
+        artifactId: "artifact-close",
+        expectedSizeBytes: bytes.length,
+        expectedDigest: sha256(bytes),
+      });
+      if (second.status !== "ready") throw new Error(`expected ready: ${second.status}`);
+      const beforeAbort = openFdCount();
+      for await (const chunk of second.stream) {
+        expect(chunk.length).toBeGreaterThan(0);
+        break;
+      }
+      expect(openFdCount()).toBe(beforeAbort - 1);
+    });
   });
 });

@@ -24,7 +24,13 @@ import { and, eq, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 
 import * as schema from "./schema.js";
-import { evidenceArtifacts, evidenceGrants, runLeases, runs } from "./schema.js";
+import {
+  actions,
+  evidenceArtifacts,
+  evidenceGrants,
+  runLeases,
+  runs,
+} from "./schema.js";
 
 type DatabaseSchema = typeof schema;
 export type EvidenceGrantWriteClient = Parameters<
@@ -474,6 +480,14 @@ function inProgressGrantForIdentity(
     .get();
 }
 
+// Committed artifact projected for operator download, joined with its
+// published grant's advisory display metadata. declaredContentType is never
+// trusted for serving; callers must ignore it.
+export interface EngagementArtifactRecord extends schema.EvidenceArtifactRow {
+  readonly originalFileName: string | null;
+  readonly declaredContentType: string | null;
+}
+
 export class EvidenceGrantRepository {
   private readonly createId: () => string;
   private readonly now: () => Date;
@@ -526,6 +540,46 @@ export class EvidenceGrantRepository {
         ),
       )
       .get();
+  }
+
+  // Typed read for safe downloads: resolves a committed evidence artifact
+  // only when its artifactId belongs through run -> action to the specified
+  // engagement. Unknown artifacts and engagement mismatches are deliberately
+  // indistinguishable (both undefined) so callers cannot probe existence.
+  publishedArtifactForEngagement(input: {
+    readonly engagementId: string;
+    readonly artifactId: string;
+  }): EngagementArtifactRecord | undefined {
+    const row = this.db
+      .select({
+        artifact: evidenceArtifacts,
+        originalFileName: evidenceGrants.originalFileName,
+        declaredContentType: evidenceGrants.declaredContentType,
+      })
+      .from(evidenceArtifacts)
+      .innerJoin(runs, eq(runs.id, evidenceArtifacts.runId))
+      .innerJoin(actions, eq(actions.id, runs.actionId))
+      .leftJoin(
+        evidenceGrants,
+        and(
+          eq(evidenceGrants.runId, evidenceArtifacts.runId),
+          eq(evidenceGrants.fence, evidenceArtifacts.fence),
+          eq(evidenceGrants.eventSequence, evidenceArtifacts.eventSequence),
+          eq(evidenceGrants.artifactSlot, evidenceArtifacts.artifactSlot),
+          eq(evidenceGrants.state, "published"),
+        ),
+      )
+      .where(
+        and(
+          eq(evidenceArtifacts.artifactId, input.artifactId),
+          eq(runs.engagementId, input.engagementId),
+          eq(actions.engagementId, input.engagementId),
+        ),
+      )
+      .get();
+    return row === undefined
+      ? undefined
+      : { ...row.artifact, originalFileName: row.originalFileName, declaredContentType: row.declaredContentType };
   }
 
   // Validates that the authenticated runner still holds lease authority over

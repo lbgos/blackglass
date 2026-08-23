@@ -84,6 +84,34 @@ export type DestinationInspection =
   | { status: "mismatch" }
   | { status: "failed"; code: EvidenceStorageErrorCode };
 
+// Fail-closed download verdicts. Symlink, hardlink, ownership, size, and
+// digest tampering all collapse into typed corrupt reasons; a replaced
+// published directory reports missing. No filesystem path ever appears in
+// any variant.
+export type VerifiedDownloadCorruptCode =
+  | "invalid_download_request"
+  | "size_mismatch"
+  | "digest_mismatch"
+  | Exclude<EvidenceStorageErrorCode, "artifact_path_rejected">;
+
+export interface VerifiedDownloadReady {
+  readonly status: "ready";
+  readonly sizeBytes: number;
+  readonly digest: string;
+  // Bounded async byte stream over the SAME fd that passed verification,
+  // starting at offset 0. The descriptor is closed on normal completion,
+  // consumer abort/return, and read error.
+  readonly stream: AsyncGenerator<Buffer>;
+}
+
+export type VerifiedDownloadResult =
+  | { status: "missing" }
+  | { status: "corrupt"; code: VerifiedDownloadCorruptCode }
+  | VerifiedDownloadReady;
+
+const VERIFIED_DOWNLOAD_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+export const DOWNLOAD_CHUNK_BYTES = 256 * 1024;
+
 const ERRNO = {
   EPERM: 1,
   ENOENT: 2,
@@ -95,7 +123,11 @@ const ERRNO = {
   ENOSYS: 38,
 } as const;
 
-function mapOpenErrno(errno: number): EvidenceStorageErrorCode {
+// Errno-to-code mapping never yields path-rejection codes because the
+// caller already validated the name before touching the kernel.
+function mapOpenErrno(
+  errno: number,
+): Exclude<EvidenceStorageErrorCode, "artifact_path_rejected"> {
   switch (errno) {
     case ERRNO.ELOOP:
       return "artifact_symlink_rejected";
@@ -494,6 +526,110 @@ export class EvidenceStore {
     } catch {
       return { status: "failed", code: "evidence_io_error" };
     }
+  }
+
+  // Verified download foundation: opens published/{artifactId} relative to
+  // the startup descriptor, rechecks the on-tree directory identity, fstats
+  // the regular-file invariants, stream-hashes with positioned reads, and
+  // only after size and digest match exposes a bounded byte stream from the
+  // same verified fd. Empty files are valid.
+  async verifiedDownload(input: {
+    readonly artifactId: string;
+    readonly expectedSizeBytes: number;
+    readonly expectedDigest: string;
+  }): Promise<VerifiedDownloadResult> {
+    const { artifactId, expectedSizeBytes, expectedDigest } = input;
+    if (
+      !OPAQUE_EVIDENCE_ID_PATTERN.test(artifactId) ||
+      !Number.isSafeInteger(expectedSizeBytes) ||
+      expectedSizeBytes < 0 ||
+      !VERIFIED_DOWNLOAD_DIGEST_PATTERN.test(expectedDigest)
+    ) {
+      return { status: "corrupt", code: "invalid_download_request" };
+    }
+    // A replaced published directory fails closed before any name lookup.
+    if (!this.onTreeDirectoryMatches(this.published)) {
+      return { status: "missing" };
+    }
+    const opened = this.binding.openAt(this.published.fd, artifactId, READ_FLAGS, 0);
+    if (!opened.ok) {
+      if (opened.errno === ERRNO.ENOENT) return { status: "missing" };
+      if (opened.errno === ERRNO.ELOOP) {
+        return { status: "corrupt", code: "artifact_symlink_rejected" };
+      }
+      return { status: "corrupt", code: mapOpenErrno(opened.errno) };
+    }
+    const fd = opened.fd;
+
+    const stats = fstatOf(fd);
+    if (stats === undefined) {
+      closeQuietly(fd);
+      return { status: "corrupt", code: "evidence_io_error" };
+    }
+    if (!stats.isFile()) {
+      closeQuietly(fd);
+      return { status: "corrupt", code: "artifact_not_regular_file" };
+    }
+    if (stats.nlink !== 1) {
+      closeQuietly(fd);
+      return { status: "corrupt", code: "artifact_hardlink_rejected" };
+    }
+    if (stats.dev !== this.rootDev) {
+      closeQuietly(fd);
+      return { status: "corrupt", code: "cross_filesystem_staging" };
+    }
+    if (stats.uid !== this.uid || (stats.mode & 0o777) !== 0o600) {
+      closeQuietly(fd);
+      return { status: "corrupt", code: "evidence_storage_invalid" };
+    }
+    if (stats.size !== expectedSizeBytes) {
+      closeQuietly(fd);
+      return { status: "corrupt", code: "size_mismatch" };
+    }
+
+    let hashed: { sizeBytes: number; digest: string };
+    try {
+      hashed = await hashDescriptor(fd);
+    } catch {
+      closeQuietly(fd);
+      return { status: "corrupt", code: "evidence_io_error" };
+    }
+    if (hashed.sizeBytes !== expectedSizeBytes) {
+      closeQuietly(fd);
+      return { status: "corrupt", code: "size_mismatch" };
+    }
+    if (hashed.digest !== expectedDigest) {
+      closeQuietly(fd);
+      return { status: "corrupt", code: "digest_mismatch" };
+    }
+
+    const total = hashed.sizeBytes;
+    async function* verifiedChunks(): AsyncGenerator<Buffer> {
+      try {
+        let position = 0;
+        while (position < total) {
+          const chunk = Buffer.allocUnsafe(Math.min(DOWNLOAD_CHUNK_BYTES, total - position));
+          const read = await fdRead(fd, chunk, 0, chunk.length, position);
+          if (read.bytesRead === 0) {
+            // Truncation mid-stream: fail with a generic, path-free error.
+            // The reply headers are already sent so the connection aborts;
+            // the finally block still closes the verified fd and nothing
+            // buffers the remaining bytes.
+            throw new Error("verified artifact truncated during streaming");
+          }
+          position += read.bytesRead;
+          yield Buffer.from(chunk.subarray(0, read.bytesRead));
+        }
+      } finally {
+        closeQuietly(fd);
+      }
+    }
+    return {
+      status: "ready",
+      sizeBytes: total,
+      digest: hashed.digest,
+      stream: verifiedChunks(),
+    };
   }
 
   // Re-opens the on-tree managed directory through the evidence descriptor

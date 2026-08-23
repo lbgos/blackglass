@@ -201,6 +201,31 @@ function grantRow(fixture: Fixture, artifactId: string) {
     .get(artifactId) as Record<string, unknown> | undefined;
 }
 
+function engagementIdForRun(fixture: Fixture, runId: string): string {
+  const row = fixture.database.sqlite
+    .prepare("select engagement_id from runs where id = ?")
+    .get(runId) as { engagement_id: string };
+  return row.engagement_id;
+}
+
+function publishArtifact(
+  fixture: Fixture,
+  artifactId: string,
+  runId: string,
+): void {
+  fixture.database.sqlite
+    .prepare(
+      "insert into evidence_artifacts (contract_version, profile, artifact_id, run_id, fence, event_sequence, artifact_slot, kind, size_bytes, digest, relative_path, completeness, redaction_applied, redaction_boundary, raw_bytes_preserved, created_at) " +
+        "values (1, 'd3-v1', ?, ?, '1', 1, 'stdout', 'stdout', 5, ?, ?, 'complete', 1, 'runner_stream', 0, 't')",
+    )
+    .run(
+      artifactId,
+      runId,
+      `sha256:${"b".repeat(64)}`,
+      `published/${artifactId}`,
+    );
+}
+
 function latestEventSequence(fixture: Fixture, leaseId: string): number {
   const row = fixture.database.sqlite
     .prepare("select latest_event_sequence from run_leases where lease_id = ?")
@@ -711,5 +736,48 @@ describe("evidence grant admission", () => {
         .prepare(base.replace(", 100, 0, 0,", ", 100, 0, 101,"))
         .run("ffffffff-bbbb-4ccc-8ddd-cccccccccccc", "u9", runId, "slot-g"),
     ).toThrow();
+  });
+});
+
+describe("publishedArtifactForEngagement", () => {
+  it("returns a committed artifact only when it belongs to the engagement through run -> action", () => {
+    const fixture = createFixture();
+    const runId = queuedRun(fixture);
+    const otherRunId = queuedRun(fixture, "action-fixture-2");
+    const engagementId = engagementIdForRun(fixture, runId);
+    const otherEngagementId = engagementIdForRun(fixture, otherRunId);
+    const artifactId = "aaaaaaaa-bbbb-4ccc-8ddd-00000000000a";
+    publishArtifact(fixture, artifactId, runId);
+
+    const member = fixture.grants.publishedArtifactForEngagement({
+      engagementId,
+      artifactId,
+    });
+    expect(member?.artifactId).toBe(artifactId);
+    expect(member?.runId).toBe(runId);
+    expect(member?.kind).toBe("stdout");
+    expect(member?.sizeBytes).toBe(5);
+
+    // A different engagement must not observe the artifact.
+    expect(
+      fixture.grants.publishedArtifactForEngagement({
+        engagementId: otherEngagementId,
+        artifactId,
+      }),
+    ).toBeUndefined();
+
+    // Unknown artifacts and unknown engagements are indistinguishable.
+    expect(
+      fixture.grants.publishedArtifactForEngagement({
+        engagementId,
+        artifactId: "bbbbbbbb-bbbb-4ccc-8ddd-00000000000b",
+      }),
+    ).toBeUndefined();
+    expect(
+      fixture.grants.publishedArtifactForEngagement({
+        engagementId: "nonexistent-engagement",
+        artifactId,
+      }),
+    ).toBeUndefined();
   });
 });
