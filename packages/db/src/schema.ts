@@ -772,6 +772,132 @@ export const runnerSessions = sqliteTable(
   ],
 );
 
+// D3 upload grants. One in-progress grant per durable artifact identity
+// (runId, fence, eventSequence, artifactSlot); the identity binds
+// latestEventSequence+1 without consuming the lease event cursor.
+export const evidenceGrants = sqliteTable(
+  "evidence_grants",
+  {
+    artifactId: text("artifact_id").primaryKey(),
+    contractVersion: integer("contract_version").notNull(),
+    profile: text("profile").notNull(),
+    uploadId: text("upload_id").notNull(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "restrict" }),
+    leaseId: text("lease_id").notNull(),
+    runnerId: text("runner_id").notNull(),
+    sessionId: text("session_id").notNull(),
+    fence: text("fence").notNull(),
+    eventSequence: integer("event_sequence").notNull(),
+    artifactSlot: text("artifact_slot").notNull(),
+    kind: text("kind", {
+      enum: ["stdout", "stderr", "tool_raw", "tool_parsed_input"],
+    }).notNull(),
+    declaredSizeBytes: integer("declared_size_bytes"),
+    declaredDigest: text("declared_digest"),
+    originalFileName: text("original_file_name"),
+    declaredContentType: text("declared_content_type"),
+    state: text("state", { enum: ["in_progress", "upload_interrupted"] }).notNull(),
+    reservationBytes: integer("reservation_bytes").notNull(),
+    putFinalized: integer("put_finalized", { mode: "boolean" }).notNull(),
+    acceptedBytes: integer("accepted_bytes").notNull(),
+    streamedDigest: text("streamed_digest"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check("evidence_grant_contract_version", sql`${table.contractVersion} = 1`),
+    check("evidence_grant_profile", sql`${table.profile} = 'd3-v1'`),
+    check(
+      "evidence_grant_artifact_id",
+      sql`length(${table.artifactId}) between 1 and 127 and substr(${table.artifactId}, 1, 1) glob '[a-z0-9]' and ${table.artifactId} not glob '*[^a-z0-9-]*'`,
+    ),
+    check(
+      "evidence_grant_upload_id",
+      sql`length(${table.uploadId}) between 1 and 127 and substr(${table.uploadId}, 1, 1) glob '[a-z0-9]' and ${table.uploadId} not glob '*[^a-z0-9-]*'`,
+    ),
+    check(
+      "evidence_grant_artifact_slot",
+      sql`length(${table.artifactSlot}) between 1 and 127 and substr(${table.artifactSlot}, 1, 1) glob '[a-z0-9]' and ${table.artifactSlot} not glob '*[^a-z0-9-]*'`,
+    ),
+    check(
+      "evidence_grant_run_id_length",
+      sql`length(${table.runId}) between 1 and 255`,
+    ),
+    check(
+      "evidence_grant_lease_id_length",
+      sql`length(${table.leaseId}) between 1 and 255`,
+    ),
+    check(
+      "evidence_grant_runner_id_length",
+      sql`length(${table.runnerId}) between 1 and 255`,
+    ),
+    check(
+      "evidence_grant_session_id_length",
+      sql`length(${table.sessionId}) between 1 and 255`,
+    ),
+    check(
+      "evidence_grant_fence_canonical_int64",
+      sql`length(${table.fence}) between 1 and 19 and ${table.fence} not glob '*[^0-9]*' and substr(${table.fence}, 1, 1) between '1' and '9' and (length(${table.fence}) < 19 or ${table.fence} <= '9223372036854775807')`,
+    ),
+    check(
+      "evidence_grant_event_sequence",
+      sql`${table.eventSequence} between 1 and 9007199254740991`,
+    ),
+    check(
+      "evidence_grant_kind",
+      sql`${table.kind} in ('stdout', 'stderr', 'tool_raw', 'tool_parsed_input')`,
+    ),
+    check(
+      "evidence_grant_declared_size_bytes",
+      sql`${table.declaredSizeBytes} is null or ${table.declaredSizeBytes} between 0 and 1073741824`,
+    ),
+    check(
+      "evidence_grant_declared_digest",
+      sql`${table.declaredDigest} is null or (length(${table.declaredDigest}) = 71 and ${table.declaredDigest} glob 'sha256:[0-9a-f]*' and ${table.declaredDigest} not glob 'sha256:*[^0-9a-f]*')`,
+    ),
+    check(
+      "evidence_grant_original_file_name",
+      sql`${table.originalFileName} is null or length(${table.originalFileName}) between 1 and 255`,
+    ),
+    check(
+      "evidence_grant_declared_content_type",
+      sql`${table.declaredContentType} is null or length(${table.declaredContentType}) between 1 and 127`,
+    ),
+    check(
+      "evidence_grant_state",
+      sql`${table.state} in ('in_progress', 'upload_interrupted')`,
+    ),
+    // Reservation upper bound follows the perArtifactBytes contract maximum,
+    // not the default quota, so approved custom quotas stay representable.
+    check(
+      "evidence_grant_reservation_bytes",
+      sql`${table.reservationBytes} between 1 and 1073741824`,
+    ),
+    check("evidence_grant_put_finalized", sql`${table.putFinalized} in (0, 1)`),
+    check(
+      "evidence_grant_accepted_bytes",
+      sql`${table.acceptedBytes} between 0 and ${table.reservationBytes}`,
+    ),
+    check(
+      "evidence_grant_streamed_digest",
+      sql`${table.streamedDigest} is null or (length(${table.streamedDigest}) = 71 and ${table.streamedDigest} glob 'sha256:[0-9a-f]*' and ${table.streamedDigest} not glob 'sha256:*[^0-9a-f]*')`,
+    ),
+    uniqueIndex("evidence_grant_identity_in_progress_unique")
+      .on(table.runId, table.fence, table.eventSequence, table.artifactSlot)
+      .where(sql`${table.state} = 'in_progress'`),
+    uniqueIndex("evidence_grant_upload_id_unique").on(table.uploadId),
+    index("evidence_grant_runner_state_idx").on(table.runnerId, table.state),
+    index("evidence_grant_run_state_idx").on(table.runId, table.state),
+    index("evidence_grant_run_fence_sequence_idx").on(
+      table.runId,
+      table.fence,
+      table.eventSequence,
+    ),
+  ],
+);
+
 export type RunRow = typeof runs.$inferSelect;
 export type RunLeaseRow = typeof runLeases.$inferSelect;
 export type RunEventRow = typeof runEvents.$inferSelect;
@@ -779,3 +905,4 @@ export type RunnerIdentityRow = typeof runnerIdentities.$inferSelect;
 export type RunnerEnrollmentChallengeRow =
   typeof runnerEnrollmentChallenges.$inferSelect;
 export type RunnerSessionRow = typeof runnerSessions.$inferSelect;
+export type EvidenceGrantRow = typeof evidenceGrants.$inferSelect;

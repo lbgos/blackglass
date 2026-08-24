@@ -22,6 +22,16 @@ export {
 } from "./repository.js";
 export { bindActionSnapshot } from "./action-snapshot.js";
 export {
+  EvidenceGrantRepository,
+  hasInProgressGrantAtSequence,
+  type CreateEvidenceGrantInput,
+  type EvidenceGrantQueryClient,
+  type EvidenceGrantRepositoryError,
+  type EvidenceGrantRepositoryProviders,
+  type EvidenceGrantResult,
+  type EvidenceGrantWriteClient,
+} from "./evidence-grant.js";
+export {
   RunRepository,
   allocateQueuedRun,
   fenceCurrentLeasesForRunner,
@@ -56,6 +66,7 @@ export {
   actions,
   engagementActiveScopes,
   engagements,
+  evidenceGrants,
   operatorCommandIdempotency,
   runEvents,
   runLeases,

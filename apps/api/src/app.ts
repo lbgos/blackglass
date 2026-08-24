@@ -11,6 +11,7 @@ import Fastify, {
 } from "fastify";
 import type {
   EngagementRepository,
+  EvidenceGrantRepository,
   OperatorCommandRepository,
   RunRepository,
   RunnerRepository,
@@ -23,6 +24,7 @@ import { registerEngagementRoutes } from "./engagement-routes.js";
 import { registerRunnerAuthHook, stripAuthorizationHeader } from "./runner-http.js";
 import { registerRunnerEnrollmentRoutes } from "./runner-enrollment-routes.js";
 import { registerRunnerControlRoutes } from "./runner-routes.js";
+import { registerRunnerEvidenceGrantRoutes } from "./runner-evidence-grant-routes.js";
 
 interface BuildAppOptions {
   getDevelopmentStorageReadiness: () => Readiness | Promise<Readiness>;
@@ -52,6 +54,7 @@ interface BuildAppOptions {
     | "acceptHandshake"
     | "requireAcceptedSession"
   >;
+  evidenceGrantRepository?: Pick<EvidenceGrantRepository, "createGrant">;
   logger?: FastifyServerOptions["logger"];
   now?: () => Date;
 }
@@ -62,6 +65,7 @@ export function buildApp({
   operatorCommandRepository,
   runRepository,
   runnerRepository,
+  evidenceGrantRepository,
   logger = false,
   now,
 }: BuildAppOptions): FastifyInstance {
@@ -133,6 +137,12 @@ export function buildApp({
       runnerRepository,
       ...(now === undefined ? {} : { now }),
     });
+    if (evidenceGrantRepository !== undefined) {
+      registerRunnerEvidenceGrantRoutes(app, {
+        commandRepository: operatorCommandRepository,
+        evidenceGrantRepository,
+      });
+    }
   }
 
   app.get("/health", async (_request, reply) => {

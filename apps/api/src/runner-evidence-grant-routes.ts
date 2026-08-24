@@ -1,0 +1,75 @@
+import {
+  CreateEvidenceGrantRequestSchema,
+  EvidenceGrantResponseSchema,
+  JsonValueSchema,
+  RunnerMutationQuerySchema,
+  commandJsonV1RunnerArtifactGrantDigest,
+  type JsonValue,
+} from "@blackglass/contracts";
+import type {
+  EvidenceGrantRepository,
+  OperatorCommandRepository,
+} from "@blackglass/db";
+import type { FastifyInstance } from "fastify";
+
+import {
+  dispatchRunnerMutation,
+  mapEvidenceGrantRepositoryError,
+  sendRunnerError,
+} from "./runner-http.js";
+
+type CommandRepository = Pick<
+  OperatorCommandRepository,
+  "executeOperatorCommand"
+>;
+
+class InvalidMutationResponseError extends Error {}
+
+function jsonBody(value: unknown): JsonValue {
+  const parsed = JsonValueSchema.safeParse(value);
+  if (!parsed.success) throw new InvalidMutationResponseError();
+  return parsed.data;
+}
+
+export function registerRunnerEvidenceGrantRoutes(
+  app: FastifyInstance,
+  options: {
+    commandRepository: CommandRepository;
+    evidenceGrantRepository: Pick<EvidenceGrantRepository, "createGrant">;
+  },
+): void {
+  app.post("/api/v1/runner/artifacts/grants", async (request, reply) => {
+    const runnerId = request.runnerAuth?.runnerId;
+    if (runnerId === undefined) {
+      return sendRunnerError(reply, 401, { code: "runner_unauthorized" });
+    }
+    return dispatchRunnerMutation(request, reply, options.commandRepository, {
+      actorId: runnerId,
+      route: "/api/v1/runner/artifacts/grants",
+      operation: "create_artifact_grant",
+      digest: commandJsonV1RunnerArtifactGrantDigest,
+      mutate: (transaction) => {
+        const body = CreateEvidenceGrantRequestSchema.safeParse(request.body);
+        const query = RunnerMutationQuerySchema.safeParse(request.query);
+        if (!body.success || !query.success) {
+          return { status: 400, body: { code: "invalid_request" } };
+        }
+        const granted = options.evidenceGrantRepository.createGrant(
+          {
+            ...body.data,
+            runnerId,
+            serverNow: transaction.now().toISOString(),
+          },
+          transaction.client,
+        );
+        if (!granted.ok) {
+          const mapped = mapEvidenceGrantRepositoryError(granted.error);
+          return { status: mapped.status, body: jsonBody(mapped.body) };
+        }
+        const validated = EvidenceGrantResponseSchema.safeParse(granted.value);
+        if (!validated.success) throw new InvalidMutationResponseError();
+        return { status: 201, body: jsonBody(validated.data) };
+      },
+    });
+  });
+}

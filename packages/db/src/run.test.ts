@@ -1219,7 +1219,7 @@ describe("run persistence adversarial checks", () => {
 });
 
 describe("run persistence schema", () => {
-  it("applies 0003 and keeps run events append-only", () => {
+  it("applies 0005 and keeps run events append-only", () => {
     const fixture = createFixture();
     const created = queuedAction(fixture, "action-schema");
     acquire(fixture, created.runId);
@@ -1227,7 +1227,13 @@ describe("run persistence schema", () => {
       fixture.database.sqlite
         .prepare("select count(*) as count from __drizzle_migrations")
         .get(),
-    ).toEqual({ count: 5 });
+    ).toEqual({ count: 6 });
+    const evidenceTable = fixture.database.sqlite
+      .prepare(
+        "select count(*) as count from sqlite_master where type = 'table' and name = 'evidence_grants'",
+      )
+      .get() as { count: number };
+    expect(evidenceTable).toEqual({ count: 1 });
     expect(() =>
       fixture.database.sqlite.prepare("update run_events set sequence = 99").run(),
     ).toThrow("run events are immutable");

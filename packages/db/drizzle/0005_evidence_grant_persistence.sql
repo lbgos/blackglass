@@ -1,0 +1,53 @@
+CREATE TABLE `evidence_grants` (
+	`artifact_id` text PRIMARY KEY NOT NULL,
+	`contract_version` integer NOT NULL,
+	`profile` text NOT NULL,
+	`upload_id` text NOT NULL,
+	`run_id` text NOT NULL,
+	`lease_id` text NOT NULL,
+	`runner_id` text NOT NULL,
+	`session_id` text NOT NULL,
+	`fence` text NOT NULL,
+	`event_sequence` integer NOT NULL,
+	`artifact_slot` text NOT NULL,
+	`kind` text NOT NULL,
+	`declared_size_bytes` integer,
+	`declared_digest` text,
+	`original_file_name` text,
+	`declared_content_type` text,
+	`state` text NOT NULL,
+	`reservation_bytes` integer NOT NULL,
+	`put_finalized` integer NOT NULL,
+	`accepted_bytes` integer NOT NULL,
+	`streamed_digest` text,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`run_id`) REFERENCES `runs`(`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "evidence_grant_contract_version" CHECK("evidence_grants"."contract_version" = 1),
+	CONSTRAINT "evidence_grant_profile" CHECK("evidence_grants"."profile" = 'd3-v1'),
+	CONSTRAINT "evidence_grant_artifact_id" CHECK(length("evidence_grants"."artifact_id") between 1 and 127 and substr("evidence_grants"."artifact_id", 1, 1) glob '[a-z0-9]' and "evidence_grants"."artifact_id" not glob '*[^a-z0-9-]*'),
+	CONSTRAINT "evidence_grant_upload_id" CHECK(length("evidence_grants"."upload_id") between 1 and 127 and substr("evidence_grants"."upload_id", 1, 1) glob '[a-z0-9]' and "evidence_grants"."upload_id" not glob '*[^a-z0-9-]*'),
+	CONSTRAINT "evidence_grant_artifact_slot" CHECK(length("evidence_grants"."artifact_slot") between 1 and 127 and substr("evidence_grants"."artifact_slot", 1, 1) glob '[a-z0-9]' and "evidence_grants"."artifact_slot" not glob '*[^a-z0-9-]*'),
+	CONSTRAINT "evidence_grant_run_id_length" CHECK(length("evidence_grants"."run_id") between 1 and 255),
+	CONSTRAINT "evidence_grant_lease_id_length" CHECK(length("evidence_grants"."lease_id") between 1 and 255),
+	CONSTRAINT "evidence_grant_runner_id_length" CHECK(length("evidence_grants"."runner_id") between 1 and 255),
+	CONSTRAINT "evidence_grant_session_id_length" CHECK(length("evidence_grants"."session_id") between 1 and 255),
+	CONSTRAINT "evidence_grant_fence_canonical_int64" CHECK(length("evidence_grants"."fence") between 1 and 19 and "evidence_grants"."fence" not glob '*[^0-9]*' and substr("evidence_grants"."fence", 1, 1) between '1' and '9' and (length("evidence_grants"."fence") < 19 or "evidence_grants"."fence" <= '9223372036854775807')),
+	CONSTRAINT "evidence_grant_event_sequence" CHECK("evidence_grants"."event_sequence" between 1 and 9007199254740991),
+	CONSTRAINT "evidence_grant_kind" CHECK("evidence_grants"."kind" in ('stdout', 'stderr', 'tool_raw', 'tool_parsed_input')),
+	CONSTRAINT "evidence_grant_declared_size_bytes" CHECK("evidence_grants"."declared_size_bytes" is null or "evidence_grants"."declared_size_bytes" between 0 and 1073741824),
+	CONSTRAINT "evidence_grant_declared_digest" CHECK("evidence_grants"."declared_digest" is null or (length("evidence_grants"."declared_digest") = 71 and "evidence_grants"."declared_digest" glob 'sha256:[0-9a-f]*' and "evidence_grants"."declared_digest" not glob 'sha256:*[^0-9a-f]*')),
+	CONSTRAINT "evidence_grant_original_file_name" CHECK("evidence_grants"."original_file_name" is null or length("evidence_grants"."original_file_name") between 1 and 255),
+	CONSTRAINT "evidence_grant_declared_content_type" CHECK("evidence_grants"."declared_content_type" is null or length("evidence_grants"."declared_content_type") between 1 and 127),
+	CONSTRAINT "evidence_grant_state" CHECK("evidence_grants"."state" in ('in_progress', 'upload_interrupted')),
+	CONSTRAINT "evidence_grant_reservation_bytes" CHECK("evidence_grants"."reservation_bytes" between 1 and 1073741824),
+	CONSTRAINT "evidence_grant_put_finalized" CHECK("evidence_grants"."put_finalized" in (0, 1)),
+	CONSTRAINT "evidence_grant_accepted_bytes" CHECK("evidence_grants"."accepted_bytes" between 0 and "evidence_grants"."reservation_bytes"),
+	CONSTRAINT "evidence_grant_streamed_digest" CHECK("evidence_grants"."streamed_digest" is null or (length("evidence_grants"."streamed_digest") = 71 and "evidence_grants"."streamed_digest" glob 'sha256:[0-9a-f]*' and "evidence_grants"."streamed_digest" not glob 'sha256:*[^0-9a-f]*'))
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `evidence_grant_identity_in_progress_unique` ON `evidence_grants` (`run_id`,`fence`,`event_sequence`,`artifact_slot`) WHERE "evidence_grants"."state" = 'in_progress';--> statement-breakpoint
+CREATE UNIQUE INDEX `evidence_grant_upload_id_unique` ON `evidence_grants` (`upload_id`);--> statement-breakpoint
+CREATE INDEX `evidence_grant_runner_state_idx` ON `evidence_grants` (`runner_id`,`state`);--> statement-breakpoint
+CREATE INDEX `evidence_grant_run_state_idx` ON `evidence_grants` (`run_id`,`state`);--> statement-breakpoint
+CREATE INDEX `evidence_grant_run_fence_sequence_idx` ON `evidence_grants` (`run_id`,`fence`,`event_sequence`);

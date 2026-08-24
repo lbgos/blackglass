@@ -10,6 +10,7 @@ import {
   PersistedRunnerIdentitySchema,
   RunnerHandshakeRequestSchema,
   RunnerMutationErrorSchema,
+  RunnerEvidenceGrantErrorSchema,
   RunnerProtocolUnsupportedErrorSchema,
   RunnerSecretSchema,
   StartEnrollmentChallengeRequestSchema,
@@ -136,6 +137,29 @@ describe("runner API contracts", () => {
         supported: [RUNNER_CONTROL_PROTOCOL],
       }).success,
     ).toBe(true);
+  });
+
+  it("parses D3 grant admission errors as strict {code} objects", () => {
+    for (const code of [
+      "artifact_upload_in_progress",
+      "artifact_quota_exceeded",
+      "concurrent_upload_limit",
+      "staging_quota_exceeded",
+      "run_quota_exceeded",
+      "total_quota_exceeded",
+    ] as const) {
+      expect(
+        RunnerMutationErrorSchema.safeParse({ code }).success,
+        code,
+      ).toBe(true);
+    }
+    // Wire errors are objects, never bare strings.
+    expect(RunnerMutationErrorSchema.safeParse("concurrent_upload_limit").success).toBe(
+      false,
+    );
+    expect(RunnerEvidenceGrantErrorSchema.safeParse({ code: "stale_fence" }).success).toBe(
+      false,
+    );
   });
 
   it("separates runner control routes from operator enrollment and engagement routes", () => {

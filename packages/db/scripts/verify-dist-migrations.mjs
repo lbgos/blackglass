@@ -30,7 +30,8 @@ try {
       !tables.includes("run_events") ||
       !tables.includes("runner_identities") ||
       !tables.includes("runner_enrollment_challenges") ||
-      !tables.includes("runner_sessions")
+      !tables.includes("runner_sessions") ||
+      !tables.includes("evidence_grants")
     ) {
       throw new Error("Built package did not resolve or apply its migrations.");
     }
