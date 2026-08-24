@@ -5,14 +5,18 @@ import {
   EVIDENCE_CONTRACT_VERSION,
   EVIDENCE_PROFILE,
   EVIDENCE_QUOTA_DEFAULTS,
+  EvidenceArtifactRecordSchema,
   EvidenceGrantResponseSchema,
   EvidenceQuotaConfigSchema,
   RunnerLeaseSchema,
   RUNNER_CONTROL_PROFILE,
   RUNNER_CONTROL_PROTOCOL,
+  type CompleteEvidenceUploadErrorCode,
   type CreateEvidenceGrantRequest,
+  type EvidenceArtifactKind,
   type EvidenceGrantResponse,
   type EvidenceQuotaConfig,
+  type PublishedCompleteness,
   type RunnerLease,
 } from "@blackglass/contracts";
 import { isTerminalRunState, validateLeaseAuthority } from "@blackglass/domain";
@@ -20,7 +24,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 
 import * as schema from "./schema.js";
-import { evidenceGrants, runLeases, runs } from "./schema.js";
+import { evidenceArtifacts, evidenceGrants, runLeases, runs } from "./schema.js";
 
 type DatabaseSchema = typeof schema;
 export type EvidenceGrantWriteClient = Parameters<
@@ -62,6 +66,8 @@ export interface EvidenceGrantRepositoryProviders {
   quota?: unknown;
 }
 
+export type EvidenceGrantRecord = schema.EvidenceGrantRow;
+
 function failed<T>(error: EvidenceGrantRepositoryError): EvidenceGrantResult<T> {
   return { ok: false, error };
 }
@@ -90,15 +96,25 @@ function isUniqueConstraint(error: unknown): boolean {
   );
 }
 
-// Publication slice replaces these with committed evidence_artifacts sums.
-// Admission math consumes them so later publication wiring cannot silently
-// assume zero published usage.
-function publishedRunBytes(_client: EvidenceGrantQueryClient, _runId: string): number {
-  return 0;
+// Published bytes count against run and total quota headroom so admission
+// cannot overcommit while artifacts stay published.
+function publishedRunBytes(client: EvidenceGrantQueryClient, runId: string): number {
+  const row = client
+    .select({ total: sql<string | null>`sum(${evidenceArtifacts.sizeBytes})` })
+    .from(evidenceArtifacts)
+    .where(eq(evidenceArtifacts.runId, runId))
+    .get();
+  const total = row?.total;
+  return total === null || total === undefined ? 0 : Number(total);
 }
 
-function publishedTotalBytes(_client: EvidenceGrantQueryClient): number {
-  return 0;
+function publishedTotalBytes(client: EvidenceGrantQueryClient): number {
+  const row = client
+    .select({ total: sql<string | null>`sum(${evidenceArtifacts.sizeBytes})` })
+    .from(evidenceArtifacts)
+    .get();
+  const total = row?.total;
+  return total === null || total === undefined ? 0 : Number(total);
 }
 
 function currentLeaseForRun(
@@ -115,6 +131,15 @@ function currentLeaseForRun(
 function leaseForAuthority(
   row: NonNullable<ReturnType<typeof currentLeaseForRun>>,
 ): EvidenceGrantResult<RunnerLease> {
+  const lease = leaseFromRow(row);
+  return lease === undefined
+    ? failed({ code: "invalid_persisted_data" })
+    : { ok: true, value: lease };
+}
+
+function leaseFromRow(
+  row: NonNullable<ReturnType<typeof currentLeaseForRun>>,
+): RunnerLease | undefined {
   const parsed = RunnerLeaseSchema.safeParse({
     orchestrationProfile: RUNNER_CONTROL_PROFILE,
     protocol: RUNNER_CONTROL_PROTOCOL,
@@ -127,10 +152,29 @@ function leaseForAuthority(
     latestHeartbeatSequence: row.latestHeartbeatSequence,
     latestEventSequence: row.latestEventSequence,
   });
-  return parsed.success
-    ? { ok: true, value: parsed.data }
-    : failed({ code: "invalid_persisted_data" });
+  return parsed.success ? parsed.data : undefined;
 }
+
+// Lowercase sha256 digest grammar shared by streamed and declared digests.
+const EVIDENCE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+
+export type FinalizePutErrorCode =
+  | "grant_not_found"
+  | "grant_not_finalizable"
+  | "storage_busy"
+  | "invalid_repository_input"
+  | "invalid_persisted_data";
+
+export type PublicationInsertOutcome =
+  | { status: "inserted" }
+  | { status: "identity_exists"; artifact: schema.EvidenceArtifactRow };
+
+export type EvidencePublicationWriteResult =
+  | { ok: true; outcome: PublicationInsertOutcome }
+  | {
+      ok: false;
+      error: { code: "storage_busy" | "invalid_persisted_data" };
+    };
 
 function sumInProgressReservations(
   client: EvidenceGrantQueryClient,
@@ -454,6 +498,259 @@ export class EvidenceGrantRepository {
     transaction?: EvidenceGrantWriteClient,
   ): EvidenceGrantResult<EvidenceGrantResponse> {
     return this.write((context) => admitEvidenceGrant(context, input), transaction);
+  }
+
+  findGrantByUploadId(uploadId: string): schema.EvidenceGrantRow | undefined {
+    return this.db
+      .select()
+      .from(evidenceGrants)
+      .where(eq(evidenceGrants.uploadId, uploadId))
+      .get();
+  }
+
+  publishedArtifactForIdentity(identity: {
+    runId: string;
+    fence: string;
+    eventSequence: number;
+    artifactSlot: string;
+  }): schema.EvidenceArtifactRow | undefined {
+    return this.db
+      .select()
+      .from(evidenceArtifacts)
+      .where(
+        and(
+          eq(evidenceArtifacts.runId, identity.runId),
+          eq(evidenceArtifacts.fence, identity.fence),
+          eq(evidenceArtifacts.eventSequence, identity.eventSequence),
+          eq(evidenceArtifacts.artifactSlot, identity.artifactSlot),
+        ),
+      )
+      .get();
+  }
+
+  // Validates that the authenticated runner still holds lease authority over
+  // a grant's bound identity: current non-expired lease, matching session and
+  // fence, and a non-terminal Run.
+  checkUploadLeaseAuthority(input: {
+    grant: schema.EvidenceGrantRow;
+    runnerId: string;
+    serverNow: string;
+  }): { ok: true } | { ok: false; code: CompleteEvidenceUploadErrorCode | "invalid_persisted_data" } {
+    const runRow = this.db
+      .select({ state: runs.state })
+      .from(runs)
+      .where(eq(runs.id, input.grant.runId))
+      .get();
+    if (runRow === undefined || isTerminalRunState(runRow.state)) {
+      return { ok: false, code: "stale_fence" };
+    }
+    const leaseRow = currentLeaseForRun(this.db, input.grant.runId);
+    if (leaseRow === undefined) return { ok: false, code: "stale_fence" };
+    const lease = leaseFromRow(leaseRow);
+    if (lease === undefined) return { ok: false, code: "invalid_persisted_data" };
+    const authority = validateLeaseAuthority({
+      lease,
+      presented: {
+        runId: input.grant.runId,
+        leaseId: input.grant.leaseId,
+        runnerId: input.runnerId,
+        sessionId: input.grant.sessionId,
+        fence: input.grant.fence,
+      },
+      serverNow: input.serverNow,
+    });
+    if (authority.ok) return { ok: true };
+    switch (authority.error.code) {
+      case "lease_expired":
+        return { ok: false, code: "lease_expired" };
+      case "lease_owner_mismatch":
+        return { ok: false, code: "lease_owner_mismatch" };
+      default:
+        return { ok: false, code: "stale_fence" };
+    }
+  }
+
+  // Durably records putFinalized=true with the streamed size and digest. The
+  // update is guarded: only an owned in-progress unfinalized grant finalizes.
+  finalizePut(input: {
+    uploadId: string;
+    runnerId: string;
+    acceptedBytes: number;
+    streamedDigest: string;
+    serverNow: string;
+  }): { ok: true } | { ok: false; code: FinalizePutErrorCode } {
+    if (
+      !Number.isSafeInteger(input.acceptedBytes) ||
+      input.acceptedBytes < 0 ||
+      !EVIDENCE_DIGEST_PATTERN.test(input.streamedDigest)
+    ) {
+      return { ok: false, code: "invalid_repository_input" };
+    }
+    try {
+      return this.db.transaction((client) => {
+        const row = client
+          .select()
+          .from(evidenceGrants)
+          .where(eq(evidenceGrants.uploadId, input.uploadId))
+          .get();
+        if (row === undefined) return { ok: false as const, code: "grant_not_found" as const };
+        if (
+          row.state !== "in_progress" ||
+          row.putFinalized ||
+          row.runnerId !== input.runnerId
+        ) {
+          return { ok: false as const, code: "grant_not_finalizable" as const };
+        }
+        if (input.acceptedBytes > row.reservationBytes) {
+          return { ok: false as const, code: "grant_not_finalizable" as const };
+        }
+        client
+          .update(evidenceGrants)
+          .set({
+            acceptedBytes: input.acceptedBytes,
+            streamedDigest: input.streamedDigest,
+            putFinalized: true,
+            updatedAt: input.serverNow,
+          })
+          .where(eq(evidenceGrants.uploadId, input.uploadId))
+          .run();
+        return { ok: true as const };
+      }, { behavior: "immediate" });
+    } catch (error) {
+      return { ok: false, code: isStorageBusy(error) ? "storage_busy" : "invalid_persisted_data" };
+    }
+  }
+
+  markGrantInterrupted(input: {
+    uploadId: string;
+    serverNow: string;
+  }): { ok: true } | { ok: false; code: "storage_busy" | "invalid_persisted_data" } {
+    return this.transitionGrantState(input.uploadId, "upload_interrupted", input.serverNow);
+  }
+
+  // Marks an in-progress grant published once its bytes are durably
+  // represented by a committed evidence_artifacts row.
+  markGrantPublished(input: {
+    uploadId: string;
+    serverNow: string;
+  }): { ok: true } | { ok: false; code: "storage_busy" | "invalid_persisted_data" } {
+    return this.transitionGrantState(input.uploadId, "published", input.serverNow);
+  }
+
+  private transitionGrantState(
+    uploadId: string,
+    state: "upload_interrupted" | "published",
+    serverNow: string,
+  ): { ok: true } | { ok: false; code: "storage_busy" | "invalid_persisted_data" } {
+    try {
+      this.db.transaction((client) => {
+        client
+          .update(evidenceGrants)
+          .set({ state, updatedAt: serverNow })
+          .where(and(eq(evidenceGrants.uploadId, uploadId), eq(evidenceGrants.state, "in_progress")))
+          .run();
+      }, { behavior: "immediate" });
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, code: isStorageBusy(error) ? "storage_busy" : "invalid_persisted_data" };
+    }
+  }
+
+  // Metadata-after-file commit point: inserts the evidence row and marks the
+  // grant published in one immediate transaction. A concurrent insert for the
+  // same durable identity returns identity_exists with the stored artifact so
+  // the caller can decide replay versus conflict from its bytes.
+  recordPublication(
+    input: {
+      uploadId: string;
+      artifactId: string;
+      runId: string;
+      fence: string;
+      eventSequence: number;
+      artifactSlot: string;
+      kind: EvidenceArtifactKind;
+      sizeBytes: number;
+      digest: string;
+      completeness: PublishedCompleteness;
+      occurredAt: string;
+    },
+  ): EvidencePublicationWriteResult {
+    const redactionApplied = input.kind === "stdout" || input.kind === "stderr";
+    const candidate = {
+      contractVersion: EVIDENCE_CONTRACT_VERSION,
+      profile: EVIDENCE_PROFILE,
+      artifactId: input.artifactId,
+      runId: input.runId,
+      fence: input.fence,
+      eventSequence: input.eventSequence,
+      artifactSlot: input.artifactSlot,
+      kind: input.kind,
+      sizeBytes: input.sizeBytes,
+      digest: input.digest,
+      relativePath: `published/${input.artifactId}`,
+      completeness: input.completeness,
+      redaction: {
+        applied: redactionApplied,
+        boundary: redactionApplied ? ("runner_stream" as const) : ("none" as const),
+        rawBytesPreserved: !redactionApplied,
+      },
+      createdAt: input.occurredAt,
+    };
+    const parsed = EvidenceArtifactRecordSchema.safeParse(candidate);
+    if (!parsed.success) return { ok: false, error: { code: "invalid_persisted_data" } };
+    try {
+      return this.db.transaction((client) => {
+        try {
+          client
+            .insert(evidenceArtifacts)
+            .values({
+              artifactId: parsed.data.artifactId,
+              contractVersion: parsed.data.contractVersion,
+              profile: parsed.data.profile,
+              runId: parsed.data.runId,
+              fence: parsed.data.fence,
+              eventSequence: parsed.data.eventSequence,
+              artifactSlot: parsed.data.artifactSlot,
+              kind: parsed.data.kind,
+              sizeBytes: parsed.data.sizeBytes,
+              digest: parsed.data.digest,
+              relativePath: parsed.data.relativePath,
+              completeness: parsed.data.completeness,
+              redactionApplied: parsed.data.redaction.applied,
+              redactionBoundary: parsed.data.redaction.boundary,
+              rawBytesPreserved: parsed.data.redaction.rawBytesPreserved,
+              createdAt: parsed.data.createdAt,
+            })
+            .run();
+        } catch (error) {
+          if (!isUniqueConstraint(error)) throw error;
+          const existing = client
+            .select()
+            .from(evidenceArtifacts)
+            .where(
+              and(
+                eq(evidenceArtifacts.runId, input.runId),
+                eq(evidenceArtifacts.fence, input.fence),
+                eq(evidenceArtifacts.eventSequence, input.eventSequence),
+                eq(evidenceArtifacts.artifactSlot, input.artifactSlot),
+              ),
+            )
+            .get();
+          if (existing === undefined) {
+            return { ok: false as const, error: { code: "invalid_persisted_data" as const } };
+          }
+          return { ok: true as const, outcome: { status: "identity_exists" as const, artifact: existing } };
+        }
+        client
+          .update(evidenceGrants)
+          .set({ state: "published", updatedAt: input.occurredAt })
+          .where(and(eq(evidenceGrants.uploadId, input.uploadId), eq(evidenceGrants.state, "in_progress")))
+          .run();
+        return { ok: true as const, outcome: { status: "inserted" as const } };
+      }, { behavior: "immediate" });
+    } catch (error) {
+      return { ok: false, error: { code: isStorageBusy(error) ? "storage_busy" : "invalid_persisted_data" } };
+    }
   }
 
   private write<T>(

@@ -43,6 +43,13 @@
       "when": 1787558400000,
       "tag": "0005_evidence_grant_persistence",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1787482150740,
+      "tag": "0006_evidence_publication",
+      "breakpoints": true
     }
   ]
 }

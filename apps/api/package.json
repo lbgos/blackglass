@@ -12,6 +12,7 @@
   "dependencies": {
     "@blackglass/contracts": "workspace:*",
     "@blackglass/db": "workspace:*",
+    "@blackglass/evidence-native": "workspace:*",
     "fastify": "5.11.3"
   },
   "devDependencies": {

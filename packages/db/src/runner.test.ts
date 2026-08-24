@@ -239,7 +239,7 @@ describe("runner identity schema", () => {
       fixture.database.sqlite
         .prepare("select count(*) as count from __drizzle_migrations")
         .get(),
-    ).toEqual({ count: 6 });
+    ).toEqual({ count: 7 });
     expect(
       fixture.database.sqlite
         .prepare(

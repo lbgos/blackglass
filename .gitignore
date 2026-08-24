@@ -4,6 +4,7 @@ coverage/
 .turbo/
 .vite/
 *.tsbuildinfo
+packages/evidence-native/build/
 
 .env
 .env.*
@@ -11,7 +12,7 @@ coverage/
 
 .blackglass/
 data/
-evidence/
+/evidence/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
