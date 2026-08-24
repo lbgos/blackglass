@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { EngagementSchema } from "./engagement.js";
 import {
   PositiveFencingTokenSchema,
   RunnerEventDigestSchema,
@@ -370,3 +371,31 @@ export type CompleteEvidenceUploadErrorCode = z.infer<
   typeof CompleteEvidenceUploadErrorCodeSchema
 >;
 export type EvidenceErrorCode = z.infer<typeof EvidenceErrorCodeSchema>;
+
+// Operator artifact download: engagement-scoped content route. Both path
+// identifiers are validated with existing identifier/opaque schemas.
+export const ArtifactContentParamsSchema = z.strictObject({
+  engagementId: EngagementSchema.shape.id,
+  artifactId: OpaqueArtifactIdSchema,
+});
+
+export type ArtifactContentParams = z.infer<typeof ArtifactContentParamsSchema>;
+
+export const ArtifactDownloadErrorSchema = z.union([
+  z.strictObject({ code: z.literal("invalid_request") }),
+  z.strictObject({ code: z.literal("range_not_supported") }),
+  z.strictObject({ code: z.literal("artifact_not_found") }),
+  z.strictObject({ code: z.literal("missing_artifact") }),
+  z.strictObject({ code: z.literal("corrupt_artifact") }),
+]);
+
+export type ArtifactDownloadError = z.infer<typeof ArtifactDownloadErrorSchema>;
+
+const OPERATOR_ARTIFACT_CONTENT_ROUTE_PATTERN =
+  /^\/api\/v1\/engagements\/[^/]+\/artifacts\/[^/]+\/content$/;
+
+// Exact operator download route matcher used by the auth hook to refuse
+// runner credentials on operator-only content reads. Query strings ignored.
+export function isOperatorArtifactContentRoute(url: string): boolean {
+  return OPERATOR_ARTIFACT_CONTENT_ROUTE_PATTERN.test(url.split("?")[0] ?? url);
+}

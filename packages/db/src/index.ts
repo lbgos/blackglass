@@ -25,6 +25,7 @@ export {
   EvidenceGrantRepository,
   hasInProgressGrantAtSequence,
   type CreateEvidenceGrantInput,
+  type EngagementArtifactRecord,
   type EvidenceGrantQueryClient,
   type EvidenceGrantRecord,
   type EvidencePublicationWriteResult,

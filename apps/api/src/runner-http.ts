@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   canonicalizeJson,
+  isOperatorArtifactContentRoute,
   isRunnerControlRoute,
   parseRunnerAuthorizationHeader,
   type CommandJsonV1DigestProjection,
@@ -232,6 +233,16 @@ export function registerRunnerAuthHook(
     }
 
     if (credential.ok) {
+      // Only the GET verb of the operator artifact-content route serves
+      // engagement evidence to operators; a syntactically valid runner
+      // credential must never be accepted there (nor treated as the generic
+      // operator 403). Other methods keep the existing route behavior.
+      if (
+        request.method === "GET" &&
+        isOperatorArtifactContentRoute(request.url)
+      ) {
+        return sendRunnerError(reply, 403, { code: "operator_identity_required" });
+      }
       return sendRunnerError(reply, 403, { code: "runner_route_forbidden" });
     }
   });

@@ -66,6 +66,7 @@ export async function buildStorageBackedApp(
       runnerRepository,
       evidenceGrantRepository,
       ...(evidencePublication === undefined ? {} : { evidencePublication }),
+      ...(evidenceStore === undefined ? {} : { evidenceStore }),
       async getDevelopmentStorageReadiness() {
         await checkDevelopmentStorage(dataDirectory);
         return "ready" as const;
