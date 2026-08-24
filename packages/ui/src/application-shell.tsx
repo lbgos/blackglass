@@ -39,6 +39,10 @@ export interface ApplicationShellProps {
   consolePanels: readonly ConsolePanel[];
   consoleStatus?: ReactNode;
   mobileTitle?: string;
+  /** Renders the bottom console and its mobile trigger. Defaults to true. */
+  showConsole?: boolean;
+  /** Renders the desktop stage header row. Mobile navigation always stays. Defaults to true. */
+  showDesktopStageHeader?: boolean;
   sidebarActions?: ShellSlot;
   sidebarContent: ShellSlot;
   sidebarFooter: ShellSlot;
@@ -90,6 +94,8 @@ export function ApplicationShell({
   consolePanels,
   consoleStatus = "Console ready",
   mobileTitle = "Blackglass navigation",
+  showConsole = true,
+  showDesktopStageHeader = true,
   sidebarActions,
   sidebarContent,
   sidebarFooter,
@@ -318,95 +324,109 @@ export function ApplicationShell({
           <span className="min-w-0 flex-1 truncate text-[13px] font-semibold tracking-[-0.03em]">
             Blackglass
           </span>
-          <FullScreenSheet
-            description="Advisor, activity, and raw output views."
-            onOpenChange={setMobileConsoleOpen}
-            onOpenChangeComplete={(open) => {
-              if (!open && window.innerWidth >= DESKTOP_BREAKPOINT) desktopConsole.current?.focus();
-            }}
-            open={mobileConsoleOpen}
-            title="Console"
-            trigger={<Terminal className="size-4" aria-hidden="true" />}
-            triggerLabel="Open console"
-          >
-            <ConsoleTabs panels={consolePanels} />
-          </FullScreenSheet>
+          {showConsole && (
+            <FullScreenSheet
+              description="Advisor, activity, and raw output views."
+              onOpenChange={setMobileConsoleOpen}
+              onOpenChangeComplete={(open) => {
+                if (!open && window.innerWidth >= DESKTOP_BREAKPOINT) desktopConsole.current?.focus();
+              }}
+              open={mobileConsoleOpen}
+              title="Console"
+              trigger={<Terminal className="size-4" aria-hidden="true" />}
+              triggerLabel="Open console"
+            >
+              <ConsoleTabs panels={consolePanels} />
+            </FullScreenSheet>
+          )}
         </header>
 
-        <header className="shell-stage-header flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-background px-2 py-1 md:h-12 md:flex-nowrap md:px-3 md:py-0">
-          <button
-            ref={desktopSidebarToggle}
-            type="button"
-            aria-keyshortcuts="Control+B Meta+B"
-            aria-label={desktopSidebarOpen ? "Hide sidebar" : "Show sidebar"}
-            aria-pressed={desktopSidebarOpen}
-            className="shell-sidebar-toggle hidden size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:inline-flex md:size-8"
-            onClick={() => setDesktopSidebarOpen((current) => !current)}
-            title={`${desktopSidebarOpen ? "Hide" : "Show"} sidebar (Mod+B)`}
+        <div className="flex min-h-0 flex-1 flex-col" data-testid="workspace-pane">
+          {showDesktopStageHeader && (
+            <header className="shell-stage-header flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-background px-2 py-1 md:h-12 md:flex-nowrap md:px-3 md:py-0">
+              <button
+                ref={desktopSidebarToggle}
+                type="button"
+                aria-keyshortcuts="Control+B Meta+B"
+                aria-label={desktopSidebarOpen ? "Hide sidebar" : "Show sidebar"}
+                aria-pressed={desktopSidebarOpen}
+                className="shell-sidebar-toggle hidden size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:inline-flex md:size-8"
+                onClick={() => setDesktopSidebarOpen((current) => !current)}
+                title={`${desktopSidebarOpen ? "Hide" : "Show"} sidebar (Mod+B)`}
+              >
+                {desktopSidebarOpen ? (
+                  <PanelLeftClose className="size-4" aria-hidden="true" />
+                ) : (
+                  <PanelLeftOpen className="size-4" aria-hidden="true" />
+                )}
+              </button>
+              <div className="flex min-h-11 min-w-0 flex-1 items-center md:min-h-8">
+                {stageHeader}
+              </div>
+            </header>
+          )}
+          {/* The workspace pane scrolls within its own flex allocation; the console pane below
+              never participates in that scroll, so content is clipped here instead of behind it. */}
+          <div
+            className="min-h-0 flex-1 overflow-auto overscroll-contain"
+            data-testid="workspace-scroll-region"
           >
-            {desktopSidebarOpen ? (
-              <PanelLeftClose className="size-4" aria-hidden="true" />
-            ) : (
-              <PanelLeftOpen className="size-4" aria-hidden="true" />
-            )}
-          </button>
-          <div className="flex min-h-11 min-w-0 flex-1 items-center md:min-h-8">{stageHeader}</div>
-        </header>
-
-        <div className="min-h-0 flex-1 overflow-auto" data-testid="workspace-scroll-region">
-          {children}
+            {children}
+          </div>
         </div>
 
-        <section
-          ref={desktopConsole}
-          aria-label="Console"
-          className={cn(
-            "shell-console relative hidden shrink-0 border-t border-border bg-background md:block",
-            desktopConsoleCollapsed && "shell-console-collapsed",
-          )}
-          tabIndex={-1}
-        >
-          {!desktopConsoleCollapsed && (
-            <div
-              aria-label="Resize console"
-              aria-orientation="horizontal"
-              aria-valuemax={Math.max(MIN_CONSOLE_HEIGHT, window.innerHeight * 0.6)}
-              aria-valuemin={MIN_CONSOLE_HEIGHT}
-              aria-valuenow={Math.round(consoleHeight)}
-              className="absolute inset-x-0 top-0 z-10 h-2 -translate-y-1/2 cursor-row-resize touch-none outline-none focus-visible:bg-ring/30 focus-visible:ring-2 focus-visible:ring-ring"
-              onKeyDown={resizeConsoleWithKeyboard}
-              role="separator"
-              tabIndex={0}
-              {...consoleResizeHandlers}
-            />
-          )}
-          {desktopConsoleCollapsed ? (
-            <div className="flex h-11 items-center gap-3 px-4 text-sm text-muted-foreground">
-              <Terminal className="size-4" aria-hidden="true" />
-              <span className="min-w-0 flex-1 truncate">{consoleStatus}</span>
-              <button
-                type="button"
-                aria-label="Expand console"
-                className="inline-flex size-11 items-center justify-center rounded-md outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:size-8"
-                onClick={() => setDesktopConsoleCollapsed(false)}
-              >
-                <ChevronUp className="size-5" aria-hidden="true" />
-              </button>
-            </div>
-          ) : (
-            <div className="relative h-full min-h-0">
-              <button
-                type="button"
-                aria-label="Collapse console"
-                className="absolute top-0 right-2 z-20 inline-flex size-11 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:size-8"
-                onClick={() => setDesktopConsoleCollapsed(true)}
-              >
-                <ChevronDown className="size-5" aria-hidden="true" />
-              </button>
-              <ConsoleTabs panels={consolePanels} />
-            </div>
-          )}
-        </section>
+        {showConsole && (
+            <section
+              ref={desktopConsole}
+              aria-label="Console"
+              className={cn(
+                "shell-console relative hidden shrink-0 border-t border-border bg-background md:block",
+                desktopConsoleCollapsed && "shell-console-collapsed",
+              )}
+              tabIndex={-1}
+            >
+            {!desktopConsoleCollapsed && (
+              <div
+                aria-label="Resize console"
+                aria-orientation="horizontal"
+                aria-valuemax={Math.max(MIN_CONSOLE_HEIGHT, window.innerHeight * 0.6)}
+                aria-valuemin={MIN_CONSOLE_HEIGHT}
+                aria-valuenow={Math.round(consoleHeight)}
+                className="absolute inset-x-0 top-0 z-10 h-2 -translate-y-1/2 cursor-row-resize touch-none outline-none focus-visible:bg-ring/30 focus-visible:ring-2 focus-visible:ring-ring"
+                onKeyDown={resizeConsoleWithKeyboard}
+                role="separator"
+                tabIndex={0}
+                {...consoleResizeHandlers}
+              />
+            )}
+            {desktopConsoleCollapsed ? (
+              <div className="flex h-11 items-center gap-3 px-4 text-sm text-muted-foreground">
+                <Terminal className="size-4" aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate">{consoleStatus}</span>
+                <button
+                  type="button"
+                  aria-label="Expand console"
+                  className="inline-flex size-11 items-center justify-center rounded-md outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:size-8"
+                  onClick={() => setDesktopConsoleCollapsed(false)}
+                >
+                  <ChevronUp className="size-5" aria-hidden="true" />
+                </button>
+              </div>
+            ) : (
+              <div className="relative h-full min-h-0">
+                <button
+                  type="button"
+                  aria-label="Collapse console"
+                  className="absolute top-0 right-2 z-20 inline-flex size-11 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:size-8"
+                  onClick={() => setDesktopConsoleCollapsed(true)}
+                >
+                  <ChevronDown className="size-5" aria-hidden="true" />
+                </button>
+                <ConsoleTabs panels={consolePanels} />
+              </div>
+            )}
+          </section>
+        )}
       </div>
     </div>
   );

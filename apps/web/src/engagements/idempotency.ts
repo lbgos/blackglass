@@ -1,7 +1,9 @@
 import { IdempotencyKeySchema } from "@blackglass/contracts";
 
+import { createBrowserUuid } from "../lib/browser-uuid.js";
+
 export function createIdempotencyKey(
-  generate: () => string = () => crypto.randomUUID(),
+  generate: () => string = createBrowserUuid,
 ): string {
   const parsed = IdempotencyKeySchema.safeParse(generate());
   if (!parsed.success) {
