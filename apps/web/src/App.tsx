@@ -1,6 +1,6 @@
 import { ApplicationShell, Button, Status, type ConsolePanel } from "@blackglass/ui";
-import { Link, Outlet, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
 
 import { CreateEngagementDialog } from "./engagements/create-dialog.js";
 import { EngagementSidebarList } from "./engagements/sidebar.js";
@@ -9,13 +9,14 @@ import {
   useEngagementWorkspace,
 } from "./engagements/workspace-context.js";
 import { partitionEngagements, useEngagementsQuery } from "./engagements/query.js";
+import { SettingsBackButton, SettingsNav } from "./settings/sidebar.js";
+import { SettingsViewProvider } from "./settings/settings-view.js";
 import { StageHeader } from "./stage-header.js";
 import { useSystemStatusQuery } from "./system-status-query.js";
 
 const navigationLinks = [
   { label: "Dashboard", to: "/" },
   { label: "Engagements", to: "/engagements" },
-  { label: "Plugins", to: "/plugins" },
 ] as const;
 
 const consolePanels: readonly ConsolePanel[] = [
@@ -170,21 +171,56 @@ function SidebarNavigation({ onNavigate }: { onNavigate: () => void }) {
   );
 }
 
+function PluginsIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="size-[15px] shrink-0" aria-hidden="true">
+      <path d="M4.2 5.2h7.6v7.2H4.2z" fill="none" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M6 5.2V3.8h4v1.4" fill="none" stroke="currentColor" strokeWidth="1.7" />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="size-[15px] shrink-0" aria-hidden="true">
+      <circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.7" />
+      <path
+        d="M8 2.2v1.4M8 12.4v1.4M2.2 8h1.4M12.4 8h1.4M3.9 3.9l1 1M11.1 11.1l1 1M12.1 3.9l-1 1M4.9 11.1l-1 1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+const footerLinkClasses =
+  "flex min-h-11 items-center gap-2 rounded-lg px-2 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-8";
+
 function SidebarFooter({ onNavigate }: { onNavigate: () => void }) {
   return (
-    <Link
-      to="/settings"
-      activeOptions={{ exact: true }}
-      activeProps={{ className: "bg-sidebar-active text-sidebar-foreground" }}
-      className="flex min-h-11 items-center px-5 text-[13px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring md:min-h-10"
-      inactiveProps={{
-        className:
-          "text-sidebar-muted-foreground hover:bg-sidebar-hover hover:text-sidebar-foreground",
-      }}
-      onClick={onNavigate}
-    >
-      Settings
-    </Link>
+    <div className="flex flex-col gap-0.5 px-2 py-2.5">
+      <Link
+        to="/plugins"
+        activeProps={{ className: `${footerLinkClasses} bg-sidebar-active text-sidebar-foreground` }}
+        className={`${footerLinkClasses} text-sidebar-muted-foreground hover:bg-sidebar-hover hover:text-sidebar-foreground`}
+        onClick={onNavigate}
+      >
+        <PluginsIcon />
+        Plugins
+      </Link>
+      <Link
+        to="/settings"
+        activeOptions={{ exact: true }}
+        activeProps={{ className: `${footerLinkClasses} bg-sidebar-active text-sidebar-foreground` }}
+        className={`${footerLinkClasses} text-sidebar-muted-foreground hover:bg-sidebar-hover hover:text-sidebar-foreground`}
+        onClick={onNavigate}
+      >
+        <SettingsIcon />
+        Settings
+      </Link>
+    </div>
   );
 }
 
@@ -216,24 +252,61 @@ export function ApplicationLayout() {
   const [createOpen, setCreateOpen] = useState(false);
   const openCreate = () => setCreateOpen(true);
   const systemStatus = useSystemStatusQuery();
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const onSettings = pathname === "/settings";
+  const onPlugins = pathname === "/plugins";
+  // Reference chrome visibility: Settings drops the desktop stage header and
+  // console; Plugins keeps the header but drops the console; other routes keep both.
+  const showConsole = !onSettings && !onPlugins;
+  const showDesktopStageHeader = !onSettings;
+  // The settings Back control returns to the last non-settings route, which also
+  // covers direct /settings entry where no internal route was visited yet.
+  const returnPath = useRef("/");
+  useEffect(() => {
+    if (!onSettings) returnPath.current = pathname;
+  }, [onSettings, pathname]);
+  const goBackFromSettings = () => {
+    void navigate({ to: returnPath.current });
+  };
 
   return (
     <EngagementWorkspaceProvider openCreate={openCreate}>
-      <ApplicationShell
-        consolePanels={consolePanels}
-        consoleStatus={consoleStatusLabel(systemStatus)}
-        sidebarActions={(closeMobile) => (
-          <SidebarActions onCreate={openCreate} onNavigate={closeMobile} />
-        )}
-        sidebarContent={(closeMobile) => <SidebarNavigation onNavigate={closeMobile} />}
-        sidebarFooter={(closeMobile) => <SidebarFooter onNavigate={closeMobile} />}
-        sidebarHeader={<SidebarHeader />}
-        stageHeader={<StageHeader />}
-      >
-        <WorkspaceNotice />
-        <Outlet />
-      </ApplicationShell>
-      <CreateEngagementDialog open={createOpen} onOpenChange={setCreateOpen} />
+      <SettingsViewProvider active={onSettings}>
+        <ApplicationShell
+          consolePanels={consolePanels}
+          consoleStatus={consoleStatusLabel(systemStatus)}
+          showConsole={showConsole}
+          showDesktopStageHeader={showDesktopStageHeader}
+          sidebarActions={
+            onSettings
+              ? undefined
+              : (closeMobile) => <SidebarActions onCreate={openCreate} onNavigate={closeMobile} />
+          }
+          sidebarContent={(closeMobile) =>
+            onSettings ? (
+              <SettingsNav onCloseMobile={closeMobile} />
+            ) : (
+              <SidebarNavigation onNavigate={closeMobile} />
+            )
+          }
+          sidebarFooter={(closeMobile) =>
+            onSettings ? (
+              <div className="px-2 pb-2.5">
+                <SettingsBackButton onBack={goBackFromSettings} onCloseMobile={closeMobile} />
+              </div>
+            ) : (
+              <SidebarFooter onNavigate={closeMobile} />
+            )
+          }
+          sidebarHeader={<SidebarHeader />}
+          stageHeader={<StageHeader />}
+        >
+          <WorkspaceNotice />
+          <Outlet />
+        </ApplicationShell>
+        <CreateEngagementDialog open={createOpen} onOpenChange={setCreateOpen} />
+      </SettingsViewProvider>
     </EngagementWorkspaceProvider>
   );
 }
