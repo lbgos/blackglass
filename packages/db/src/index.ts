@@ -8,6 +8,7 @@ export {
 export {
   DATABASE_FILENAME,
   openEngagementDatabase,
+  openReadOnlyEngagementDatabase,
   type EngagementDatabase,
   type OpenDatabaseOptions,
 } from "./database.js";

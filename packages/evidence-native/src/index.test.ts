@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { closeSync, constants } from "node:fs";
 import { mkdtemp, mkdir, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -143,6 +143,83 @@ describe("evidence native binding", () => {
         0o600,
       );
       expect(openThroughSymlink).toEqual({ ok: false, errno: /* ELOOP */ 40 });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.runIf(process.platform === "linux")("enumerates a directory fd without . and ..", async () => {
+    if (!supported.ok) return;
+    const directory = await mkdtemp(path.join(tmpdir(), "evidence-native-"));
+    directories.push(directory);
+    await writeFile(path.join(directory, "artifact-b"), "b");
+    await writeFile(path.join(directory, "artifact-a"), "a");
+    await mkdir(path.join(directory, "subdir"));
+    await symlink("artifact-a", path.join(directory, "artifact-link"));
+    const { open } = await import("node:fs/promises");
+    const handle = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY | O_CLOEXEC);
+    try {
+      // Enumeration returns raw names only; the symlink is listed as a name
+      // and never resolved. Callers must openat(O_NOFOLLOW)+fstat each entry.
+      const listed = supported.binding.readDirNames(handle.fd);
+      expect(listed).toEqual({
+        ok: true,
+        names: expect.arrayContaining(["artifact-a", "artifact-b", "subdir", "artifact-link"]),
+      });
+      if (!listed.ok) return;
+      expect(listed.names).toHaveLength(4);
+      expect(listed.names).not.toContain(".");
+      expect(listed.names).not.toContain("..");
+      // Every returned name is a plain segment the binding accepts; the
+      // symlink entry fails O_NOFOLLOW at open time instead of resolving.
+      for (const name of listed.names) {
+        const opened = supported.binding.openAt(
+          handle.fd,
+          name,
+          constants.O_RDONLY | constants.O_NOFOLLOW,
+          0,
+        );
+        if ("fd" in opened && opened.ok === true) closeSync(opened.fd);
+      }
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.runIf(process.platform === "linux")("enumerates an empty directory as no names", async () => {
+    if (!supported.ok) return;
+    const directory = await mkdtemp(path.join(tmpdir(), "evidence-native-"));
+    directories.push(directory);
+    const { open } = await import("node:fs/promises");
+    const handle = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY | O_CLOEXEC);
+    try {
+      expect(supported.binding.readDirNames(handle.fd)).toEqual({ ok: true, names: [] });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.runIf(process.platform === "linux")("reports errno instead of consuming the caller's descriptor", async () => {
+    if (!supported.ok) return;
+    const directory = await mkdtemp(path.join(tmpdir(), "evidence-native-"));
+    directories.push(directory);
+    const { open } = await import("node:fs/promises");
+    const handle = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY | O_CLOEXEC);
+    try {
+      expect(supported.binding.readDirNames(-1)).toEqual({ ok: false, errno: /* EBADF */ 9 });
+      // The caller's fd stays usable after a failed enumeration attempt.
+      expect(supported.binding.readDirNames(handle.fd)).toMatchObject({ ok: true });
+      // A regular-file fd is not a directory: fdopendir fails with ENOTDIR
+      // without closing the duplicated source descriptor's owner.
+      const fileHandle = await open(path.join(directory, "plain"), constants.O_CREAT | constants.O_WRONLY, 0o600);
+      try {
+        expect(supported.binding.readDirNames(fileHandle.fd)).toEqual({
+          ok: false,
+          errno: /* ENOTDIR */ 20,
+        });
+      } finally {
+        await fileHandle.close();
+      }
     } finally {
       await handle.close();
     }

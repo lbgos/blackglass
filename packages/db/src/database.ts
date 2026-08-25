@@ -68,3 +68,11 @@ export function openEngagementDatabase({
     throw error;
   }
 }
+
+// Read-only connection for the ADR-0003 doctor evidence check. It never
+// migrates, chmods, writes, or creates: a missing database file fails instead
+// of materializing an empty one. No pragma is persisted to the file.
+export function openReadOnlyEngagementDatabase(dataDirectory: string): Database.Database {
+  const databasePath = path.join(dataDirectory, DATABASE_FILENAME);
+  return new Database(databasePath, { readonly: true, fileMustExist: true });
+}

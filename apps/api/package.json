@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "blackglass": "./dist/cli/blackglass.js"
+  },
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
     "dev": "tsx --conditions=development src/server.ts",
