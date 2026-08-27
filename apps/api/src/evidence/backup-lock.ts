@@ -57,11 +57,13 @@ function closeQuietly(fd: number): void {
 }
 
 export class BackupLock implements StorageQuiesceGate {
+  private closed = false;
+
   private constructor(
     private readonly binding: EvidenceNativeBinding,
     // Held for the lifetime of the lock object so an attacker cannot unlink
     // and swap the lockfile between acquisitions.
-    private readonly anchorFd: number,
+    private anchorFd: number,
     private readonly lockFilePath: string,
     private readonly anchorDev: number,
     private readonly anchorIno: number,
@@ -124,6 +126,9 @@ export class BackupLock implements StorageQuiesceGate {
   }
 
   private acquire(mode: "shared" | "exclusive"): BackupLockAttempt {
+    if (this.closed) {
+      return { ok: false, code: "evidence_io_error" };
+    }
     let fd: number;
     try {
       fd = openSync(this.lockFilePath, LOCKFILE_OPEN_FLAGS);
@@ -183,6 +188,8 @@ export class BackupLock implements StorageQuiesceGate {
   }
 
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     closeQuietly(this.anchorFd);
   }
 }
