@@ -63,7 +63,7 @@ export class BackupLock implements StorageQuiesceGate {
     private readonly binding: EvidenceNativeBinding,
     // Held for the lifetime of the lock object so an attacker cannot unlink
     // and swap the lockfile between acquisitions.
-    private anchorFd: number,
+    private readonly anchorFd: number,
     private readonly lockFilePath: string,
     private readonly anchorDev: number,
     private readonly anchorIno: number,
