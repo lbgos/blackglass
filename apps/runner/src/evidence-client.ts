@@ -1,0 +1,264 @@
+import { createHash } from "node:crypto";
+
+import {
+  CompleteEvidenceUploadSuccessSchema,
+  EvidenceGrantResponseSchema,
+  commandJsonV1RunnerArtifactGrantDigest,
+  type JsonValue,
+} from "@blackglass/contracts";
+
+import type { RunnerConfig } from "./config.js";
+import { getOrCreateOutboxEntry, removeOutboxAtomically } from "./outbox.js";
+import type { ProcessResult } from "./process.js";
+
+export class EvidencePublicationError extends Error {
+  readonly code: string;
+  constructor(code: string, message?: string) {
+    super(message ?? code);
+    this.name = "EvidencePublicationError";
+    this.code = code;
+  }
+}
+
+function authHeader(runnerId: string, secret: string): string {
+  return `Blackglass-Runner ${runnerId} ${secret}`;
+}
+
+function sha256Hex(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+function completenessFor(truncated: boolean, isCancelled: boolean): "complete" | "partial" | "truncated" {
+  if (truncated) return "truncated";
+  if (isCancelled) return "partial";
+  return "complete";
+}
+
+// Fixed codes exposed to callers. Never include response bodies, paths, or digests.
+const FIXED_GRANT_CODES = new Set([
+  "stale_fence",
+  "lease_expired",
+  "lease_owner_mismatch",
+  "run_already_terminal",
+  "artifact_upload_in_progress",
+  "event_sequence_gap",
+]);
+
+function grantRoute(): string {
+  return "/api/v1/runner/artifacts/grants";
+}
+
+interface LeaseIdentity {
+  runId: string;
+  leaseId: string;
+  sessionId: string;
+  fence: string;
+}
+
+async function publishSingleArtifact(input: {
+  config: RunnerConfig;
+  lease: LeaseIdentity;
+  slot: "stdout" | "stderr";
+  kind: "stdout" | "stderr";
+  buffer: Buffer;
+  truncated: boolean;
+  isCancelled: boolean;
+}): Promise<void> {
+  const { config, lease, slot, kind, buffer, truncated, isCancelled } = input;
+  const digestHex = sha256Hex(buffer);
+  const declaredDigest = `sha256:${digestHex}`;
+  const declaredSizeBytes = buffer.length;
+  const originalFileName = slot === "stdout" ? "stdout.log" : "stderr.log";
+  const declaredContentType = "text/plain; charset=utf-8";
+  const completeness = completenessFor(truncated, isCancelled);
+
+  const grantBody = {
+    runId: lease.runId,
+    leaseId: lease.leaseId,
+    sessionId: lease.sessionId,
+    fence: lease.fence,
+    eventSequence: 1,
+    artifactSlot: slot,
+    kind,
+    declaredSizeBytes,
+    declaredDigest,
+    originalFileName,
+    declaredContentType,
+  };
+
+  const route = grantRoute();
+  let grant: ReturnType<typeof EvidenceGrantResponseSchema.parse> | null = null;
+
+  try {
+    const { entry } = await getOrCreateOutboxEntry({
+      dataDir: config.dataDir,
+      actorId: config.runnerId,
+      route,
+      operation: "create_artifact_grant",
+      path: {} as unknown as JsonValue,
+      query: {} as unknown as JsonValue,
+      body: grantBody as unknown as JsonValue,
+      digestProjection: commandJsonV1RunnerArtifactGrantDigest,
+    });
+
+    const grantUrl = `${config.apiBaseUrl}/api/v1/runner/artifacts/grants`;
+    let grantRes: Response;
+    try {
+      grantRes = await fetch(grantUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: authHeader(config.runnerId, config.secret),
+          "idempotency-key": entry.key,
+        },
+        body: JSON.stringify(grantBody),
+      });
+    } catch {
+      // Transport failure: retain outbox for retry.
+      throw new EvidencePublicationError("evidence_publication_failed");
+    }
+
+    let grantJson: unknown;
+    try {
+      grantJson = await grantRes.json();
+    } catch {
+      throw new EvidencePublicationError("evidence_publication_failed");
+    }
+
+    // Non-2xx: retain outbox, expose fixed code only.
+    if (!grantRes.ok) {
+      const code = (grantJson as { code?: string })?.code;
+      if (typeof code === "string" && FIXED_GRANT_CODES.has(code)) {
+        throw new EvidencePublicationError(code);
+      }
+      // Known grant errors mapped to fixed publication failure when not in fixed set.
+      throw new EvidencePublicationError("evidence_publication_failed");
+    }
+
+    const parsedGrant = EvidenceGrantResponseSchema.safeParse(grantJson);
+    if (!parsedGrant.success) {
+      // Ambiguous: retain outbox, fixed code only.
+      throw new EvidencePublicationError("evidence_publication_failed");
+    }
+    grant = parsedGrant.data;
+
+    // Definitive schema-valid grant: remove outbox atomically.
+    try {
+      await removeOutboxAtomically(config.dataDir, entry.key);
+    } catch {
+      throw new EvidencePublicationError("evidence_publication_failed");
+    }
+  } catch (e) {
+    if (e instanceof EvidencePublicationError) throw e;
+    // Failure to create outbox entry is a fixed publication failure.
+    throw new EvidencePublicationError("evidence_publication_failed");
+  }
+
+  if (grant === null) {
+    throw new EvidencePublicationError("evidence_publication_failed");
+  }
+
+  // PUT raw bytes as application/octet-stream
+  const putUrl = `${config.apiBaseUrl}/api/v1/runner/artifacts/uploads/${grant.uploadId}`;
+  let putRes: Response;
+  try {
+    putRes = await fetch(putUrl, {
+      method: "PUT",
+      headers: {
+        authorization: authHeader(config.runnerId, config.secret),
+        "content-type": "application/octet-stream",
+      },
+      body: buffer as unknown as BodyInit,
+    });
+  } catch {
+    throw new EvidencePublicationError("evidence_publication_failed");
+  }
+  if (putRes.status !== 204) {
+    throw new EvidencePublicationError("evidence_publication_failed");
+  }
+
+  // POST complete with strict body, parse success schema.
+  const completeBody = {
+    uploadId: grant.uploadId,
+    sizeBytes: declaredSizeBytes,
+    digest: declaredDigest,
+    completeness,
+  };
+  const completeUrl = `${config.apiBaseUrl}/api/v1/runner/artifacts/uploads/${grant.uploadId}/complete`;
+  let completeRes: Response;
+  try {
+    completeRes = await fetch(completeUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: authHeader(config.runnerId, config.secret),
+      },
+      body: JSON.stringify(completeBody),
+    });
+  } catch {
+    throw new EvidencePublicationError("evidence_publication_failed");
+  }
+  if (!completeRes.ok) {
+    // Do not leak body; fixed code only. Check for known fixed codes but map to generic.
+    // Stale fence during complete is still a fixed publication failure for this path.
+    // Preserve fixed stale_fence for direct grant-style errors if needed, but complete errors are generic.
+    try {
+      const j = (await completeRes.json().catch(() => null)) as { code?: string } | null;
+      const code = j?.code;
+      if (typeof code === "string" && FIXED_GRANT_CODES.has(code)) {
+        throw new EvidencePublicationError(code);
+      }
+    } catch (e) {
+      if (e instanceof EvidencePublicationError) throw e;
+    }
+    throw new EvidencePublicationError("evidence_publication_failed");
+  }
+  let completeJson: unknown;
+  try {
+    completeJson = await completeRes.json();
+  } catch {
+    throw new EvidencePublicationError("evidence_publication_failed");
+  }
+  const parsedComplete = CompleteEvidenceUploadSuccessSchema.safeParse(completeJson);
+  if (!parsedComplete.success) {
+    throw new EvidencePublicationError("evidence_publication_failed");
+  }
+  const disposition = parsedComplete.data.disposition;
+  if (disposition !== "published" && disposition !== "stored_artifact_replayed") {
+    throw new EvidencePublicationError("evidence_publication_failed");
+  }
+}
+
+/**
+ * Publish ProcessResult stdout then stderr after child settles and before completeRun.
+ * Completeness: truncated if stream metadata truncated, else partial on cancellation, else complete. Truncated wins.
+ * Grant uses lease identity, eventSequence 1, durable outbox, PUT raw Buffer, POST strict complete.
+ * Preserve first slot if second fails: stdout is not rolled back when stderr fails.
+ */
+export async function publishEvidenceArtifacts(
+  config: RunnerConfig,
+  lease: LeaseIdentity,
+  result: ProcessResult,
+  options: { isCancelled: boolean },
+): Promise<void> {
+  const isCancelled = options.isCancelled;
+  // Stdout then stderr sequentially. Preserve first slot if second fails.
+  await publishSingleArtifact({
+    config,
+    lease,
+    slot: "stdout",
+    kind: "stdout",
+    buffer: result.stdout,
+    truncated: result.stdoutMeta.truncated,
+    isCancelled,
+  });
+  await publishSingleArtifact({
+    config,
+    lease,
+    slot: "stderr",
+    kind: "stderr",
+    buffer: result.stderr,
+    truncated: result.stderrMeta.truncated,
+    isCancelled,
+  });
+}
