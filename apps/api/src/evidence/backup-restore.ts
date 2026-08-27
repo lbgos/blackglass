@@ -209,8 +209,14 @@ function validateEmptyDestination(
   if (opened === undefined) return { ok: false, code: "invalid" };
   try {
     const listed = bindingOrThrow().readDirNames(opened.fd);
-    if (!listed.ok) return { ok: false, code: "invalid" };
-    if (listed.names.length > 0) return { ok: false, code: "not_empty" };
+    if (!listed.ok) {
+      closeQuietly(opened.fd);
+      return { ok: false, code: "invalid" };
+    }
+    if (listed.names.length > 0) {
+      closeQuietly(opened.fd);
+      return { ok: false, code: "not_empty" };
+    }
     return { ok: true, fd: opened.fd, stats: opened.stats };
   } catch {
     closeQuietly(opened.fd);
@@ -244,16 +250,23 @@ function openExistingChildDirectory(
 }
 
 // Creates a managed child directory relative to a parent descriptor, mode
-// 0700, then revalidates it through a fresh no-follow open.
+// 0700, then revalidates it through a fresh no-follow open. The caller
+// supplies the expected control-plane uid and the fallback filesystem path
+// used only for the mkdir race window; both the existing and the freshly
+// reopened descriptors are fully validated for type, owner, and mode.
 function createManagedChildDirectory(
   parentFd: number,
   name: string,
   fallbackPath: string,
+  uid: number,
 ): { ok: true; fd: number } | { ok: false } {
   const binding = bindingOrThrow();
   const existing = binding.openAt(parentFd, name, DIRECTORY_FLAGS, 0);
   if (existing.ok) {
-    if (directoryChildIsValid(statOf(existing.fd))) return existing;
+    const stats = statOf(existing.fd);
+    if (stats !== undefined && directoryChildIsValid(stats) && stats.uid === uid) {
+      return existing;
+    }
     closeQuietly(existing.fd);
     return { ok: false };
   }
@@ -266,6 +279,11 @@ function createManagedChildDirectory(
   }
   const retried = binding.openAt(parentFd, name, DIRECTORY_FLAGS, 0);
   if (!retried.ok) return { ok: false };
+  const retriedStats = statOf(retried.fd);
+  if (retriedStats === undefined || !directoryChildIsValid(retriedStats) || retriedStats.uid !== uid) {
+    closeQuietly(retried.fd);
+    return { ok: false };
+  }
   return retried;
 }
 
@@ -307,7 +325,21 @@ async function copyVerifying(input: {
     for (;;) {
       const read = await fdRead(input.sourceFd, chunk, 0, chunk.length, written);
       if (read.bytesRead === 0) break;
-      await fdWrite(fd, chunk, 0, read.bytesRead, written);
+      // The async fs.write may perform a short write; loop until the whole
+      // chunk is durable, rejecting zero or negative progress to avoid an
+      // infinite loop and to surface truncation.
+      let chunkOffset = 0;
+      while (chunkOffset < read.bytesRead) {
+        const advance = await fdWrite(
+          fd,
+          chunk,
+          chunkOffset,
+          read.bytesRead - chunkOffset,
+          written + chunkOffset,
+        );
+        if (advance.bytesWritten <= 0) return false;
+        chunkOffset += advance.bytesWritten;
+      }
       hash.update(chunk.subarray(0, read.bytesRead));
       written += read.bytesRead;
     }
@@ -518,6 +550,48 @@ function readArtifactRowsFromSnapshot(databasePath: string): ArtifactRow[] | und
   }
 }
 
+function readSnapshotSchemaVersion(databasePath: string): number | undefined {
+  let sqlite;
+  try {
+    sqlite = openReadOnlySqliteFile(databasePath);
+  } catch {
+    return undefined;
+  }
+  try {
+    const row = sqlite
+      .prepare("select count(*) as count from __drizzle_migrations")
+      .get() as { count: number } | undefined;
+    if (row === undefined || typeof row.count !== "number" || !Number.isSafeInteger(row.count) || row.count < 0) {
+      return undefined;
+    }
+    return row.count;
+  } catch {
+    return undefined;
+  } finally {
+    sqlite.close();
+  }
+}
+
+function snapshotArtifactsMatchManifest(
+  rows: ArtifactRow[],
+  artifacts: readonly BackupArtifactEntry[],
+): boolean {
+  if (rows.length !== artifacts.length) return false;
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index] as ArtifactRow;
+    const entry = artifacts[index] as BackupArtifactEntry;
+    if (
+      row.artifactId !== entry.artifactId ||
+      row.sizeBytes !== entry.sizeBytes ||
+      row.digest !== entry.digest ||
+      row.relativePath !== `published/${row.artifactId}`
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * Runs one `blackglass-backup-v1` snapshot of the live data directory into
  * an empty, control-plane-owned, 0700 destination directory. Holds the
@@ -602,7 +676,6 @@ export async function runBackup(input: RunBackupInput): Promise<BackupOutcome> {
       return { status: "error", code: "backup_source_unavailable" };
     }
     liveRootFd = liveRoot.fd;
-    const rootDev = liveRoot.stats.dev;
     liveEvidenceFd = openExistingChildDirectory(liveRootFd, EVIDENCE_DIRNAME, uid);
     if (liveEvidenceFd === undefined) {
       return { status: "error", code: "backup_source_unavailable" };
@@ -611,28 +684,48 @@ export async function runBackup(input: RunBackupInput): Promise<BackupOutcome> {
     if (livePublishedFd === undefined) {
       return { status: "error", code: "backup_source_unavailable" };
     }
+    // The ADR requires evidence/published share the evidence root device;
+    // SQLite may live on another device. Compare artifact inodes to the
+    // published directory device, not the data-root device.
+    const evidenceDirStats = statOf(liveEvidenceFd);
+    const publishedDirStats = statOf(livePublishedFd);
+    if (
+      evidenceDirStats === undefined ||
+      publishedDirStats === undefined ||
+      evidenceDirStats.dev !== publishedDirStats.dev
+    ) {
+      return { status: "error", code: "backup_source_unavailable" };
+    }
+    const publishedDev = publishedDirStats.dev;
 
     // Destination layout: sqlite/, evidence/, evidence/published/.
-    const destSqlite = createManagedChildDirectory(destFd, SQLITE_DIRNAME, input.destinationDirectory);
+    const destSqlite = createManagedChildDirectory(destFd, SQLITE_DIRNAME, input.destinationDirectory, uid);
     if (!destSqlite.ok) return { status: "error", code: "evidence_io_error" };
     destSqliteFd = destSqlite.fd;
-    const destEvidence = createManagedChildDirectory(destFd, EVIDENCE_DIRNAME, input.destinationDirectory);
+    const destEvidence = createManagedChildDirectory(destFd, EVIDENCE_DIRNAME, input.destinationDirectory, uid);
     if (!destEvidence.ok) return { status: "error", code: "evidence_io_error" };
     destEvidenceFd = destEvidence.fd;
     const destPublished = createManagedChildDirectory(
       destEvidenceFd,
       PUBLISHED_DIRNAME,
       path.join(input.destinationDirectory, EVIDENCE_DIRNAME),
+      uid,
     );
     if (!destPublished.ok) return { status: "error", code: "evidence_io_error" };
     destPublishedFd = destPublished.fd;
 
     // Standalone consistent SQLite copy via the better-sqlite3 backup API.
-    const databasePath = path.join(
+    // The backup API would otherwise replace a raced-in file, so we copy
+    // into a uniquely named staging file inside the already validated
+    // destination sqlite directory and then move it with descriptor-relative
+    // renameNoReplace (no overwrite, no path traversal).
+    const finalDatabasePath = path.join(
       input.destinationDirectory,
       SQLITE_DIRNAME,
       DATABASE_FILENAME,
     );
+    const stagingName = `${DATABASE_FILENAME}.staging-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const stagingPath = path.join(input.destinationDirectory, SQLITE_DIRNAME, stagingName);
     let sourceDatabase;
     try {
       sourceDatabase = openReadOnlyEngagementDatabase(input.dataDirectory);
@@ -640,20 +733,26 @@ export async function runBackup(input: RunBackupInput): Promise<BackupOutcome> {
       return { status: "error", code: "backup_source_unavailable" };
     }
     try {
-      await sourceDatabase.backup(databasePath);
+      await sourceDatabase.backup(stagingPath);
     } catch {
+      try {
+        unlinkSync(stagingPath);
+      } catch {}
       return { status: "error", code: "evidence_io_error" };
     } finally {
       sourceDatabase.close();
     }
     try {
-      chmodSync(databasePath, 0o600);
+      chmodSync(stagingPath, 0o600);
     } catch {
+      try {
+        unlinkSync(stagingPath);
+      } catch {}
       return { status: "error", code: "evidence_io_error" };
     }
     try {
       const sqliteFileFd = openSync(
-        databasePath,
+        stagingPath,
         fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | O_CLOEXEC,
       );
       try {
@@ -661,6 +760,23 @@ export async function runBackup(input: RunBackupInput): Promise<BackupOutcome> {
       } finally {
         closeQuietly(sqliteFileFd);
       }
+      fsyncDirectoryFd(destSqliteFd);
+    } catch {
+      try {
+        unlinkSync(stagingPath);
+      } catch {}
+      return { status: "error", code: "evidence_io_error" };
+    }
+    // Move the durable staging file into its final name without ever
+    // overwriting a raced-in destination.
+    const renamed = binding.renameNoReplace(destSqliteFd, stagingName, destSqliteFd, DATABASE_FILENAME);
+    if (!renamed.ok) {
+      try {
+        unlinkSync(stagingPath);
+      } catch {}
+      return { status: "error", code: "evidence_io_error" };
+    }
+    try {
       fsyncDirectoryFd(destSqliteFd);
     } catch {
       return { status: "error", code: "evidence_io_error" };
@@ -686,8 +802,15 @@ export async function runBackup(input: RunBackupInput): Promise<BackupOutcome> {
       closeQuietly(copiedSqlite.fd);
     }
 
+    // The snapshot's internal schema version must match the running binary;
+    // a divergent live database is never backed up under the running label.
+    const snapshotSchemaVersion = readSnapshotSchemaVersion(finalDatabasePath);
+    if (snapshotSchemaVersion === undefined || snapshotSchemaVersion !== DATABASE_SCHEMA_VERSION) {
+      return { status: "error", code: "evidence_io_error" };
+    }
+
     // Artifact membership comes from the frozen snapshot, never the live DB.
-    const rows = readArtifactRowsFromSnapshot(databasePath);
+    const rows = readArtifactRowsFromSnapshot(finalDatabasePath);
     if (rows === undefined) return { status: "error", code: "evidence_io_error" };
     const entries: BackupArtifactEntry[] = [];
     for (const row of rows) {
@@ -715,7 +838,7 @@ export async function runBackup(input: RunBackupInput): Promise<BackupOutcome> {
       protocol: BACKUP_PROTOCOL,
       state: "started",
       startedAt,
-      schemaVersion: DATABASE_SCHEMA_VERSION,
+      schemaVersion: snapshotSchemaVersion,
       sqliteDigest,
       artifacts: [],
       artifactCount: 0,
@@ -739,7 +862,7 @@ export async function runBackup(input: RunBackupInput): Promise<BackupOutcome> {
           stats.nlink === 1 &&
           stats.uid === uid &&
           (stats.mode & 0o777) === 0o600 &&
-          stats.dev === rootDev &&
+          stats.dev === publishedDev &&
           stats.size === entry.sizeBytes;
       } finally {
         if (!usable) closeQuietly(source.fd);
@@ -768,7 +891,7 @@ export async function runBackup(input: RunBackupInput): Promise<BackupOutcome> {
       state: "complete",
       startedAt,
       completedAt,
-      schemaVersion: DATABASE_SCHEMA_VERSION,
+      schemaVersion: snapshotSchemaVersion,
       sqliteDigest,
       artifacts: entries,
       artifactCount: entries.length,
@@ -801,6 +924,7 @@ export async function runBackup(input: RunBackupInput): Promise<BackupOutcome> {
     if (liveRootFd !== undefined) closeQuietly(liveRootFd);
     if (destPublishedFd !== undefined) closeQuietly(destPublishedFd);
     if (destEvidenceFd !== undefined) closeQuietly(destEvidenceFd);
+    if (destSqliteFd !== undefined) closeQuietly(destSqliteFd);
     closeQuietly(destFd);
   }
 }
@@ -902,6 +1026,20 @@ export async function runRestore(input: RunRestoreInput): Promise<RestoreOutcome
       closeQuietly(backupSqlite.fd);
     }
 
+    // Internal SQLite consistency: the backup's own migration count and
+    // artifact rows must agree with the manifest before any destination
+    // writes. This proves the manifest is not just internally consistent
+    // with the files but also with the database that claims to list them.
+    const backupDatabasePath = path.join(input.backupDirectory, SQLITE_DIRNAME, DATABASE_FILENAME);
+    const internalSchemaVersion = readSnapshotSchemaVersion(backupDatabasePath);
+    if (internalSchemaVersion === undefined || internalSchemaVersion !== manifest.schemaVersion) {
+      return { status: "error", code: "restore_consistency_mismatch" };
+    }
+    const internalRows = readArtifactRowsFromSnapshot(backupDatabasePath);
+    if (internalRows === undefined || !snapshotArtifactsMatchManifest(internalRows, manifest.artifacts)) {
+      return { status: "error", code: "restore_consistency_mismatch" };
+    }
+
     // Exact published membership: every manifest entry exists, no extras.
     const listed = binding.readDirNames(backupPublishedFd);
     if (!listed.ok) return { status: "error", code: "evidence_io_error" };
@@ -945,13 +1083,14 @@ export async function runRestore(input: RunRestoreInput): Promise<RestoreOutcome
       return { status: "error", code: "evidence_io_error" };
     }
 
-    const destEvidence = createManagedChildDirectory(destFd, EVIDENCE_DIRNAME, input.dataDirectory);
+    const destEvidence = createManagedChildDirectory(destFd, EVIDENCE_DIRNAME, input.dataDirectory, uid);
     if (!destEvidence.ok) return { status: "error", code: "evidence_io_error" };
     destEvidenceFd = destEvidence.fd;
     const destPublished = createManagedChildDirectory(
       destEvidenceFd,
       PUBLISHED_DIRNAME,
       path.join(input.dataDirectory, EVIDENCE_DIRNAME),
+      uid,
     );
     if (!destPublished.ok) return { status: "error", code: "evidence_io_error" };
     destPublishedFd = destPublished.fd;
@@ -961,6 +1100,7 @@ export async function runRestore(input: RunRestoreInput): Promise<RestoreOutcome
       destEvidenceFd,
       STAGING_DIRNAME,
       path.join(input.dataDirectory, EVIDENCE_DIRNAME),
+      uid,
     );
     if (!destStaging.ok) return { status: "error", code: "evidence_io_error" };
     try {

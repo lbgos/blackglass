@@ -582,4 +582,113 @@ describe("blackglass-backup-v1 roundtrip", () => {
       // No manifest at all is equally refused by restore.
     }
   });
+
+  it("refuses restore when SQLite artifact rows diverge from manifest with zero writes", async () => {
+    const live = await createLiveTree();
+    const enrolled = await enroll(live.app);
+    const artifactId = await publishArtifact(live, enrolled, "sqlite-row-bytes");
+    const destination = await makeEmptyDestination("backup-sqlite-row-");
+    expect(
+      (
+        await runBackup({
+          dataDirectory: live.directory,
+          destinationDirectory: destination,
+        })
+      ).status,
+    ).toBe("complete");
+
+    // Tamper the frozen snapshot's evidence_artifacts row so the manifest
+    // no longer matches the database that claims to list it. Recompute the
+    // SQLite digest so the outer digest check still passes and the failure
+    // must come from the internal rows-vs-manifest verification, proving
+    // the restore checks internal SQLite consistency before any write.
+    const snapshotPath = path.join(destination, "sqlite/blackglass.sqlite3");
+    const handle = openEngagementDatabase({ dataDirectory: path.join(destination, "sqlite") });
+    try {
+      handle.sqlite
+        .prepare("update evidence_artifacts set digest = ? where artifact_id = ?")
+        .run("sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", artifactId);
+      handle.sqlite.pragma("wal_checkpoint(TRUNCATE)");
+    } finally {
+      handle.close();
+    }
+    // Keep sqliteDigest consistent with the tampered file so the mismatch is
+    // only detectable via the internal artifact rows check.
+    const snapshotBytes = await readFile(snapshotPath);
+    const newDigest = sha256(snapshotBytes);
+    const manifestPath = path.join(destination, BACKUP_MANIFEST_FILENAME);
+    const manifestRaw = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
+    manifestRaw.sqliteDigest = newDigest;
+    await writeFile(manifestPath, `${JSON.stringify(manifestRaw)}\n`);
+
+    const restoreTarget = await makeEmptyDestination("restore-sqlite-row-");
+    const outcome = await runRestore({
+      backupDirectory: destination,
+      dataDirectory: restoreTarget,
+    });
+    expect(outcome).toEqual({ status: "error", code: "restore_consistency_mismatch" });
+    expect(await readdir(restoreTarget)).toEqual([]);
+  });
+
+  it("refuses restore when manifest schemaVersion does not match SQLite migration count with zero writes", async () => {
+    const live = await createLiveTree();
+    const enrolled = await enroll(live.app);
+    await publishArtifact(live, enrolled, "sqlite-schema-bytes");
+    const destination = await makeEmptyDestination("backup-sqlite-schema-");
+    expect(
+      (
+        await runBackup({
+          dataDirectory: live.directory,
+          destinationDirectory: destination,
+        })
+      ).status,
+    ).toBe("complete");
+
+    // Make manifest schemaVersion diverge from the SQLite's own
+    // __drizzle_migrations count. Both directions must be caught before
+    // any destination write.
+    const manifestPath = path.join(destination, BACKUP_MANIFEST_FILENAME);
+    const raw = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
+    const originalVersion = raw.schemaVersion as number;
+    // Choose a different but still <= running version to exercise the
+    // internal consistency check rather than the newer-schema refusal.
+    raw.schemaVersion = originalVersion > 0 ? originalVersion - 1 : originalVersion + 1;
+    await writeFile(manifestPath, `${JSON.stringify(raw)}\n`);
+
+    let restoreTarget = await makeEmptyDestination("restore-manifest-schema-");
+    let outcome = await runRestore({
+      backupDirectory: destination,
+      dataDirectory: restoreTarget,
+    });
+    expect(outcome).toEqual({ status: "error", code: "restore_consistency_mismatch" });
+    expect(await readdir(restoreTarget)).toEqual([]);
+
+    // Restore the manifest, then corrupt the SQLite migration count itself
+    // so the manifest is truthful but the database diverges. Recompute
+    // the digest so the outer digest check still passes and the failure
+    // must come from the internal schemaVersion-vs-migrations check.
+    raw.schemaVersion = originalVersion;
+    await writeFile(manifestPath, `${JSON.stringify(raw)}\n`);
+    const snapshotPath = path.join(destination, "sqlite/blackglass.sqlite3");
+    const handle = openEngagementDatabase({ dataDirectory: path.join(destination, "sqlite") });
+    try {
+      // Delete one migration row to make count differ from manifest.
+      handle.sqlite.prepare("delete from __drizzle_migrations where rowid = 1").run();
+      handle.sqlite.pragma("wal_checkpoint(TRUNCATE)");
+    } finally {
+      handle.close();
+    }
+    const tamperedBytes = await readFile(snapshotPath);
+    const tamperedDigest = sha256(tamperedBytes);
+    const afterTamperRaw = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
+    afterTamperRaw.sqliteDigest = tamperedDigest;
+    await writeFile(manifestPath, `${JSON.stringify(afterTamperRaw)}\n`);
+    restoreTarget = await makeEmptyDestination("restore-sqlite-count-");
+    outcome = await runRestore({
+      backupDirectory: destination,
+      dataDirectory: restoreTarget,
+    });
+    expect(outcome).toEqual({ status: "error", code: "restore_consistency_mismatch" });
+    expect(await readdir(restoreTarget)).toEqual([]);
+  });
 });

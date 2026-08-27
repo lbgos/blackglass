@@ -63,6 +63,9 @@ export class BackupLock implements StorageQuiesceGate {
     // and swap the lockfile between acquisitions.
     private readonly anchorFd: number,
     private readonly lockFilePath: string,
+    private readonly anchorDev: number,
+    private readonly anchorIno: number,
+    private readonly getCurrentUid: () => number | undefined,
   ) {}
 
   static open(
@@ -94,14 +97,22 @@ export class BackupLock implements StorageQuiesceGate {
     }
     try {
       const stats = fstatSync(anchorFd);
-      if (!stats.isFile() || stats.nlink !== 1 || stats.uid !== uid) {
+      if (
+        !stats.isFile() ||
+        stats.nlink !== 1 ||
+        stats.uid !== uid ||
+        (stats.mode & 0o777) !== 0o600
+      ) {
         throw new Error("lockfile identity rejected");
       }
+      return {
+        ok: true,
+        lock: new BackupLock(binding, anchorFd, lockFilePath, stats.dev, stats.ino, getCurrentUid),
+      };
     } catch {
       closeQuietly(anchorFd);
       return { ok: false, code: "evidence_storage_invalid" };
     }
-    return { ok: true, lock: new BackupLock(binding, anchorFd, lockFilePath) };
   }
 
   acquireShared(): BackupLockAttempt {
@@ -120,6 +131,25 @@ export class BackupLock implements StorageQuiesceGate {
       return { ok: false, code: "evidence_io_error" };
     }
     try {
+      // Every pathname reopen must be revalidated against the anchored
+      // identity: same device and inode as the startup lockfile, current
+      // control-plane owner, regular file, single link, mode 0600. This
+      // prevents an unlink+replace from retargeting the flock onto a
+      // replacement that the control plane never anchored.
+      const stats = fstatSync(fd);
+      const currentUid = this.getCurrentUid();
+      if (
+        currentUid === undefined ||
+        !stats.isFile() ||
+        stats.nlink !== 1 ||
+        stats.uid !== currentUid ||
+        (stats.mode & 0o777) !== 0o600 ||
+        stats.dev !== this.anchorDev ||
+        stats.ino !== this.anchorIno
+      ) {
+        closeQuietly(fd);
+        return { ok: false, code: "evidence_io_error" };
+      }
       // Each acquisition owns a fresh open file description, so this flock
       // participates independently in cross-process arbitration.
       const outcome = this.binding.flockNonblock(fd, mode);
@@ -137,9 +167,12 @@ export class BackupLock implements StorageQuiesceGate {
       closeQuietly(fd);
       return { ok: false, code: "evidence_io_error" };
     }
+    let released = false;
     return {
       ok: true,
       release: () => {
+        if (released) return;
+        released = true;
         try {
           this.binding.flockNonblock(fd, "release");
         } finally {
