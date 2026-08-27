@@ -270,7 +270,8 @@ describe("evidence native binding", () => {
     }
   });
 
-  it.runIf(process.platform === "linux")("reports errno instead of consuming the caller's descriptor", async () => {    if (!supported.ok) return;
+  it.runIf(process.platform === "linux")("reports errno instead of consuming the caller's descriptor", async () => {
+    if (!supported.ok) return;
     const directory = await mkdtemp(path.join(tmpdir(), "evidence-native-"));
     directories.push(directory);
     const { open } = await import("node:fs/promises");
