@@ -18,7 +18,8 @@ type UploadErrorCode =
 function sendOutcomeError(reply: FastifyReply, code: UploadErrorCode): FastifyReply {
   switch (code) {
     case "storage_busy":
-      return sendRunnerError(reply, 503, { code: "storage_busy" });
+    case "storage_backup_quiesced":
+      return sendRunnerError(reply, 503, { code });
     case "invalid_persisted_data":
     case "evidence_io_error":
       return sendRunnerError(reply, 500, { code: "invalid_persisted_data" });

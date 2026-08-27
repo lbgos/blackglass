@@ -20,6 +20,7 @@ import type {
 import { registerActionMutationRoutes } from "./action-mutation-routes.js";
 import { registerActionRoutes } from "./action-routes.js";
 import { registerArtifactDownloadRoutes } from "./artifact-download-routes.js";
+import type { StorageQuiesceGate } from "./evidence/backup-lock.js";
 import type { EvidencePublicationService } from "./evidence/evidence-publication.js";
 import type { EvidenceStore } from "./evidence/evidence-store.js";
 import { registerEngagementMutationRoutes } from "./engagement-mutation-routes.js";
@@ -63,6 +64,9 @@ interface BuildAppOptions {
     "createGrant" | "publishedArtifactForEngagement"
   >;
   evidencePublication?: EvidencePublicationService;
+  // Backup quiesce gate for grant admission; publication receives its own
+  // gate instance from the runtime wiring.
+  storageGate?: StorageQuiesceGate;
   // Operator artifact downloads are registered only when a verified managed
   // store is available; without it the route does not exist.
   evidenceStore?: Pick<EvidenceStore, "verifiedDownload">;
@@ -78,6 +82,7 @@ export function buildApp({
   runnerRepository,
   evidenceGrantRepository,
   evidencePublication,
+  storageGate,
   evidenceStore,
   logger = false,
   now,
@@ -154,6 +159,7 @@ export function buildApp({
       registerRunnerEvidenceGrantRoutes(app, {
         commandRepository: operatorCommandRepository,
         evidenceGrantRepository,
+        ...(storageGate === undefined ? {} : { storageGate }),
       });
       if (evidencePublication !== undefined) {
         // Runner artifact uploads stream raw bytes. Without parseAs options
