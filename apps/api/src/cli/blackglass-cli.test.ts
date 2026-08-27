@@ -112,7 +112,7 @@ describe("blackglass doctor CLI", () => {
 
     const unknownCommand = await runCli(["repair"], {});
     expect(unknownCommand.exitCode).toBe(2);
-    expect(unknownCommand.stderr).toContain("usage: blackglass doctor");
+    expect(unknownCommand.stderr).toContain("usage: blackglass");
 
     const missingDataDir = await runCli(["doctor"], {});
     expect(missingDataDir.exitCode).toBe(2);
@@ -121,5 +121,51 @@ describe("blackglass doctor CLI", () => {
     const relativeDataDir = await runCli(["doctor"], { BLACKGLASS_DATA_DIR: "relative/dir" });
     expect(relativeDataDir.exitCode).toBe(2);
     expect(relativeDataDir.stdout).toBe("");
+  });
+});
+
+describe("blackglass backup and restore CLI", () => {
+  it("rejects usage and configuration errors for backup and restore", async () => {
+    const noArg = await runCli(["backup"], {});
+    expect(noArg.exitCode).toBe(2);
+    expect(noArg.stdout).toBe("");
+
+    const relativeDestination = await runCli(["backup", "relative/dest"], {});
+    expect(relativeDestination.exitCode).toBe(2);
+
+    const restoreNoArg = await runCli(["restore"], {});
+    expect(restoreNoArg.exitCode).toBe(2);
+    expect(restoreNoArg.stdout).toBe("");
+
+    const restoreRelative = await runCli(["restore", "relative/backup"], {});
+    expect(restoreRelative.exitCode).toBe(2);
+  });
+
+  it("reports typed backup failures as JSON with exit code 1 and no paths", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "backup-cli-missing-"));
+    directories.push(directory);
+    const destination = await mkdtemp(path.join(tmpdir(), "backup-cli-dest-"));
+    directories.push(destination);
+    // The configured data directory does not exist, so the source is
+    // unavailable; the refusal is typed JSON without any filesystem path.
+    const result = await runCli(["backup", destination], {
+      BLACKGLASS_DATA_DIR: path.join(directory, "missing-data"),
+    });
+    expect(result.exitCode).toBe(1);
+    const parsed = JSON.parse(result.stdout) as { status: string; code: string };
+    expect(parsed).toEqual({ status: "error", code: "backup_source_unavailable" });
+    expect(result.stdout).not.toContain(directory);
+  });
+
+  it("reports typed restore refusals as JSON with exit code 1 and no paths", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "restore-cli-missing-"));
+    directories.push(directory);
+    const result = await runCli(["restore", directory], {
+      BLACKGLASS_DATA_DIR: path.join(directory, "missing-data"),
+    });
+    expect(result.exitCode).toBe(1);
+    const parsed = JSON.parse(result.stdout) as { status: string; code: string };
+    expect(parsed.code).toBe("restore_destination_invalid");
+    expect(result.stdout).not.toContain(directory);
   });
 });

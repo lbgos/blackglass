@@ -199,8 +199,78 @@ describe("evidence native binding", () => {
     }
   });
 
-  it.runIf(process.platform === "linux")("reports errno instead of consuming the caller's descriptor", async () => {
+  it.runIf(process.platform === "linux")("takes nonblocking exclusive and shared locks across descriptions", async () => {
     if (!supported.ok) return;
+    const directory = await mkdtemp(path.join(tmpdir(), "evidence-native-"));
+    directories.push(directory);
+    const lockPath = path.join(directory, "backup.lock");
+    const { open } = await import("node:fs/promises");
+    // Two independent open file descriptions behave like two processes.
+    const first = await open(lockPath, constants.O_RDWR | constants.O_CREAT, 0o600);
+    const second = await open(lockPath, constants.O_RDWR | constants.O_CREAT, 0o600);
+    try {
+      expect(supported.binding.flockNonblock(first.fd, "exclusive")).toMatchObject({ ok: true });
+      // A second exclusive and a shared acquisition both fail without blocking.
+      expect(supported.binding.flockNonblock(second.fd, "exclusive")).toEqual({
+        ok: false,
+        errno: /* EWOULDBLOCK */ 11,
+      });
+      expect(supported.binding.flockNonblock(second.fd, "shared")).toEqual({
+        ok: false,
+        errno: 11,
+      });
+      expect(supported.binding.flockNonblock(first.fd, "release")).toMatchObject({ ok: true });
+
+      // Shared locks coexist across descriptions but exclude a writer.
+      expect(supported.binding.flockNonblock(first.fd, "shared")).toMatchObject({ ok: true });
+      expect(supported.binding.flockNonblock(second.fd, "shared")).toMatchObject({ ok: true });
+      expect(supported.binding.flockNonblock(second.fd, "exclusive")).toEqual({
+        ok: false,
+        errno: 11,
+      });
+      // Once the last other reader releases, the same description may still
+      // not upgrade while the first reader holds shared.
+      supported.binding.flockNonblock(second.fd, "release");
+      expect(supported.binding.flockNonblock(second.fd, "exclusive")).toEqual({
+        ok: false,
+        errno: 11,
+      });
+      supported.binding.flockNonblock(first.fd, "release");
+      expect(supported.binding.flockNonblock(second.fd, "exclusive")).toMatchObject({ ok: true });
+      supported.binding.flockNonblock(second.fd, "release");
+      expect(supported.binding.flockNonblock(first.fd, "exclusive")).toMatchObject({ ok: true });
+      supported.binding.flockNonblock(first.fd, "release");
+    } finally {
+      await first.close();
+      await second.close();
+    }
+  });
+
+  it.runIf(process.platform === "linux")("rejects raw or unknown flock modes without touching the kernel", async () => {
+    if (!supported.ok) return;
+    const directory = await mkdtemp(path.join(tmpdir(), "evidence-native-"));
+    directories.push(directory);
+    const lockPath = path.join(directory, "backup.lock");
+    const { open } = await import("node:fs/promises");
+    const handle = await open(lockPath, constants.O_RDWR | constants.O_CREAT, 0o600);
+    try {
+      // The typed wrapper only forwards the three pinned LOCK values; the
+      // C side throws on anything else instead of passing raw flags on.
+      expect(() =>
+        (supported.binding.flockNonblock as unknown as (fd: number, op: number) => unknown)(
+          handle.fd,
+          4,
+        ),
+      ).toThrow(TypeError);
+      expect(() =>
+        supported.binding.flockNonblock(handle.fd, "nonsense" as never),
+      ).toThrow(TypeError);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.runIf(process.platform === "linux")("reports errno instead of consuming the caller's descriptor", async () => {    if (!supported.ok) return;
     const directory = await mkdtemp(path.join(tmpdir(), "evidence-native-"));
     directories.push(directory);
     const { open } = await import("node:fs/promises");

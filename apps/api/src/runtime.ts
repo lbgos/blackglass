@@ -15,6 +15,7 @@ import {
   bootstrapDevelopmentStorage,
   checkDevelopmentStorage,
 } from "./development-storage.js";
+import { BackupLock } from "./evidence/backup-lock.js";
 import { EvidencePublicationService } from "./evidence/evidence-publication.js";
 import { EvidenceStore } from "./evidence/evidence-store.js";
 
@@ -45,13 +46,21 @@ export async function buildStorageBackedApp(
     // or valid managed evidence roots, the upload routes are not registered.
     let evidencePublication: EvidencePublicationService | undefined;
     let evidenceStore: EvidenceStore | undefined;
+    let backupLock: BackupLock | undefined;
     const native = loadEvidenceNative();
     if (native.ok) {
       const storeResult = EvidenceStore.open(dataDirectory, native.binding);
       if (storeResult.ok) {
+        const lockResult = BackupLock.open(dataDirectory, native.binding);
+        if (!lockResult.ok) {
+          storeResult.store.close();
+          throw new Error("backup lockfile could not be established");
+        }
+        backupLock = lockResult.lock;
         evidencePublication = new EvidencePublicationService({
           repository: evidenceGrantRepository,
           store: storeResult.store,
+          quiesceGate: backupLock,
         });
         evidenceStore = storeResult.store;
       }
@@ -67,13 +76,14 @@ export async function buildStorageBackedApp(
       evidenceGrantRepository,
       ...(evidencePublication === undefined ? {} : { evidencePublication }),
       ...(evidenceStore === undefined ? {} : { evidenceStore }),
+      ...(backupLock === undefined ? {} : { storageGate: backupLock }),
       async getDevelopmentStorageReadiness() {
         await checkDevelopmentStorage(dataDirectory);
         return "ready" as const;
       },
     });
-    if (evidenceStore !== undefined) {
-      registerStoreClose(app, evidenceStore);
+    if (evidenceStore !== undefined && backupLock !== undefined) {
+      registerStoreClose(app, evidenceStore, backupLock);
     }
     registerDatabaseClose(app, database);
     return app;
@@ -95,11 +105,16 @@ function registerDatabaseClose(
   });
 }
 
-function registerStoreClose(app: FastifyInstance, store: EvidenceStore): void {
+function registerStoreClose(
+  app: FastifyInstance,
+  store: EvidenceStore,
+  backupLock: BackupLock,
+): void {
   let closed = false;
   app.addHook("onClose", async () => {
     if (closed) return;
     closed = true;
+    backupLock.close();
     store.close();
   });
 }

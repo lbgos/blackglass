@@ -275,6 +275,7 @@ describe("EvidenceStore", () => {
       openAt: native.binding.openAt,
       renameNoReplace: () => ({ ok: false as const, errno: /* EINVAL */ 22 }),
       readDirNames: native.binding.readDirNames,
+      flockNonblock: native.binding.flockNonblock,
     };
     const result = EvidenceStore.open(directory, failingBinding);
     expect(result).toEqual({ ok: false, code: "evidence_storage_unsupported" });
