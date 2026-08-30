@@ -24,7 +24,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "diagnostics", label: "Diagnostics" },
 ];
 
-export const DEFAULT_SETTINGS_SECTION: SettingsSectionId = "general";
+export const DEFAULT_SETTINGS_SECTION: SettingsSectionId = "appearance";
 
 export interface SettingsIndexEntry {
   id: string;
