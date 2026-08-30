@@ -721,11 +721,26 @@ html[data-reduced-motion="true"] *::after {
 }
 
 :root[data-density="compact"] {
-  --density-row-min: 32px;
+  --density-row-min: 44px;
 }
 
 :root[data-density="regular"] {
-  --density-row-min: 40px;
+  --density-row-min: 56px;
+}
+
+.settings-row {
+  min-height: var(--density-row-min);
+  padding-block: 14px;
+}
+
+[data-density="regular"] .settings-row {
+  padding-block: 18px;
+}
+
+@media (max-width: 767px) {
+  .settings-row {
+    min-height: max(44px, var(--density-row-min));
+  }
 }
 
 .glass-slider {
@@ -736,8 +751,8 @@ html[data-reduced-motion="true"] *::after {
   background: linear-gradient(
     to right,
     var(--primary) 0%,
-    var(--primary) var(--glass-slider-progress, 26%),
-    rgba(255, 255, 255, 0.18) var(--glass-slider-progress, 26%),
+    var(--primary) var(--glass-slider-progress, 60%),
+    rgba(255, 255, 255, 0.18) var(--glass-slider-progress, 60%),
     rgba(255, 255, 255, 0.18) 100%
   );
   outline: none;
@@ -775,8 +790,8 @@ html[data-theme="light"] .glass-slider {
   background: linear-gradient(
     to right,
     var(--primary) 0%,
-    var(--primary) var(--glass-slider-progress, 26%),
-    rgba(26, 30, 22, 0.12) var(--glass-slider-progress, 26%),
+    var(--primary) var(--glass-slider-progress, 60%),
+    rgba(26, 30, 22, 0.12) var(--glass-slider-progress, 60%),
     rgba(26, 30, 22, 0.12) 100%
   );
 }

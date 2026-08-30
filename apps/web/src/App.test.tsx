@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAppQueryClient } from "./query-client.js";
 import { createAppRouter } from "./router.js";
+import { installAppearanceSync } from "./settings/appearance.js";
 
 interface Deferred<Value> {
   promise: Promise<Value>;
@@ -148,6 +149,7 @@ async function openAppearanceSection() {
 }
 
 let media: MediaHarness;
+let appearanceCleanup: (() => void) | null = null;
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -158,6 +160,12 @@ beforeEach(() => {
   delete document.documentElement.dataset.theme;
   delete document.documentElement.dataset.themeFamily;
   delete document.documentElement.dataset.themePreference;
+  delete document.documentElement.dataset.glassOpacity;
+  delete document.documentElement.dataset.density;
+  delete document.documentElement.dataset.reducedMotion;
+  document.documentElement.style.removeProperty("--glass");
+  document.documentElement.style.removeProperty("--popover");
+  document.documentElement.style.removeProperty("--glass-opacity");
   media = createMediaHarness();
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
@@ -174,9 +182,14 @@ beforeEach(() => {
     configurable: true,
     value: vi.fn(),
   });
+  appearanceCleanup = installAppearanceSync(window);
 });
 
 afterEach(() => {
+  try {
+    appearanceCleanup?.();
+  } catch {}
+  appearanceCleanup = null;
   cleanup();
   for (const queryClient of testQueryClients) queryClient.clear();
   testQueryClients.clear();
@@ -1058,9 +1071,9 @@ describe("Appearance local preferences", () => {
     await openAppearanceSection();
 
     act(() => {
-      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "55" }));
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "32" }));
     });
-    expect((screen.getByRole("slider", { name: "Glass opacity" }) as HTMLInputElement).value).toBe("55");
+    expect((screen.getByRole("slider", { name: "Glass opacity" }) as HTMLInputElement).value).toBe("32");
 
     act(() => {
       window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.density", newValue: "regular" }));
@@ -1071,6 +1084,44 @@ describe("Appearance local preferences", () => {
       window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.reducedMotion", newValue: "true" }));
     });
     expect(screen.getByRole("switch", { name: "Reduced motion" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("rejects out-of-range glass values from storage and events and clamps UI", async () => {
+    window.localStorage.setItem("blackglass.glassOpacity", "4");
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+    await renderApp("/settings");
+    await openAppearanceSection();
+    const slider = screen.getByRole("slider", { name: "Glass opacity" }) as HTMLInputElement;
+    expect(slider.value).toBe("26");
+    expect(slider.min).toBe("5");
+    expect(slider.max).toBe("40");
+    expect(screen.getByLabelText("Glass opacity").id).toBe("glass-opacity");
+    expect(document.querySelector('output[for="glass-opacity"]')?.textContent).toContain("26%");
+
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "4" }));
+    });
+    expect(slider.value).toBe("26");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "41" }));
+    });
+    expect(slider.value).toBe("26");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "0" }));
+    });
+    expect(slider.value).toBe("26");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "100" }));
+    });
+    expect(slider.value).toBe("26");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "5" }));
+    });
+    expect(slider.value).toBe("5");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "40" }));
+    });
+    expect(slider.value).toBe("40");
   });
 
   it("keeps glass opacity usable when storage writes fail", async () => {
@@ -1084,6 +1135,41 @@ describe("Appearance local preferences", () => {
     fireEvent.change(slider, { target: { value: "30" } });
     expect(slider.value).toBe("30");
     expect(document.documentElement.dataset.glassOpacity).toBe("30");
+  });
+
+  it("keeps root appearance in sync without Settings mounted and syncs back to controls", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+    await renderApp("/plugins");
+    expect(document.documentElement.dataset.glassOpacity).toBe("26");
+    expect(document.documentElement.dataset.density).toBe("compact");
+
+    window.localStorage.setItem("blackglass.glassOpacity", "32");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "32" }));
+    });
+    expect(document.documentElement.dataset.glassOpacity).toBe("32");
+    window.localStorage.setItem("blackglass.density", "regular");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.density", newValue: "regular" }));
+    });
+    expect(document.documentElement.dataset.density).toBe("regular");
+
+    document.documentElement.dataset.theme = "dark";
+    window.localStorage.setItem("blackglass.glassOpacity", "32");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "32" }));
+    });
+    const beforeGlass = document.documentElement.style.getPropertyValue("--glass");
+    document.documentElement.dataset.theme = "light";
+    await new Promise((r) => setTimeout(r, 0));
+    const afterGlass = document.documentElement.style.getPropertyValue("--glass");
+    expect(afterGlass).not.toBe(beforeGlass);
+    expect(document.documentElement.dataset.glassOpacity).toBe("32");
+
+    fireEvent.click(screen.getByRole("link", { name: "Settings" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Appearance" })).toBeTruthy();
+    expect((screen.getByRole("slider", { name: "Glass opacity" }) as HTMLInputElement).value).toBe("32");
+    expect((screen.getByRole("combobox", { name: "Density" }) as HTMLSelectElement).value).toBe("regular");
   });
 });
 
@@ -1191,9 +1277,13 @@ describe("Application routes", () => {
     // Theme creation has no product behavior yet, so both actions render disabled.
     const createTheme = screen.getByRole("button", { name: "Create theme" }) as HTMLButtonElement;
     const importTheme = screen.getByRole("button", { name: "Import theme" }) as HTMLButtonElement;
-    expect(createTheme.disabled).toBe(false);
+    expect(createTheme.disabled).toBe(true);
     expect(createTheme.getAttribute("aria-disabled")).toBe("true");
+    expect(createTheme.title).toMatch(/Custom themes/);
+    expect(createTheme.className).toContain("opacity-60");
+    expect(importTheme.disabled).toBe(true);
     expect(importTheme.getAttribute("aria-disabled")).toBe("true");
+    expect(importTheme.title).toMatch(/Custom themes/);
 
     // Appearance controls are now real and default to the mock values.
     expect(screen.getByRole("slider", { name: "Glass opacity" })).toBeTruthy();

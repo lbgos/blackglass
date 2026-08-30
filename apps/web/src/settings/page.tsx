@@ -10,7 +10,12 @@ import {
 } from "@blackglass/ui";
 import { useEffect, useState, type ReactNode } from "react";
 
-import { useAppearancePrefs } from "./appearance.js";
+import {
+  GLASS_OPACITY_MAX,
+  GLASS_OPACITY_MIN,
+  glassSliderProgress,
+  useAppearancePrefs,
+} from "./appearance.js";
 import { SETTINGS_SECTIONS, type SettingsSectionId } from "./model.js";
 import { useSettingsView } from "./settings-view.js";
 import { useSystemStatusQuery } from "../system-status-query.js";
@@ -34,7 +39,7 @@ function SetRow({
   return (
     <div
       className={cn(
-        "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-7 border-b border-border py-3.5 last:border-b-0",
+        "settings-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-7 border-b border-border last:border-b-0",
         highlighted && "-mx-2 rounded-lg bg-sidebar-active px-2",
       )}
       id={settingId === undefined ? undefined : `setting-${settingId}`}
@@ -143,6 +148,7 @@ function LockedButton({ label, reason }: { label: string; reason: string }) {
     <button
       type="button"
       aria-disabled="true"
+      disabled
       className="inline-flex min-h-8 items-center justify-center rounded-lg border border-border px-3 text-[13px] text-muted-foreground opacity-60"
       title={reason}
     >
@@ -375,12 +381,13 @@ function AppearanceSection() {
       >
         <span className="flex items-center gap-3">
           <input
+            id="glass-opacity"
             aria-label="Glass opacity"
             className="glass-slider h-1 w-[120px] shrink-0"
-            max={100}
-            min={0}
+            max={GLASS_OPACITY_MAX}
+            min={GLASS_OPACITY_MIN}
             step={1}
-            style={{ ["--glass-slider-progress" as string]: `${glassOpacity}%` }}
+            style={{ ["--glass-slider-progress" as string]: `${glassSliderProgress(glassOpacity)}%` }}
             type="range"
             value={glassOpacity}
             onChange={(event) => setGlassOpacity(Number(event.target.value))}
