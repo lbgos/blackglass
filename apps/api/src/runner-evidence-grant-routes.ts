@@ -10,13 +10,14 @@ import type {
   EvidenceGrantRepository,
   OperatorCommandRepository,
 } from "@blackglass/db";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import {
   dispatchRunnerMutation,
   mapEvidenceGrantRepositoryError,
   sendRunnerError,
 } from "./runner-http.js";
+import type { StorageQuiesceGate } from "./evidence/backup-lock.js";
 
 type CommandRepository = Pick<
   OperatorCommandRepository,
@@ -36,6 +37,10 @@ export function registerRunnerEvidenceGrantRoutes(
   options: {
     commandRepository: CommandRepository;
     evidenceGrantRepository: Pick<EvidenceGrantRepository, "createGrant">;
+    // When present, each grant admission holds a nonblocking shared quiesce
+    // lock around its transaction; a backup snapshot refuses new grants with
+    // an exact 503 and no grant row change.
+    storageGate?: StorageQuiesceGate;
   },
 ): void {
   app.post("/api/v1/runner/artifacts/grants", async (request, reply) => {
@@ -43,6 +48,25 @@ export function registerRunnerEvidenceGrantRoutes(
     if (runnerId === undefined) {
       return sendRunnerError(reply, 401, { code: "runner_unauthorized" });
     }
+    if (options.storageGate !== undefined) {
+      const gate = options.storageGate.acquireShared();
+      if (!gate.ok) {
+        return sendRunnerError(reply, 503, { code: "storage_backup_quiesced" });
+      }
+      try {
+        return await dispatchAdmission(request, reply, runnerId);
+      } finally {
+        gate.release();
+      }
+    }
+    return dispatchAdmission(request, reply, runnerId);
+  });
+
+  function dispatchAdmission(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    runnerId: string,
+  ) {
     return dispatchRunnerMutation(request, reply, options.commandRepository, {
       actorId: runnerId,
       route: "/api/v1/runner/artifacts/grants",
@@ -71,5 +95,5 @@ export function registerRunnerEvidenceGrantRoutes(
         return { status: 201, body: jsonBody(validated.data) };
       },
     });
-  });
+  }
 }

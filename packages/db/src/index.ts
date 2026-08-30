@@ -7,8 +7,10 @@ export {
 } from "./operator-command.js";
 export {
   DATABASE_FILENAME,
+  DATABASE_SCHEMA_VERSION,
   openEngagementDatabase,
   openReadOnlyEngagementDatabase,
+  openReadOnlySqliteFile,
   type EngagementDatabase,
   type OpenDatabaseOptions,
 } from "./database.js";

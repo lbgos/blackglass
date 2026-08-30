@@ -255,6 +255,9 @@ export const RunnerMutationErrorSchema = z.union([
   RunnerRevisionConflictSchema,
   z.strictObject({ code: z.literal("invalid_persisted_data") }),
   z.strictObject({ code: z.literal("storage_busy") }),
+  // A backup snapshot holds the exclusive quiesce lock: publication is
+  // paused, nothing about the grant or lease changed.
+  z.strictObject({ code: z.literal("storage_backup_quiesced") }),
 ]);
 
 export type RunnerName = z.infer<typeof RunnerNameSchema>;

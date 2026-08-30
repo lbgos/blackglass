@@ -331,10 +331,15 @@ export const EvidencePathErrorCodeSchema = z.enum([
   "evidence_roots_cross_device",
 ]);
 
+// The backup quiesce gate pauses new publication without changing any grant,
+// lease, or quota state.
+export const StorageGateErrorCodeSchema = z.enum(["storage_backup_quiesced"]);
+
 export const CompleteEvidenceUploadErrorCodeSchema = z.enum([
   ...EvidencePublicationErrorCodeSchema.options,
   ...EvidenceQuotaErrorCodeSchema.options,
   ...EvidencePathErrorCodeSchema.options,
+  ...StorageGateErrorCodeSchema.options,
 ]);
 
 export const CompleteEvidenceUploadErrorSchema = z.strictObject({
@@ -399,3 +404,65 @@ const OPERATOR_ARTIFACT_CONTENT_ROUTE_PATTERN =
 export function isOperatorArtifactContentRoute(url: string): boolean {
   return OPERATOR_ARTIFACT_CONTENT_ROUTE_PATTERN.test(url.split("?")[0] ?? url);
 }
+
+// ADR-0003 `blackglass-backup-v1`: the deterministic manifest written into a
+// backup directory. Restore consumes it with strict parsing; every field is
+// verified against the copied bytes before a restore writes anything.
+export const BACKUP_PROTOCOL = "blackglass-backup-v1" as const;
+export const BACKUP_MANIFEST_FILENAME = "backup-manifest" as const;
+export const BACKUP_INCOMPLETE_MARKER_FILENAME = "INCOMPLETE" as const;
+
+export const BackupStateSchema = z.enum(["started", "complete"]);
+
+export const BackupArtifactEntrySchema = z.strictObject({
+  artifactId: OpaqueArtifactIdSchema,
+  sizeBytes: z.number().int().safe().nonnegative().max(EVIDENCE_DECLARED_SIZE_MAX),
+  digest: EvidenceDigestSchema,
+});
+
+const BackupTimestampSchema = z.iso.datetime();
+
+export const BackupManifestSchema = z
+  .strictObject({
+    protocol: z.literal(BACKUP_PROTOCOL),
+    state: BackupStateSchema,
+    startedAt: BackupTimestampSchema,
+    // Present only once the snapshot is durable and verified.
+    completedAt: BackupTimestampSchema.optional(),
+    schemaVersion: z.number().int().safe().nonnegative(),
+    sqliteDigest: EvidenceDigestSchema,
+    artifacts: z.array(BackupArtifactEntrySchema),
+    artifactCount: z.number().int().safe().nonnegative(),
+  })
+  .superRefine((manifest, context) => {
+    if (manifest.state === "complete" && manifest.completedAt === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "a complete backup manifest requires completedAt",
+        path: ["completedAt"],
+      });
+    }
+    if (manifest.artifacts.length !== manifest.artifactCount) {
+      context.addIssue({
+        code: "custom",
+        message: "artifactCount must equal the number of artifact entries",
+        path: ["artifactCount"],
+      });
+    }
+    for (let index = 1; index < manifest.artifacts.length; index += 1) {
+      const previous = manifest.artifacts[index - 1]?.artifactId ?? "";
+      const current = manifest.artifacts[index]?.artifactId ?? "";
+      if (previous >= current) {
+        context.addIssue({
+          code: "custom",
+          message: "artifact entries must be sorted and unique by artifactId",
+          path: ["artifacts"],
+        });
+        break;
+      }
+    }
+  });
+
+export type BackupState = z.infer<typeof BackupStateSchema>;
+export type BackupArtifactEntry = z.infer<typeof BackupArtifactEntrySchema>;
+export type BackupManifest = z.infer<typeof BackupManifestSchema>;

@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <unistd.h>
 
 #define MAX_SEGMENT_BYTES 256
@@ -216,6 +217,36 @@ static napi_value rename_no_replace(napi_env env, napi_callback_info info) {
   return make_errno_result(env, true, 0);
 }
 
+// The single advisory-flock operation exposed to TypeScript. Acquire
+// operations must be LOCK_SH or LOCK_EX and always run nonblocking, so a
+// held lock surfaces as EWOULDBLOCK errno data instead of blocking the agent
+// loop; LOCK_UN releases whatever this open file description holds.
+static napi_value flock_nonblock(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 2) {
+    return throw_argument_error(env, "flockNonblock requires (fd, operation)");
+  }
+
+  int32_t fd = 0;
+  int32_t operation = 0;
+  if (napi_get_value_int32(env, argv[0], &fd) != napi_ok ||
+      napi_get_value_int32(env, argv[1], &operation) != napi_ok) {
+    return throw_argument_error(env, "flockNonblock arguments must be (int fd, int operation)");
+  }
+  if (operation != LOCK_SH && operation != LOCK_EX && operation != LOCK_UN) {
+    return throw_argument_error(
+      env,
+      "flockNonblock operation must be LOCK_SH, LOCK_EX, or LOCK_UN");
+  }
+
+  const int flags = operation == LOCK_UN ? operation : operation | LOCK_NB;
+  if (flock((int)fd, flags) != 0) {
+    return make_errno_result(env, false, errno);
+  }
+  return make_errno_result(env, true, 0);
+}
+
 static napi_value create_function(napi_env env, const char* name, napi_callback callback) {
   napi_value function;
   if (napi_create_function(env, name, NAPI_AUTO_LENGTH, callback, NULL, &function) != napi_ok) {
@@ -228,10 +259,15 @@ NAPI_MODULE_INIT() {
   napi_value open_at_function = create_function(env, "openAt", open_at);
   napi_value rename_function = create_function(env, "renameNoReplace", rename_no_replace);
   napi_value read_dir_function = create_function(env, "readDirNames", read_dir_names);
-  if (open_at_function == NULL || rename_function == NULL || read_dir_function == NULL) return NULL;
+  napi_value flock_function = create_function(env, "flockNonblock", flock_nonblock);
+  if (open_at_function == NULL || rename_function == NULL || read_dir_function == NULL ||
+      flock_function == NULL) {
+    return NULL;
+  }
   if (napi_set_named_property(env, exports, "openAt", open_at_function) != napi_ok ||
       napi_set_named_property(env, exports, "renameNoReplace", rename_function) != napi_ok ||
-      napi_set_named_property(env, exports, "readDirNames", read_dir_function) != napi_ok) {
+      napi_set_named_property(env, exports, "readDirNames", read_dir_function) != napi_ok ||
+      napi_set_named_property(env, exports, "flockNonblock", flock_function) != napi_ok) {
     return NULL;
   }
   return exports;

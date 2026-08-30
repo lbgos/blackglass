@@ -9,16 +9,23 @@ import type {
 import type { EvidenceGrantRepository } from "@blackglass/db";
 
 import type { EvidenceStore, EvidenceStorageErrorCode } from "./evidence-store.js";
+import type { StorageQuiesceGate } from "./backup-lock.js";
 
 // Publication orchestrator for ADR-0003 slice 3. The store owns the
 // descriptor boundary; this service owns grant-state transitions and the
 // strict publication order: stream, fsync file, fsync staging dir, durable
 // putFinalized, no-replace rename, fsync published dir, metadata-after-file.
+// When a quiesce gate is present, complete takes a nonblocking shared lock so
+// an exclusive backup snapshot pauses finalization with
+// storage_backup_quiesced instead of interleaving with the snapshot.
 
 export interface EvidencePublicationServiceOptions {
   repository: EvidenceGrantRepository;
   store: EvidenceStore;
   now?: () => Date;
+  // Optional so existing deployments and focused tests without a lockfile
+  // keep working; production wiring always provides one.
+  quiesceGate?: StorageQuiesceGate;
 }
 
 export type PutOutcome =
@@ -79,11 +86,13 @@ export class EvidencePublicationService {
   private readonly repository: EvidenceGrantRepository;
   private readonly store: EvidenceStore;
   private readonly now: () => Date;
+  private readonly quiesceGate: StorageQuiesceGate | undefined;
 
   constructor(options: EvidencePublicationServiceOptions) {
     this.repository = options.repository;
     this.store = options.store;
     this.now = options.now ?? (() => new Date());
+    this.quiesceGate = options.quiesceGate;
   }
 
   // Streams the PUT body into the exclusive staging descriptor bounded by the
@@ -180,7 +189,29 @@ export class EvidencePublicationService {
     return { ok: true, acceptedBytes, digest };
   }
 
+  // Quiesce entry point: a nonblocking shared lock is held from before the
+  // grant is inspected until after rename and metadata commit finish, so an
+  // in-flight completion can never interleave with a backup snapshot.
   async handleComplete(
+    uploadId: string,
+    runnerId: string,
+    request: CompleteEvidenceUploadRequest,
+  ): Promise<CompleteOutcome> {
+    if (this.quiesceGate === undefined) {
+      return this.completeUnderSharedLock(uploadId, runnerId, request);
+    }
+    const gate = this.quiesceGate.acquireShared();
+    if (!gate.ok) {
+      return { ok: false, kind: "error", code: "storage_backup_quiesced" };
+    }
+    try {
+      return await this.completeUnderSharedLock(uploadId, runnerId, request);
+    } finally {
+      gate.release();
+    }
+  }
+
+  private async completeUnderSharedLock(
     uploadId: string,
     runnerId: string,
     request: CompleteEvidenceUploadRequest,
