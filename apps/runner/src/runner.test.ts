@@ -857,7 +857,9 @@ describe("runner loop shutdown", () => {
       if (u.includes("/uploads/") && method === "PUT") return new Response(null, { status: 204 });
       if (u.includes("/uploads/") && u.includes("/complete") && method === "POST") {
         const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-        return new Response(JSON.stringify({ disposition: "published", artifactId: "00000000-0000-4000-8000-000000000001", sizeBytes: body.sizeBytes, digest: body.digest, completeness: body.completeness }), { status: 200, headers: { "content-type": "application/json" } });
+        const uploadId = u.split("/uploads/")[1]?.split("/")[0] ?? "";
+        const artifactId = uploadId === "00000000-0000-4000-8000-000000000012" ? "00000000-0000-4000-8000-000000000002" : "00000000-0000-4000-8000-000000000001";
+        return new Response(JSON.stringify({ disposition: "published", artifactId, sizeBytes: body.sizeBytes, digest: body.digest, completeness: body.completeness }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (u.includes("/complete") && !u.includes("/artifacts")) {
         if (fetchShouldThrow) throw new Error("network failure");
