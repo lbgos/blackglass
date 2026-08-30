@@ -128,6 +128,7 @@ describe("evidence publishing grant flow", () => {
     const emptyDigest = sha256(empty);
     expect(emptyDigest).toBe("sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
     const bodies: unknown[] = [];
+    const grantMapEmpty = new Map<string, string>();
     globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
       const method = init?.method ?? "GET";
@@ -137,12 +138,17 @@ describe("evidence publishing grant flow", () => {
         bodies.push(body);
         const b = body as Record<string, unknown>;
         const slot = b.artifactSlot as string;
-        return new Response(JSON.stringify({ artifactId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`, uploadId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: 0, declaredDigest: emptyDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
+        const artifactId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`;
+        const uploadId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`;
+        grantMapEmpty.set(uploadId, artifactId);
+        return new Response(JSON.stringify({ artifactId, uploadId, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: 0, declaredDigest: emptyDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
       }
       if (u.includes("/uploads/") && method === "PUT") return new Response(null, { status: 204 });
       if (u.includes("/complete")) {
         const b = body as Record<string, unknown>;
-        return new Response(JSON.stringify({ disposition: "published", artifactId: "00000000-0000-4000-8000-000000000001", sizeBytes: 0, digest: emptyDigest, completeness: b.completeness }), { status: 200 });
+        const uploadId = u.split("/uploads/")[1]?.split("/")[0] ?? "";
+        const artifactId = grantMapEmpty.get(uploadId) ?? "00000000-0000-4000-8000-000000000001";
+        return new Response(JSON.stringify({ disposition: "published", artifactId, sizeBytes: 0, digest: emptyDigest, completeness: b.completeness }), { status: 200 });
       }
       return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
     }) as unknown as typeof fetch;
@@ -167,6 +173,7 @@ describe("evidence publishing grant flow", () => {
       truncated: true,
     } as unknown as import("./process.js").ProcessResult;
     const completes: Record<string, unknown>[] = [];
+    const grantMapTrunc = new Map<string, string>();
     globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
       const method = init?.method ?? "GET";
@@ -175,13 +182,18 @@ describe("evidence publishing grant flow", () => {
       if (u.includes("/artifacts/grants")) {
         const b = body as Record<string, unknown>;
         const slot = b.artifactSlot as string;
-        return new Response(JSON.stringify({ artifactId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`, uploadId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: (b.declaredSizeBytes as number), declaredDigest: b.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
+        const artifactId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`;
+        const uploadId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`;
+        grantMapTrunc.set(uploadId, artifactId);
+        return new Response(JSON.stringify({ artifactId, uploadId, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: (b.declaredSizeBytes as number), declaredDigest: b.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
       }
       if (u.includes("/uploads/") && method === "PUT") return new Response(null, { status: 204 });
       if (u.includes("/complete")) {
         completes.push(body as Record<string, unknown>);
         const b = body as Record<string, unknown>;
-        return new Response(JSON.stringify({ disposition: "published", artifactId: "00000000-0000-4000-8000-000000000001", sizeBytes: b.sizeBytes, digest: b.digest, completeness: b.completeness }), { status: 200 });
+        const uploadId = u.split("/uploads/")[1]?.split("/")[0] ?? "";
+        const artifactId = grantMapTrunc.get(uploadId) ?? "00000000-0000-4000-8000-000000000001";
+        return new Response(JSON.stringify({ disposition: "published", artifactId, sizeBytes: b.sizeBytes, digest: b.digest, completeness: b.completeness }), { status: 200 });
       }
       return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
     }) as unknown as typeof fetch;
@@ -220,6 +232,7 @@ describe("evidence publishing grant flow", () => {
 
     let grantAttempts = 0;
     const seenKeys: string[] = [];
+    const grantMapRetry1 = new Map<string, string>();
     globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
       const headers = (init?.headers as Record<string, string>) ?? {};
@@ -230,12 +243,17 @@ describe("evidence publishing grant flow", () => {
         if (grantAttempts === 1) throw new Error("network failure");
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
         const slot = body.artifactSlot as string;
-        return new Response(JSON.stringify({ artifactId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`, uploadId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: (body.declaredSizeBytes as number), declaredDigest: body.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
+        const artifactId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`;
+        const uploadId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`;
+        grantMapRetry1.set(uploadId, artifactId);
+        return new Response(JSON.stringify({ artifactId, uploadId, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: (body.declaredSizeBytes as number), declaredDigest: body.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
       }
       if (u.includes("/uploads/") && (init?.method === "PUT")) return new Response(null, { status: 204 });
       if (u.includes("/complete")) {
         const b = JSON.parse(String(init?.body));
-        return new Response(JSON.stringify({ disposition: "published", artifactId: "00000000-0000-4000-8000-000000000001", sizeBytes: b.sizeBytes, digest: b.digest, completeness: b.completeness }), { status: 200 });
+        const uploadId = u.split("/uploads/")[1]?.split("/")[0] ?? "";
+        const artifactId = grantMapRetry1.get(uploadId) ?? "00000000-0000-4000-8000-000000000001";
+        return new Response(JSON.stringify({ disposition: "published", artifactId, sizeBytes: b.sizeBytes, digest: b.digest, completeness: b.completeness }), { status: 200 });
       }
       return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
     }) as unknown as typeof fetch;
@@ -252,6 +270,7 @@ describe("evidence publishing grant flow", () => {
     grantAttempts = 0; // reset counter but fetch will now succeed on first try; we need to check reuse: second run should reuse same key as before
     // For this we need to keep outbox: next publish will call getOrCreateOutboxEntry which should return same key
     // Mock fetch to succeed now
+    const grantMapRetry2 = new Map<string, string>();
     globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
       const headers = (init?.headers as Record<string, string>) ?? {};
@@ -260,12 +279,17 @@ describe("evidence publishing grant flow", () => {
         seenKeys.push(key);
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
         const slot = body.artifactSlot as string;
-        return new Response(JSON.stringify({ artifactId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`, uploadId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: (body.declaredSizeBytes as number), declaredDigest: body.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
+        const artifactId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`;
+        const uploadId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`;
+        grantMapRetry2.set(uploadId, artifactId);
+        return new Response(JSON.stringify({ artifactId, uploadId, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: (body.declaredSizeBytes as number), declaredDigest: body.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
       }
       if (u.includes("/uploads/") && (init?.method === "PUT")) return new Response(null, { status: 204 });
       if (u.includes("/complete")) {
         const b = JSON.parse(String(init?.body));
-        return new Response(JSON.stringify({ disposition: "published", artifactId: "00000000-0000-4000-8000-000000000001", sizeBytes: b.sizeBytes, digest: b.digest, completeness: b.completeness }), { status: 200 });
+        const uploadId = u.split("/uploads/")[1]?.split("/")[0] ?? "";
+        const artifactId = grantMapRetry2.get(uploadId) ?? "00000000-0000-4000-8000-000000000001";
+        return new Response(JSON.stringify({ disposition: "published", artifactId, sizeBytes: b.sizeBytes, digest: b.digest, completeness: b.completeness }), { status: 200 });
       }
       return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
     }) as unknown as typeof fetch;
@@ -371,5 +395,124 @@ describe("evidence publishing grant flow", () => {
     // Outbox retained on stale_fence? Since we retain on non-grant, outbox file should remain
     const outboxFiles = await readdir(path.join(dataDir, "outbox")).catch(() => []);
     expect(outboxFiles.length).toBe(1);
+  });
+
+  it("schema-valid mismatched grant retains outbox and performs no PUT", async () => {
+    const lease = { runId: "run-1", leaseId: "lease-1", sessionId: "sess-1", fence: "1" };
+    const config = { dataDir, runnerId: "runner-1", secret: "a".repeat(43), apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dataDir, "runs"), sessionId: "sess-1", installationFingerprint: "sha256:" + "a".repeat(64), heartbeatIntervalMs: 10000, leaseDurationMs: 30000, executable: process.execPath } as const;
+    const stdout = Buffer.from("hello stdout binding", "utf8");
+    const stderr = Buffer.from("hello stderr", "utf8");
+    const result = {
+      exitCode: 0, signal: null, stdout, stderr,
+      stdoutMeta: { inputBytesSeen: stdout.length, redactedBytesProduced: stdout.length, bytesRetained: stdout.length, bytesDropped: 0, firstDroppedRedactedOffset: null, truncated: false },
+      stderrMeta: { inputBytesSeen: stderr.length, redactedBytesProduced: stderr.length, bytesRetained: stderr.length, bytesDropped: 0, firstDroppedRedactedOffset: null, truncated: false },
+      truncated: false,
+    } as unknown as import("./process.js").ProcessResult;
+
+    const requests: string[] = [];
+    const mismatchedDigest = `sha256:${"b".repeat(64)}`;
+    globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const u = typeof url === "string" ? url : url.toString();
+      requests.push(`${init?.method ?? "GET"} ${u}`);
+      if (u.includes("/artifacts/grants")) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        const slot = body.artifactSlot as string;
+        // Return schema-valid grant but with declaredDigest mismatched
+        return new Response(JSON.stringify({
+          artifactId: "00000000-0000-4000-8000-000000000001",
+          uploadId: "00000000-0000-4000-8000-000000000011",
+          runId: body.runId,
+          leaseId: body.leaseId,
+          sessionId: body.sessionId,
+          fence: body.fence,
+          eventSequence: body.eventSequence,
+          artifactSlot: body.artifactSlot,
+          kind: body.kind,
+          declaredSizeBytes: body.declaredSizeBytes,
+          declaredDigest: slot === "stdout" ? mismatchedDigest : body.declaredDigest,
+          originalFileName: body.originalFileName,
+          declaredContentType: body.declaredContentType,
+          createdAt: new Date().toISOString(),
+        }), { status: 201, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ code: "invalid_request" }), { status: 500 });
+    }) as unknown as typeof fetch;
+
+    let err: unknown = null;
+    try {
+      await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(EvidencePublicationError);
+    expect((err as EvidencePublicationError).code).toBe("evidence_publication_failed");
+    expect(String((err as Error).message)).toBe("evidence_publication_failed");
+    // Must not leak declared values
+    expect(String((err as Error).message)).not.toContain(mismatchedDigest);
+    expect(String((err as Error).message)).not.toContain(stdout.toString());
+    // Outbox retained (ambiguous/untrusted), no PUT performed
+    const outboxFiles = await readdir(path.join(dataDir, "outbox")).catch(() => []);
+    expect(outboxFiles.length).toBe(1);
+    expect(requests.some((r) => r.startsWith("PUT"))).toBe(false);
+    expect(requests.length).toBe(1);
+    expect(requests[0]).toContain("/artifacts/grants");
+  });
+
+  it("schema-valid mismatched completion is rejected", async () => {
+    const lease = { runId: "run-1", leaseId: "lease-1", sessionId: "sess-1", fence: "1" };
+    const config = { dataDir, runnerId: "runner-1", secret: "a".repeat(43), apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dataDir, "runs"), sessionId: "sess-1", installationFingerprint: "sha256:" + "a".repeat(64), heartbeatIntervalMs: 10000, leaseDurationMs: 30000, executable: process.execPath } as const;
+    const stdout = Buffer.from("complete binding test", "utf8");
+    const stderr = Buffer.from("stderr2", "utf8");
+    const result = {
+      exitCode: 0, signal: null, stdout, stderr,
+      stdoutMeta: { inputBytesSeen: stdout.length, redactedBytesProduced: stdout.length, bytesRetained: stdout.length, bytesDropped: 0, firstDroppedRedactedOffset: null, truncated: false },
+      stderrMeta: { inputBytesSeen: stderr.length, redactedBytesProduced: stderr.length, bytesRetained: stderr.length, bytesDropped: 0, firstDroppedRedactedOffset: null, truncated: false },
+      truncated: false,
+    } as unknown as import("./process.js").ProcessResult;
+
+    let grantedArtifactId = "";
+    globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const u = typeof url === "string" ? url : url.toString();
+      const method = init?.method ?? "GET";
+      if (u.includes("/artifacts/grants")) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        const slot = body.artifactSlot as string;
+        const artifactId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`;
+        const uploadId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`;
+        if (slot === "stdout") grantedArtifactId = artifactId;
+        return new Response(JSON.stringify({
+          artifactId, uploadId,
+          runId: body.runId, leaseId: body.leaseId, sessionId: body.sessionId, fence: body.fence,
+          eventSequence: body.eventSequence, artifactSlot: body.artifactSlot, kind: body.kind,
+          declaredSizeBytes: body.declaredSizeBytes, declaredDigest: body.declaredDigest,
+          originalFileName: body.originalFileName, declaredContentType: body.declaredContentType,
+          createdAt: new Date().toISOString(),
+        }), { status: 201 });
+      }
+      if (u.includes("/uploads/") && method === "PUT") {
+        return new Response(null, { status: 204 });
+      }
+      if (u.includes("/complete") && method === "POST") {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        // Schema-valid but mismatched: artifactId different from grant, sizeBytes/digest/completeness echo request except artifactId mismatch
+        const mismatchedArtifactId = "00000000-0000-4000-8000-000000000099";
+        return new Response(JSON.stringify({
+          disposition: "published",
+          artifactId: mismatchedArtifactId,
+          sizeBytes: body.sizeBytes,
+          digest: body.digest,
+          completeness: body.completeness,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
+    }) as unknown as typeof fetch;
+
+    let err: unknown = null;
+    try {
+      await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(EvidencePublicationError);
+    expect((err as EvidencePublicationError).code).toBe("evidence_publication_failed");
+    expect(String((err as Error).message)).toBe("evidence_publication_failed");
+    expect(String((err as Error).message)).not.toContain(grantedArtifactId);
+    expect(String((err as Error).message)).not.toContain(stdout.toString());
   });
 });

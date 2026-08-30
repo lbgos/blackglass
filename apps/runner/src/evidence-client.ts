@@ -142,6 +142,28 @@ async function publishSingleArtifact(input: {
     }
     grant = parsedGrant.data;
 
+    // Response binding: every field reflecting the request must exactly match.
+    // Schema-valid mismatch is ambiguous/untrusted: retain outbox, fixed error, no leak.
+    {
+      const g = grant;
+      const b = grantBody;
+      const mismatch =
+        g.runId !== b.runId ||
+        g.leaseId !== b.leaseId ||
+        g.sessionId !== b.sessionId ||
+        g.fence !== b.fence ||
+        g.eventSequence !== b.eventSequence ||
+        g.artifactSlot !== b.artifactSlot ||
+        g.kind !== b.kind ||
+        g.declaredSizeBytes !== b.declaredSizeBytes ||
+        g.declaredDigest !== b.declaredDigest ||
+        g.originalFileName !== b.originalFileName ||
+        g.declaredContentType !== b.declaredContentType;
+      if (mismatch) {
+        throw new EvidencePublicationError("evidence_publication_failed");
+      }
+    }
+
     // Definitive schema-valid grant: remove outbox atomically.
     try {
       await removeOutboxAtomically(config.dataDir, entry.key);
@@ -226,6 +248,21 @@ async function publishSingleArtifact(input: {
   const disposition = parsedComplete.data.disposition;
   if (disposition !== "published" && disposition !== "stored_artifact_replayed") {
     throw new EvidencePublicationError("evidence_publication_failed");
+  }
+  // Completion binding: artifactId must equal accepted grant artifactId and
+  // sizeBytes/digest/completeness must exactly equal the complete request.
+  // Mismatch is ambiguous/untrusted: fixed error without leaking values.
+  {
+    const c = parsedComplete.data;
+    const b = completeBody;
+    const mismatch =
+      c.artifactId !== grant.artifactId ||
+      c.sizeBytes !== b.sizeBytes ||
+      c.digest !== b.digest ||
+      c.completeness !== b.completeness;
+    if (mismatch) {
+      throw new EvidencePublicationError("evidence_publication_failed");
+    }
   }
 }
 
