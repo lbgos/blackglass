@@ -3,8 +3,6 @@ import { useCallback, useEffect, useState } from "react";
 export const GLASS_OPACITY_STORAGE_KEY = "blackglass.glassOpacity";
 export const DENSITY_STORAGE_KEY = "blackglass.density";
 export const REDUCED_MOTION_STORAGE_KEY = "blackglass.reducedMotion";
-const THEME_STORAGE_KEY = "blackglass.theme";
-const THEME_FAMILY_STORAGE_KEY = "blackglass.themeFamily";
 
 export const GLASS_OPACITY_MIN = 5;
 export const GLASS_OPACITY_MAX = 40;
@@ -244,100 +242,68 @@ export function glassSliderProgress(opacity: number): number {
   return ((clamped - GLASS_OPACITY_MIN) / (GLASS_OPACITY_MAX - GLASS_OPACITY_MIN)) * 100;
 }
 
-export function installAppearanceSync(
-  browserWindow: Window = window,
-): () => void {
+export function installAppearanceSync(browserWindow: Window = window): () => void {
   const root = browserWindow.document.documentElement as unknown as AppearanceRoot;
-  let cleanup: (() => void) | null = null;
-  try {
-    try {
+
+  applyAppearance(root, {
+    glassOpacity: readGlassOpacity(browserWindow.localStorage),
+    density: readDensity(browserWindow.localStorage),
+    reducedMotion: readReducedMotion(browserWindow.localStorage),
+  });
+
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === null) {
       applyAppearance(root, {
         glassOpacity: readGlassOpacity(browserWindow.localStorage),
         density: readDensity(browserWindow.localStorage),
         reducedMotion: readReducedMotion(browserWindow.localStorage),
       });
-    } catch {}
-    const onStorage = (event: StorageEvent) => {
-      try {
-        if (event.key === null) {
-          try {
-            applyGlassOpacity(root, readGlassOpacity(browserWindow.localStorage));
-          } catch {}
-          try {
-            applyDensity(root, readDensity(browserWindow.localStorage));
-          } catch {}
-          try {
-            applyReducedMotion(root, readReducedMotion(browserWindow.localStorage));
-          } catch {}
-          try {
-            applyGlassOpacity(root, readGlassOpacity(browserWindow.localStorage));
-          } catch {}
-          return;
-        }
-        if (event.key === GLASS_OPACITY_STORAGE_KEY) {
-          if (event.newValue === null) {
-            applyGlassOpacity(root, DEFAULT_GLASS_OPACITY);
-          } else {
-            const parsed = parseGlassOpacity(event.newValue);
-            if (parsed !== null) applyGlassOpacity(root, parsed);
-          }
-        }
-        if (event.key === DENSITY_STORAGE_KEY) {
-          if (event.newValue === null) {
-            applyDensity(root, DEFAULT_DENSITY);
-          } else {
-            const parsed = parseDensity(event.newValue);
-            if (parsed !== null) applyDensity(root, parsed);
-          }
-        }
-        if (event.key === REDUCED_MOTION_STORAGE_KEY) {
-          if (event.newValue === null) {
-            applyReducedMotion(root, DEFAULT_REDUCED_MOTION);
-          } else {
-            const parsed = parseReducedMotion(event.newValue);
-            if (parsed !== null) applyReducedMotion(root, parsed);
-          }
-        }
-        if (event.key === THEME_STORAGE_KEY || event.key === THEME_FAMILY_STORAGE_KEY) {
-          try {
-            const glass = readGlassOpacity(browserWindow.localStorage);
-            applyGlassOpacity(root, glass);
-          } catch {}
-        }
-      } catch {}
-    };
+      return;
+    }
+    if (event.key === GLASS_OPACITY_STORAGE_KEY) {
+      if (event.newValue === null) applyGlassOpacity(root, DEFAULT_GLASS_OPACITY);
+      else {
+        const parsed = parseGlassOpacity(event.newValue);
+        if (parsed !== null) applyGlassOpacity(root, parsed);
+      }
+      return;
+    }
+    if (event.key === DENSITY_STORAGE_KEY) {
+      if (event.newValue === null) applyDensity(root, DEFAULT_DENSITY);
+      else {
+        const parsed = parseDensity(event.newValue);
+        if (parsed !== null) applyDensity(root, parsed);
+      }
+      return;
+    }
+    if (event.key === REDUCED_MOTION_STORAGE_KEY) {
+      if (event.newValue === null) applyReducedMotion(root, DEFAULT_REDUCED_MOTION);
+      else {
+        const parsed = parseReducedMotion(event.newValue);
+        if (parsed !== null) applyReducedMotion(root, parsed);
+      }
+    }
+  };
 
-    browserWindow.addEventListener("storage", onStorage);
+  browserWindow.addEventListener("storage", onStorage);
 
-    let observer: MutationObserver | null = null;
-    try {
-      observer = new MutationObserver(() => {
-        try {
-          const glass = readGlassOpacity(browserWindow.localStorage);
-          applyGlassOpacity(root, glass);
-        } catch {}
-      });
-      observer.observe(browserWindow.document.documentElement, {
-        attributes: true,
-        attributeFilter: ["data-theme", "data-theme-family"],
-      });
-    } catch {}
+  const observer = new MutationObserver(() => {
+    const current = parseGlassOpacity(root.dataset.glassOpacity) ?? readGlassOpacity(browserWindow.localStorage);
+    applyGlassOpacity(root, current);
+  });
 
-    cleanup = () => {
-      try {
-        browserWindow.removeEventListener("storage", onStorage);
-      } catch {}
-      try {
-        observer?.disconnect();
-      } catch {}
-    };
+  try {
+    observer.observe(browserWindow.document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme", "data-theme-family"],
+    });
   } catch {
-    cleanup = () => {};
+    // observe may fail in some harnesses; observer still disconnect-safe
   }
+
   return () => {
-    try {
-      cleanup?.();
-    } catch {}
+    browserWindow.removeEventListener("storage", onStorage);
+    observer.disconnect();
   };
 }
 

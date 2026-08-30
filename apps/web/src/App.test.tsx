@@ -149,7 +149,6 @@ async function openAppearanceSection() {
 }
 
 let media: MediaHarness;
-let appearanceCleanup: (() => void) | null = null;
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -182,14 +181,9 @@ beforeEach(() => {
     configurable: true,
     value: vi.fn(),
   });
-  appearanceCleanup = installAppearanceSync(window);
 });
 
 afterEach(() => {
-  try {
-    appearanceCleanup?.();
-  } catch {}
-  appearanceCleanup = null;
   cleanup();
   for (const queryClient of testQueryClients) queryClient.clear();
   testQueryClients.clear();
@@ -1139,37 +1133,39 @@ describe("Appearance local preferences", () => {
 
   it("keeps root appearance in sync without Settings mounted and syncs back to controls", async () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
-    await renderApp("/plugins");
-    expect(document.documentElement.dataset.glassOpacity).toBe("26");
-    expect(document.documentElement.dataset.density).toBe("compact");
-
-    window.localStorage.setItem("blackglass.glassOpacity", "32");
-    act(() => {
-      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "32" }));
-    });
-    expect(document.documentElement.dataset.glassOpacity).toBe("32");
-    window.localStorage.setItem("blackglass.density", "regular");
-    act(() => {
-      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.density", newValue: "regular" }));
-    });
-    expect(document.documentElement.dataset.density).toBe("regular");
-
-    document.documentElement.dataset.theme = "dark";
-    window.localStorage.setItem("blackglass.glassOpacity", "32");
-    act(() => {
-      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "32" }));
-    });
-    const beforeGlass = document.documentElement.style.getPropertyValue("--glass");
-    document.documentElement.dataset.theme = "light";
-    await new Promise((r) => setTimeout(r, 0));
-    const afterGlass = document.documentElement.style.getPropertyValue("--glass");
-    expect(afterGlass).not.toBe(beforeGlass);
-    expect(document.documentElement.dataset.glassOpacity).toBe("32");
-
-    fireEvent.click(screen.getByRole("link", { name: "Settings" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "Appearance" })).toBeTruthy();
-    expect((screen.getByRole("slider", { name: "Glass opacity" }) as HTMLInputElement).value).toBe("32");
-    expect((screen.getByRole("combobox", { name: "Density" }) as HTMLSelectElement).value).toBe("regular");
+    const appearanceCleanup = installAppearanceSync(window);
+    try {
+      await renderApp("/plugins");
+      expect(document.documentElement.dataset.glassOpacity).toBe("26");
+      expect(document.documentElement.dataset.density).toBe("compact");
+      window.localStorage.setItem("blackglass.glassOpacity", "32");
+      act(() => {
+        window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "32" }));
+      });
+      expect(document.documentElement.dataset.glassOpacity).toBe("32");
+      window.localStorage.setItem("blackglass.density", "regular");
+      act(() => {
+        window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.density", newValue: "regular" }));
+      });
+      expect(document.documentElement.dataset.density).toBe("regular");
+      document.documentElement.dataset.theme = "dark";
+      window.localStorage.setItem("blackglass.glassOpacity", "32");
+      act(() => {
+        window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "32" }));
+      });
+      const beforeGlass = document.documentElement.style.getPropertyValue("--glass");
+      document.documentElement.dataset.theme = "light";
+      await new Promise((r) => setTimeout(r, 0));
+      const afterGlass = document.documentElement.style.getPropertyValue("--glass");
+      expect(afterGlass).not.toBe(beforeGlass);
+      expect(document.documentElement.dataset.glassOpacity).toBe("32");
+      fireEvent.click(screen.getByRole("link", { name: "Settings" }));
+      expect(await screen.findByRole("heading", { level: 1, name: "Appearance" })).toBeTruthy();
+      expect((screen.getByRole("slider", { name: "Glass opacity" }) as HTMLInputElement).value).toBe("32");
+      expect((screen.getByRole("combobox", { name: "Density" }) as HTMLSelectElement).value).toBe("regular");
+    } finally {
+      appearanceCleanup();
+    }
   });
 });
 

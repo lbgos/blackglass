@@ -728,17 +728,17 @@ html[data-reduced-motion="true"] *::after {
   --density-row-min: 56px;
 }
 
-.settings-row {
+.density-row {
   min-height: var(--density-row-min);
   padding-block: 14px;
 }
 
-[data-density="regular"] .settings-row {
+[data-density="regular"] .density-row {
   padding-block: 18px;
 }
 
 @media (max-width: 767px) {
-  .settings-row {
+  .density-row {
     min-height: max(44px, var(--density-row-min));
   }
 }

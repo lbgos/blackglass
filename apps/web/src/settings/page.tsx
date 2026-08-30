@@ -39,7 +39,7 @@ function SetRow({
   return (
     <div
       className={cn(
-        "settings-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-7 border-b border-border last:border-b-0",
+        "density-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-7 border-b border-border last:border-b-0",
         highlighted && "-mx-2 rounded-lg bg-sidebar-active px-2",
       )}
       id={settingId === undefined ? undefined : `setting-${settingId}`}
@@ -398,7 +398,7 @@ function AppearanceSection() {
         </span>
       </SetRow>
       <SetRow
-        description="Row height and spacing in lists and tables."
+        description="Row height and spacing in settings and plugin rows."
         settingId="density"
         title="Density"
       >

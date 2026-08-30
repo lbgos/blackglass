@@ -42,7 +42,7 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
   { id: "restore-defaults", section: "general", title: "Restore defaults", description: "Reset every setting on this page to the shipped local defaults." },
   { id: "theme", section: "appearance", title: "Theme", description: "Smoked glass on true black. Swatches are previews only." },
   { id: "glass-opacity", section: "appearance", title: "Glass opacity", description: "How solid transient menus and dialogs appear. The workspace stays black." },
-  { id: "density", section: "appearance", title: "Density", description: "Row height and spacing in lists and tables." },
+  { id: "density", section: "appearance", title: "Density", description: "Row height and spacing in settings and plugin rows." },
   { id: "reduced-motion", section: "appearance", title: "Reduced motion", description: "Disable short color and opacity transitions." },
   { id: "engagement-type", section: "engagements", title: "Default engagement type", description: "Applied when creating a new engagement from the scope menu." },
   { id: "scope-behavior", section: "engagements", title: "Saved-scope context", description: "How out-of-scope targets are presented before a run." },
