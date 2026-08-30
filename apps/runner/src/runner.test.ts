@@ -842,13 +842,26 @@ describe("runner loop shutdown", () => {
       run: { id: "run-1", actionId: "act-1", engagementId: "eng-1", attempt: 1, state: "leased", currentLeaseId: "lease-1", currentFence: "1", terminalKind: null, terminalReason: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), contractVersion: 1 },
       lease: { runId: "run-1", leaseId: "lease-1", runnerId: "runner-1", sessionId: "sess-1", fence: "1", expiresAt: new Date(Date.now() + 30000).toISOString(), latestHeartbeatSequence: 0, latestEventSequence: 0, orchestrationProfile: "d2-v1", protocol: "runner-control-v1" },
     };
-    globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+    globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
+      const method = init?.method ?? "GET";
       if (u.includes("/handshake")) return new Response(JSON.stringify({ acceptedProtocol: "runner-control-v1", sessionId: "sess-1", runnerId: "runner-1", leaseAllowed: true, sessionPinned: true, registryPinned: false }), { status: 200, headers: { "content-type": "application/json" } });
-      if (u.includes("/lease") && !u.includes("/heartbeat") && !u.includes("/events") && !u.includes("/complete")) return new Response(JSON.stringify(leaseResponse), { status: 200, headers: { "content-type": "application/json" } });
-      if (u.includes("/events")) return new Response(JSON.stringify({ disposition: "accepted_event", event: { eventId: 1, runId: "run-1", sequence: 1, type: "started", fence: "1", payloadJson: "{}", digest: "sha256:" + "a".repeat(64), createdAt: new Date().toISOString() } }), { status: 200, headers: { "content-type": "application/json" } });
+      if (u.includes("/lease") && !u.includes("/heartbeat") && !u.includes("/events") && !u.includes("/complete") && !u.includes("/artifacts")) return new Response(JSON.stringify(leaseResponse), { status: 200, headers: { "content-type": "application/json" } });
+      if (u.includes("/events") && !u.includes("/artifacts")) return new Response(JSON.stringify({ disposition: "accepted_event", event: { eventId: 1, runId: "run-1", sequence: 1, type: "started", fence: "1", payloadJson: "{}", digest: "sha256:" + "a".repeat(64), createdAt: new Date().toISOString() } }), { status: 200, headers: { "content-type": "application/json" } });
       if (u.includes("/heartbeat")) return new Response(JSON.stringify({ leaseExpiresAt: new Date(Date.now() + 30000).toISOString(), heartbeatSequence: 2 }), { status: 200, headers: { "content-type": "application/json" } });
-      if (u.includes("/complete")) {
+      if (u.includes("/artifacts/grants")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const slot = String(body.artifactSlot ?? "stdout");
+        return new Response(JSON.stringify({ artifactId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`, uploadId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`, runId: "run-1", leaseId: "lease-1", sessionId: "sess-1", fence: "1", eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: body.declaredSizeBytes, declaredDigest: body.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201, headers: { "content-type": "application/json" } });
+      }
+      if (u.includes("/uploads/") && method === "PUT") return new Response(null, { status: 204 });
+      if (u.includes("/uploads/") && u.includes("/complete") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const uploadId = u.split("/uploads/")[1]?.split("/")[0] ?? "";
+        const artifactId = uploadId === "00000000-0000-4000-8000-000000000012" ? "00000000-0000-4000-8000-000000000002" : "00000000-0000-4000-8000-000000000001";
+        return new Response(JSON.stringify({ disposition: "published", artifactId, sizeBytes: body.sizeBytes, digest: body.digest, completeness: body.completeness }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (u.includes("/complete") && !u.includes("/artifacts")) {
         if (fetchShouldThrow) throw new Error("network failure");
         return new Response(JSON.stringify({ disposition: "accepted_completion", event: { eventId: 2, runId: "run-1", sequence: 2, type: "failed", fence: "1", payloadJson: "{}", digest: "sha256:" + "b".repeat(64), createdAt: new Date().toISOString() } }), { status: 200, headers: { "content-type": "application/json" } });
       }
