@@ -1,0 +1,25 @@
+CREATE TABLE `nmap_services` (
+	`artifact_id` text NOT NULL,
+	`parser_version` text NOT NULL,
+	`address` text NOT NULL,
+	`port` integer NOT NULL,
+	`protocol` text NOT NULL,
+	`hostname` text,
+	`service_name` text,
+	`product` text,
+	`version` text,
+	`observed_at` text NOT NULL,
+	PRIMARY KEY(`artifact_id`, `parser_version`, `address`, `port`, `protocol`),
+	CONSTRAINT "nmap_service_artifact_id" CHECK(length("nmap_services"."artifact_id") between 1 and 127 and substr("nmap_services"."artifact_id", 1, 1) glob '[a-z0-9]' and "nmap_services"."artifact_id" not glob '*[^a-z0-9-]*'),
+	CONSTRAINT "nmap_service_parser_version" CHECK("nmap_services"."parser_version" = 'nmap-xml-v1'),
+	CONSTRAINT "nmap_service_address" CHECK(length("nmap_services"."address") between 1 and 45),
+	CONSTRAINT "nmap_service_port" CHECK("nmap_services"."port" between 1 and 65535),
+	CONSTRAINT "nmap_service_protocol" CHECK("nmap_services"."protocol" = 'tcp'),
+	CONSTRAINT "nmap_service_hostname" CHECK("nmap_services"."hostname" is null or length("nmap_services"."hostname") between 1 and 253),
+	CONSTRAINT "nmap_service_service_name" CHECK("nmap_services"."service_name" is null or length("nmap_services"."service_name") between 1 and 64),
+	CONSTRAINT "nmap_service_product" CHECK("nmap_services"."product" is null or length("nmap_services"."product") between 1 and 64),
+	CONSTRAINT "nmap_service_version" CHECK("nmap_services"."version" is null or length("nmap_services"."version") between 1 and 64),
+	CONSTRAINT "nmap_service_observed_at" CHECK(length("nmap_services"."observed_at") >= 20)
+);
+--> statement-breakpoint
+CREATE INDEX `nmap_service_artifact_idx` ON `nmap_services` (`artifact_id`);

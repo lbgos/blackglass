@@ -63,14 +63,15 @@ async function publishSingleArtifact(input: {
   buffer: Buffer;
   truncated: boolean;
   isCancelled: boolean;
+  completenessOverride?: "complete" | "partial" | "truncated";
 }): Promise<void> {
-  const { config, lease, slot, kind, buffer, truncated, isCancelled } = input;
+  const { config, lease, slot, kind, buffer, truncated, isCancelled, completenessOverride } = input;
   const digestHex = sha256Hex(buffer);
   const declaredDigest = `sha256:${digestHex}`;
   const declaredSizeBytes = buffer.length;
   const originalFileName = slot === "nmap-xml" ? "nmap.xml" : slot === "stdout" ? "stdout.log" : "stderr.log";
   const declaredContentType = slot === "nmap-xml" ? "application/xml" : "text/plain; charset=utf-8";
-  const completeness = completenessFor(truncated, isCancelled);
+  const completeness = completenessOverride ?? completenessFor(truncated, isCancelled);
 
   const grantBody = {
     runId: lease.runId,
@@ -276,37 +277,19 @@ export async function publishEvidenceArtifacts(
   config: RunnerConfig,
   lease: LeaseIdentity,
   result: ProcessResult,
-  options: { isCancelled: boolean; nmapXml?: Buffer },
+  options: { isCancelled: boolean; nmapXml?: Buffer; nmapExitCode?: number | null },
 ): Promise<void> {
   const isCancelled = options.isCancelled;
-  // Stdout then stderr sequentially. Preserve first slot if second fails.
   await publishSingleArtifact({
-    config,
-    lease,
-    slot: "stdout",
-    kind: "stdout",
-    buffer: result.stdout,
-    truncated: result.stdoutMeta.truncated,
-    isCancelled,
+    config, lease, slot: "stdout", kind: "stdout", buffer: result.stdout, truncated: result.stdoutMeta.truncated, isCancelled,
   });
   await publishSingleArtifact({
-    config,
-    lease,
-    slot: "stderr",
-    kind: "stderr",
-    buffer: result.stderr,
-    truncated: result.stderrMeta.truncated,
-    isCancelled,
+    config, lease, slot: "stderr", kind: "stderr", buffer: result.stderr, truncated: result.stderrMeta.truncated, isCancelled,
   });
   if (options.nmapXml !== undefined) {
+    const nmapCompleteness: "complete" | "partial" = isCancelled || (options.nmapExitCode !== undefined && options.nmapExitCode !== null && options.nmapExitCode !== 0) ? "partial" : "complete";
     await publishSingleArtifact({
-      config,
-      lease,
-      slot: "nmap-xml",
-      kind: "tool_raw",
-      buffer: options.nmapXml,
-      truncated: false,
-      isCancelled,
+      config, lease, slot: "nmap-xml", kind: "tool_raw", buffer: options.nmapXml, truncated: false, isCancelled, completenessOverride: nmapCompleteness,
     });
   }
 }

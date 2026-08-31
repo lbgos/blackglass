@@ -1,12 +1,15 @@
 import {
   EngagementRepository,
   EvidenceGrantRepository,
+  NmapServiceRepository,
   OperatorCommandRepository,
   RunRepository,
   RunnerRepository,
+  evidenceArtifacts,
   openEngagementDatabase,
   type EngagementDatabase,
 } from "@blackglass/db";
+import { eq } from "drizzle-orm";
 import { loadEvidenceNative } from "@blackglass/evidence-native";
 import type { FastifyInstance } from "fastify";
 
@@ -18,6 +21,7 @@ import {
 import { BackupLock } from "./evidence/backup-lock.js";
 import { EvidencePublicationService } from "./evidence/evidence-publication.js";
 import { EvidenceStore } from "./evidence/evidence-store.js";
+import { NmapProjectionService } from "./evidence/nmap-projection.js";
 
 interface RuntimeDependencies {
   bootstrapStorage?: typeof bootstrapDevelopmentStorage;
@@ -41,6 +45,7 @@ export async function buildStorageBackedApp(
     const runRepository = new RunRepository(database.db);
     const runnerRepository = new RunnerRepository(database.db);
     const evidenceGrantRepository = new EvidenceGrantRepository(database.db);
+    const nmapServiceRepository = new NmapServiceRepository(database.db);
 
     // Evidence publication is fail-closed: without a loadable native binding
     // or valid managed evidence roots, the upload routes are not registered.
@@ -57,10 +62,12 @@ export async function buildStorageBackedApp(
           throw new Error("backup lockfile could not be established");
         }
         backupLock = lockResult.lock;
+        const projection = new NmapProjectionService((id) => database.db.select().from(evidenceArtifacts).where(eq(evidenceArtifacts.artifactId, id)).get(), storeResult.store, nmapServiceRepository);
         evidencePublication = new EvidencePublicationService({
           repository: evidenceGrantRepository,
           store: storeResult.store,
           quiesceGate: backupLock,
+          onPublicationCommitted: (artifactId) => projection.projectForArtifact(artifactId),
         });
         evidenceStore = storeResult.store;
       }
@@ -77,6 +84,7 @@ export async function buildStorageBackedApp(
       ...(evidencePublication === undefined ? {} : { evidencePublication }),
       ...(evidenceStore === undefined ? {} : { evidenceStore }),
       ...(backupLock === undefined ? {} : { storageGate: backupLock }),
+      nmapServiceRepository,
       async getDevelopmentStorageReadiness() {
         await checkDevelopmentStorage(dataDirectory);
         return "ready" as const;

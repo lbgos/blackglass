@@ -1002,6 +1002,36 @@ export const evidenceArtifacts = sqliteTable(
   ],
 );
 
+export const nmapServices = sqliteTable(
+  "nmap_services",
+  {
+    artifactId: text("artifact_id").notNull(),
+    parserVersion: text("parser_version").notNull(),
+    address: text("address").notNull(),
+    port: integer("port").notNull(),
+    protocol: text("protocol", { enum: ["tcp"] }).notNull(),
+    hostname: text("hostname"),
+    serviceName: text("service_name"),
+    product: text("product"),
+    version: text("version"),
+    observedAt: text("observed_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.artifactId, table.parserVersion, table.address, table.port, table.protocol] }),
+    check("nmap_service_artifact_id", sql`length(${table.artifactId}) between 1 and 127 and substr(${table.artifactId},1,1) glob '[a-z0-9]' and ${table.artifactId} not glob '*[^a-z0-9-]*'`),
+    check("nmap_service_parser_version", sql`${table.parserVersion} = 'nmap-xml-v1'`),
+    check("nmap_service_address", sql`length(${table.address}) between 1 and 45`),
+    check("nmap_service_port", sql`${table.port} between 1 and 65535`),
+    check("nmap_service_protocol", sql`${table.protocol} = 'tcp'`),
+    check("nmap_service_hostname", sql`${table.hostname} is null or length(${table.hostname}) between 1 and 253`),
+    check("nmap_service_service_name", sql`${table.serviceName} is null or length(${table.serviceName}) between 1 and 64`),
+    check("nmap_service_product", sql`${table.product} is null or length(${table.product}) between 1 and 64`),
+    check("nmap_service_version", sql`${table.version} is null or length(${table.version}) between 1 and 64`),
+    check("nmap_service_observed_at", sql`length(${table.observedAt}) >= 20`),
+    index("nmap_service_artifact_idx").on(table.artifactId),
+  ],
+);
+
 export type RunRow = typeof runs.$inferSelect;
 export type RunLeaseRow = typeof runLeases.$inferSelect;
 export type RunEventRow = typeof runEvents.$inferSelect;
@@ -1011,3 +1041,4 @@ export type RunnerEnrollmentChallengeRow =
 export type RunnerSessionRow = typeof runnerSessions.$inferSelect;
 export type EvidenceGrantRow = typeof evidenceGrants.$inferSelect;
 export type EvidenceArtifactRow = typeof evidenceArtifacts.$inferSelect;
+export type NmapServiceRow = typeof nmapServices.$inferSelect;
