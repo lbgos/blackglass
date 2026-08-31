@@ -1,4 +1,5 @@
-import { mkdir, stat as fsStat } from "node:fs/promises";
+import { access, mkdir, stat as fsStat } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 
@@ -241,4 +242,5 @@ export async function verifyExecutable(executable: string): Promise<void> {
   if (!executable.startsWith("/")) throw new Error("executable_path_not_absolute");
   const st = await fsStat(executable);
   if (!st.isFile()) throw new Error("executable_not_regular_file");
+  await access(executable, fsConstants.X_OK);
 }

@@ -1,7 +1,7 @@
 import {
   AcquireRunnerLeaseRequestSchema,
   AcquireRunnerLeaseResponseSchema,
-  NmapTcpConnectOptionsSchema,
+  DeclaredPortsSchema,
   RunnerAppendStartedRequestSchema,
   RunnerCompleteRequestSchema,
   RunnerEventResponseSchema,
@@ -11,7 +11,6 @@ import {
   RunnerHeartbeatResponseSchema,
   commandJsonV1RunnerAppendStartedDigest,
   commandJsonV1RunnerCompleteDigest,
-  type NmapTcpConnectOptions,
 } from "@blackglass/contracts";
 import { buildNmapArgv } from "@blackglass/domain";
 
@@ -41,7 +40,45 @@ function authHeader(runnerId: string, secret: string): string {
   return `Blackglass-Runner ${runnerId} ${secret}`;
 }
 
-function adaptToNmapOptions(o: unknown): NmapTcpConnectOptions | null { if (typeof o !== "object" || o === null || Array.isArray(o)) return null; const s = NmapTcpConnectOptionsSchema.safeParse(o); if (s.success) return s.data; const r = o as Record<string, unknown>, k = Object.keys(r); if (k.length !== 1 || k[0] !== "declaredPorts") return null; const d = r.declaredPorts; if (d === null) return { serviceDetection: true, timingTemplate: "T4", skipHostDiscovery: true, versionIntensity: 7, maxRetries: 2 }; if (!Array.isArray(d)) return null; const p: { from: number; to: number }[] = []; for (const x of d) { if (typeof x !== "number" || !Number.isInteger(x) || x < 1 || x > 65535) return null; p.push({ from: x, to: x }); } const b: NmapTcpConnectOptions = { serviceDetection: true, timingTemplate: "T4", skipHostDiscovery: true, versionIntensity: 7, maxRetries: 2 }; if (p.length > 0) b.ports = p; return b; }
+type NmapSliceOptions = {
+  serviceDetection: true;
+  timingTemplate: "T4";
+  skipHostDiscovery: true;
+  versionIntensity: 7;
+  maxRetries: 2;
+  ports?: { from: number; to: number }[];
+};
+
+function adaptToNmapOptions(value: unknown): NmapSliceOptions | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length !== 1 || keys[0] !== "declaredPorts") {
+    return null;
+  }
+  const declaredPortsResult = DeclaredPortsSchema.safeParse(record.declaredPorts);
+  if (!declaredPortsResult.success) {
+    return null;
+  }
+  const declaredPorts = declaredPortsResult.data;
+  const base = {
+    serviceDetection: true as const,
+    timingTemplate: "T4" as const,
+    skipHostDiscovery: true as const,
+    versionIntensity: 7 as const,
+    maxRetries: 2 as const,
+  };
+  if (declaredPorts === null) {
+    return base;
+  }
+  const ports = declaredPorts.map((port) => ({ from: port, to: port }));
+  if (ports.length === 0) {
+    return base;
+  }
+  return { ...base, ports };
+}
 
 export async function handshake(config: RunnerConfig): Promise<HandshakeResponse> {
   const url = `${config.apiBaseUrl}/api/v1/runner/handshake`;
@@ -335,7 +372,11 @@ export async function runOnce(
     if (adapted === null) {
       earlyReason = "invalid_action_snapshot";
     } else {
-      const built = buildNmapArgv({ options: adapted, canonicalTargets: snapshot.canonicalTargets, xmlPath });
+      const built = buildNmapArgv({
+        options: adapted,
+        canonicalTargets: snapshot.canonicalTargets,
+        xmlPath,
+      });
       if (!built.ok) {
         earlyReason = "invalid_action_snapshot";
       } else {
@@ -344,7 +385,13 @@ export async function runOnce(
           earlyReason = "nmap_unavailable";
           nmapArgv = null;
         } else {
-          for (const a of nmapArgv) if (a.includes("\0")) { earlyReason = "nmap_unavailable"; nmapArgv = null; break; }
+          for (const arg of nmapArgv) {
+            if (arg.includes("\0")) {
+              earlyReason = "nmap_unavailable";
+              nmapArgv = null;
+              break;
+            }
+          }
           if (earlyReason === null) {
             try {
               await verifyExecutable(config.executable);
