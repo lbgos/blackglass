@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAppQueryClient } from "./query-client.js";
 import { createAppRouter } from "./router.js";
+import { installAppearanceSync } from "./settings/appearance.js";
 
 interface Deferred<Value> {
   promise: Promise<Value>;
@@ -139,8 +140,10 @@ async function renderApp(initialEntry = "/", { strict = false }: RenderAppOption
   return { ...result, queryClient, router };
 }
 
-// Theme controls live in the Appearance section, while Settings opens on General.
+// Theme controls live in the Appearance section, which is now the Settings default.
 async function openAppearanceSection() {
+  const heading = screen.queryByRole("heading", { level: 1, name: "Appearance" });
+  if (heading) return;
   fireEvent.click(screen.getByRole("button", { name: "Appearance" }));
   await screen.findByRole("heading", { level: 1, name: "Appearance" });
 }
@@ -156,6 +159,12 @@ beforeEach(() => {
   delete document.documentElement.dataset.theme;
   delete document.documentElement.dataset.themeFamily;
   delete document.documentElement.dataset.themePreference;
+  delete document.documentElement.dataset.glassOpacity;
+  delete document.documentElement.dataset.density;
+  delete document.documentElement.dataset.reducedMotion;
+  document.documentElement.style.removeProperty("--glass");
+  document.documentElement.style.removeProperty("--popover");
+  document.documentElement.style.removeProperty("--glass-opacity");
   media = createMediaHarness();
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
@@ -737,21 +746,29 @@ describe("Application shell", () => {
 });
 
 describe("App theme preference", () => {
-  it("uses the stored preference and exposes native selected state", async () => {
+  it("uses the stored preference and exposes orb pressed state", async () => {
     window.localStorage.setItem(THEME_STORAGE_KEY, "dark");
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
 
     await renderApp("/settings");
     await openAppearanceSection();
 
-    expect((screen.getByRole("radio", { name: "Dark" }) as HTMLInputElement).checked).toBe(true);
     expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(screen.getByRole("button", { name: "Smoked lime dark" }).getAttribute("data-on")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Smoked lime dark" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
 
     act(() => {
       window.dispatchEvent(new StorageEvent("storage", { key: THEME_STORAGE_KEY, newValue: null }));
     });
-    expect((screen.getByRole("radio", { name: "System" }) as HTMLInputElement).checked).toBe(true);
+    // system with prefers-light => light
     expect(document.documentElement.dataset.theme).toBe("light");
+    expect(screen.getByRole("button", { name: "Smoked lime light" }).getAttribute("data-on")).toBe(
+      "true",
+    );
   });
 
   it("falls back to system for invalid or unreadable storage", async () => {
@@ -759,9 +776,8 @@ describe("App theme preference", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     const first = await renderApp("/settings");
     await openAppearanceSection();
-    expect((screen.getByRole("radio", { name: "System" }) as HTMLInputElement).checked).toBe(
-      true,
-    );
+    expect(document.documentElement.dataset.themePreference).toBe("system");
+    expect(document.documentElement.dataset.theme).toBe("light");
     first.unmount();
 
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
@@ -769,9 +785,7 @@ describe("App theme preference", () => {
     });
     await renderApp("/settings");
     await openAppearanceSection();
-    expect((screen.getByRole("radio", { name: "System" }) as HTMLInputElement).checked).toBe(
-      true,
-    );
+    expect(document.documentElement.dataset.themePreference).toBe("system");
   });
 
   it("reacts to OS changes only while system is selected and cleans up the listener", async () => {
@@ -782,7 +796,7 @@ describe("App theme preference", () => {
     act(() => media.dispatch(true));
     expect(document.documentElement.dataset.theme).toBe("dark");
 
-    fireEvent.click(screen.getByRole("radio", { name: "Light" }));
+    fireEvent.click(screen.getByRole("button", { name: "Smoked lime light" }));
     expect(document.documentElement.dataset.theme).toBe("light");
     act(() => media.dispatch(false));
     expect(document.documentElement.dataset.theme).toBe("light");
@@ -801,15 +815,15 @@ describe("App theme preference", () => {
         new StorageEvent("storage", { key: THEME_STORAGE_KEY, newValue: "dark" }),
       );
     });
-    expect((screen.getByRole("radio", { name: "Dark" }) as HTMLInputElement).checked).toBe(true);
     expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(screen.getByRole("button", { name: "Smoked lime dark" }).getAttribute("data-on")).toBe("true");
 
     act(() => {
       window.dispatchEvent(
         new StorageEvent("storage", { key: THEME_STORAGE_KEY, newValue: "midnight" }),
       );
     });
-    expect((screen.getByRole("radio", { name: "Dark" }) as HTMLInputElement).checked).toBe(true);
+    expect(document.documentElement.dataset.theme).toBe("dark");
   });
 
   it("keeps theme selection usable when storage writes fail", async () => {
@@ -820,31 +834,28 @@ describe("App theme preference", () => {
     await renderApp("/settings");
     await openAppearanceSection();
 
-    fireEvent.click(screen.getByRole("radio", { name: "Dark" }));
-    expect((screen.getByRole("radio", { name: "Dark" }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Smoked lime dark" }));
+    expect(screen.getByRole("button", { name: "Smoked lime dark" }).getAttribute("data-on")).toBe("true");
     expect(document.documentElement.dataset.theme).toBe("dark");
   });
 
-  it("shows native checked state for every scheme selection", async () => {
+  it("exposes pressed state for the orb scheme selection", async () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     await renderApp("/settings");
     await openAppearanceSection();
 
-    for (const preference of ["Light", "Dark", "System"]) {
-      const radio = screen.getByRole("radio", { name: preference }) as HTMLInputElement;
-      fireEvent.click(radio);
-      expect(radio.checked).toBe(true);
-      const selectedCard = radio.closest("label")?.querySelector("[data-selected]");
-      expect(selectedCard?.getAttribute("data-selected")).toBe("true");
-      for (const other of ["Light", "Dark", "System"].filter(
-        (candidate) => candidate !== preference,
-      )) {
-        const otherCard = screen
-          .getByRole("radio", { name: other })
-          .closest("label")
-          ?.querySelector("[data-selected]");
-        expect(otherCard?.getAttribute("data-selected")).toBe("false");
-      }
+    for (const { name, scheme } of [
+      { name: "Smoked lime light", scheme: "light" },
+      { name: "Smoked lime dark", scheme: "dark" },
+    ] as const) {
+      const orb = screen.getByRole("button", { name }) as HTMLButtonElement;
+      fireEvent.click(orb);
+      expect(orb.getAttribute("aria-pressed")).toBe("true");
+      expect(orb.getAttribute("data-on")).toBe("true");
+      expect(document.documentElement.dataset.theme).toBe(scheme);
+      // Focus remains on the clicked orb
+      orb.focus();
+      expect(document.activeElement).toBe(orb);
     }
   });
 
@@ -870,10 +881,10 @@ describe("App theme preference", () => {
     expect(document.documentElement.dataset.theme).toBe("light");
     expect(window.localStorage.getItem(THEME_FAMILY_STORAGE_KEY)).toBe("ember");
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
-    expect((screen.getByRole("radio", { name: "Light" }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByRole("button", { name: "Ember light" }).getAttribute("data-on")).toBe("true");
   });
 
-  it("keeps family when the scheme radios change", async () => {
+  it("keeps family when the orb scheme changes", async () => {
     window.localStorage.setItem(THEME_FAMILY_STORAGE_KEY, "iris");
     window.localStorage.setItem(THEME_STORAGE_KEY, "dark");
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
@@ -881,14 +892,15 @@ describe("App theme preference", () => {
     await openAppearanceSection();
 
     expect(document.documentElement.dataset.themeFamily).toBe("iris");
-    fireEvent.click(screen.getByRole("radio", { name: "Light" }));
+    fireEvent.click(screen.getByRole("button", { name: "Iris light" }));
     expect(document.documentElement.dataset.themeFamily).toBe("iris");
     expect(document.documentElement.dataset.theme).toBe("light");
     expect(window.localStorage.getItem(THEME_FAMILY_STORAGE_KEY)).toBe("iris");
 
-    fireEvent.click(screen.getByRole("radio", { name: "System" }));
-    expect(document.documentElement.dataset.themeFamily).toBe("iris");
-    expect(document.documentElement.dataset.themePreference).toBe("system");
+    // Switching family preserves the light scheme
+    fireEvent.click(screen.getByRole("button", { name: "Void light" }));
+    expect(document.documentElement.dataset.themeFamily).toBe("void");
+    expect(document.documentElement.dataset.theme).toBe("light");
   });
 
   it("falls back to smoked for invalid or unreadable family storage", async () => {
@@ -931,28 +943,29 @@ describe("App theme preference", () => {
     expect(document.documentElement.dataset.themeFamily).toBe("grove");
   });
 
-  it("leaves radio arrow navigation and Tab exit to native browser behavior", async () => {
+  it("keeps orb keyboard focus and pressed semantics without intercepting native navigation", async () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     await renderApp("/settings");
     await openAppearanceSection();
 
-    const system = screen.getByRole("radio", { name: "System" }) as HTMLInputElement;
-    const light = screen.getByRole("radio", { name: "Light" }) as HTMLInputElement;
-    system.focus();
+    const dark = screen.getByRole("button", { name: "Smoked lime dark" }) as HTMLButtonElement;
+    const light = screen.getByRole("button", { name: "Smoked lime light" }) as HTMLButtonElement;
+    dark.focus();
+    expect(document.activeElement).toBe(dark);
+    expect(dark.getAttribute("aria-pressed")).toBeDefined();
 
     const arrowRight = new KeyboardEvent("keydown", {
       bubbles: true,
       cancelable: true,
       key: "ArrowRight",
     });
-    expect(system.dispatchEvent(arrowRight)).toBe(true);
+    expect(dark.dispatchEvent(arrowRight)).toBe(true);
     expect(arrowRight.defaultPrevented).toBe(false);
-    // jsdom does not run the radio group's ArrowRight default action. Native click still proves
-    // that browser-managed activation changes the checked member and application preference.
+
     light.click();
-    expect(light.checked).toBe(true);
-    expect(system.checked).toBe(false);
-    expect(document.documentElement.dataset.themePreference).toBe("light");
+    expect(light.getAttribute("data-on")).toBe("true");
+    expect(light.getAttribute("aria-pressed")).toBe("true");
+    expect(document.documentElement.dataset.theme).toBe("light");
 
     light.focus();
     const tab = new KeyboardEvent("keydown", {
@@ -962,26 +975,9 @@ describe("App theme preference", () => {
     });
     expect(light.dispatchEvent(tab)).toBe(true);
     expect(tab.defaultPrevented).toBe(false);
-    // jsdom also omits sequential Tab movement; verify the following browser tab stop accepts focus.
-    // Settings hides the console, so the next stop is the sidebar's Back control.
     const nextTabStop = screen.getByTestId("settings-back");
     nextTabStop.focus();
     expect(document.activeElement).toBe(nextTabStop);
-  });
-
-  it("reports the live resolved appearance on the System preview", async () => {
-    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
-    await renderApp("/settings");
-    await openAppearanceSection();
-
-    expect(screen.getByText("Currently light")).toBeTruthy();
-    act(() => media.dispatch(true));
-    expect(screen.getByText("Currently dark")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("radio", { name: "Light" }));
-    act(() => media.dispatch(false));
-    expect(screen.getByText("Currently light")).toBeTruthy();
-    expect(document.documentElement.dataset.theme).toBe("light");
   });
 
   it("updates the whole app theme and preserves it across navigation without remounting the shell", async () => {
@@ -990,7 +986,7 @@ describe("App theme preference", () => {
     await openAppearanceSection();
     const shell = screen.getByTestId("application-shell");
 
-    fireEvent.click(screen.getByRole("radio", { name: "Dark" }));
+    fireEvent.click(screen.getByRole("button", { name: "Smoked lime dark" }));
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
 
@@ -999,13 +995,12 @@ describe("App theme preference", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Workspace" })).toBeTruthy();
     expect(screen.getByTestId("application-shell")).toBe(shell);
     expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(screen.queryByRole("radio")).toBeNull();
 
     fireEvent.click(screen.getByRole("link", { name: "Settings" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "General" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "Appearance" })).toBeTruthy();
     expect(screen.getByTestId("application-shell")).toBe(shell);
     await openAppearanceSection();
-    expect((screen.getByRole("radio", { name: "Dark" }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByRole("button", { name: "Smoked lime dark" }).getAttribute("data-on")).toBe("true");
   });
 
   it("keeps empty and error actions accessible by name", async () => {
@@ -1014,6 +1009,163 @@ describe("App theme preference", () => {
 
     expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
     expect(await screen.findAllByRole("button", { name: "Retry" })).not.toHaveLength(0);
+  });
+});
+
+describe("Appearance local preferences", () => {
+  it("defaults glass 26, density compact, reduced motion off and persists with strict parsing", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+    await renderApp("/settings");
+    await openAppearanceSection();
+
+    const slider = screen.getByRole("slider", { name: "Glass opacity" }) as HTMLInputElement;
+    expect(slider.value).toBe("26");
+    expect(screen.getByText("26%")).toBeTruthy();
+    expect(document.documentElement.dataset.glassOpacity).toBe("26");
+    expect(document.documentElement.dataset.density).toBe("compact");
+    expect(document.documentElement.dataset.reducedMotion).toBe("false");
+    expect(document.documentElement.classList.contains("reduce-motion")).toBe(false);
+
+    fireEvent.change(slider, { target: { value: "40" } });
+    expect(window.localStorage.getItem("blackglass.glassOpacity")).toBe("40");
+    expect(document.documentElement.dataset.glassOpacity).toBe("40");
+
+    const density = screen.getByRole("combobox", { name: "Density" }) as HTMLSelectElement;
+    fireEvent.change(density, { target: { value: "regular" } });
+    expect(window.localStorage.getItem("blackglass.density")).toBe("regular");
+    expect(document.documentElement.dataset.density).toBe("regular");
+
+    const toggle = screen.getByRole("switch", { name: "Reduced motion" });
+    fireEvent.click(toggle);
+    expect(window.localStorage.getItem("blackglass.reducedMotion")).toBe("true");
+    expect(document.documentElement.dataset.reducedMotion).toBe("true");
+    expect(document.documentElement.classList.contains("reduce-motion")).toBe(true);
+  });
+
+  it("ignores malformed appearance storage and falls back to defaults", async () => {
+    window.localStorage.setItem("blackglass.glassOpacity", "oops");
+    window.localStorage.setItem("blackglass.density", "huge");
+    window.localStorage.setItem("blackglass.reducedMotion", "maybe");
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+    await renderApp("/settings");
+    await openAppearanceSection();
+
+    expect((screen.getByRole("slider", { name: "Glass opacity" }) as HTMLInputElement).value).toBe("26");
+    expect((screen.getByRole("combobox", { name: "Density" }) as HTMLSelectElement).value).toBe(
+      "compact",
+    );
+    expect(screen.getByRole("switch", { name: "Reduced motion" }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
+  });
+
+  it("syncs cross-tab storage events for appearance controls", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+    await renderApp("/settings");
+    await openAppearanceSection();
+
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "32" }));
+    });
+    expect((screen.getByRole("slider", { name: "Glass opacity" }) as HTMLInputElement).value).toBe("32");
+
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.density", newValue: "regular" }));
+    });
+    expect((screen.getByRole("combobox", { name: "Density" }) as HTMLSelectElement).value).toBe("regular");
+
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.reducedMotion", newValue: "true" }));
+    });
+    expect(screen.getByRole("switch", { name: "Reduced motion" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("rejects out-of-range glass values from storage and events and clamps UI", async () => {
+    window.localStorage.setItem("blackglass.glassOpacity", "4");
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+    await renderApp("/settings");
+    await openAppearanceSection();
+    const slider = screen.getByRole("slider", { name: "Glass opacity" }) as HTMLInputElement;
+    expect(slider.value).toBe("26");
+    expect(slider.min).toBe("5");
+    expect(slider.max).toBe("40");
+    expect(screen.getByLabelText("Glass opacity").id).toBe("glass-opacity");
+    expect(document.querySelector('output[for="glass-opacity"]')?.textContent).toContain("26%");
+
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "4" }));
+    });
+    expect(slider.value).toBe("26");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "41" }));
+    });
+    expect(slider.value).toBe("26");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "0" }));
+    });
+    expect(slider.value).toBe("26");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "100" }));
+    });
+    expect(slider.value).toBe("26");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "5" }));
+    });
+    expect(slider.value).toBe("5");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "40" }));
+    });
+    expect(slider.value).toBe("40");
+  });
+
+  it("keeps glass opacity usable when storage writes fail", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("full");
+    });
+    await renderApp("/settings");
+    await openAppearanceSection();
+    const slider = screen.getByRole("slider", { name: "Glass opacity" }) as HTMLInputElement;
+    fireEvent.change(slider, { target: { value: "30" } });
+    expect(slider.value).toBe("30");
+    expect(document.documentElement.dataset.glassOpacity).toBe("30");
+  });
+
+  it("keeps root appearance in sync without Settings mounted and syncs back to controls", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+    const appearanceCleanup = installAppearanceSync(window);
+    try {
+      await renderApp("/plugins");
+      expect(document.documentElement.dataset.glassOpacity).toBe("26");
+      expect(document.documentElement.dataset.density).toBe("compact");
+      window.localStorage.setItem("blackglass.glassOpacity", "32");
+      act(() => {
+        window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "32" }));
+      });
+      expect(document.documentElement.dataset.glassOpacity).toBe("32");
+      window.localStorage.setItem("blackglass.density", "regular");
+      act(() => {
+        window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.density", newValue: "regular" }));
+      });
+      expect(document.documentElement.dataset.density).toBe("regular");
+      document.documentElement.dataset.theme = "dark";
+      window.localStorage.setItem("blackglass.glassOpacity", "32");
+      act(() => {
+        window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "32" }));
+      });
+      const beforeGlass = document.documentElement.style.getPropertyValue("--glass");
+      document.documentElement.dataset.theme = "light";
+      await new Promise((r) => setTimeout(r, 0));
+      const afterGlass = document.documentElement.style.getPropertyValue("--glass");
+      expect(afterGlass).not.toBe(beforeGlass);
+      expect(document.documentElement.dataset.glassOpacity).toBe("32");
+      fireEvent.click(screen.getByRole("link", { name: "Settings" }));
+      expect(await screen.findByRole("heading", { level: 1, name: "Appearance" })).toBeTruthy();
+      expect((screen.getByRole("slider", { name: "Glass opacity" }) as HTMLInputElement).value).toBe("32");
+      expect((screen.getByRole("combobox", { name: "Density" }) as HTMLSelectElement).value).toBe("regular");
+    } finally {
+      appearanceCleanup();
+    }
   });
 });
 
@@ -1026,7 +1178,7 @@ describe("Application routes", () => {
     ["/", "Workspace", "Dashboard"],
     ["/engagements", "Engagements", "Engagements"],
     ["/plugins", "Plugins", null],
-    ["/settings", "General", null],
+    ["/settings", "Appearance", null],
   ])(
     "renders a direct entry for %s inside the shell",
     async (path, heading, globalActiveLabel) => {
@@ -1036,10 +1188,9 @@ describe("Application routes", () => {
       expect(screen.getByTestId("application-shell")).toBeTruthy();
 
       if (path === "/settings") {
-        // The v5 settings sidebar intentionally replaces the global navigation
-        // and has no footer links while Settings is open.
-        const generalItem = screen.getByRole("button", { name: "General" });
-        expect(generalItem.getAttribute("aria-current")).toBe("true");
+        // Settings now defaults to Appearance per the v5 glass mock.
+        const appearanceItem = screen.getByRole("button", { name: "Appearance" });
+        expect(appearanceItem.getAttribute("aria-current")).toBe("true");
         expect(screen.getByRole("button", { name: "Diagnostics" })).toBeTruthy();
         expect(screen.getByTestId("settings-back")).toBeTruthy();
         return;
@@ -1098,36 +1249,51 @@ describe("Application routes", () => {
     expect(screen.getByRole("link", { name: "Plugins" }).getAttribute("aria-current")).toBe("page");
   });
 
-  it("renders the reference appearance layout with scheme radios, theme orbs, and truthful theme actions", async () => {
+  it("renders the reference appearance layout with paired orbs and no extra Scheme block", async () => {
     await renderApp("/settings");
 
-    // Settings opens on General; theme controls live under Appearance.
-    expect(screen.getByRole("heading", { level: 1, name: "General" })).toBeTruthy();
-    await openAppearanceSection();
-
-    expect(screen.getAllByRole("group", { name: "Scheme" })).toHaveLength(1);
-    const radios = screen.getAllByRole("radio") as HTMLInputElement[];
-    expect(radios).toHaveLength(3);
-    for (const label of ["Light", "Dark", "System"]) {
-      const radio = screen.getByRole("radio", { name: label }) as HTMLInputElement;
-      expect(radio.type).toBe("radio");
-      expect(radio.name).toBe("theme");
-      expect(radio.closest("label")?.className).toContain("min-h-11");
-      radio.focus();
-      expect(document.activeElement).toBe(radio);
-    }
+    // Settings now opens on Appearance per the glass mock.
+    expect(screen.getByRole("heading", { level: 1, name: "Appearance" })).toBeTruthy();
     expect(
       screen.getByText("Choose how Blackglass looks. Use a built-in theme or make your own."),
     ).toBeTruthy();
     expect(screen.getByText("Left bubble is dark. Right bubble is light.")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Smoked lime dark" })).toBeTruthy();
+    // No full-width Scheme block; orbs are the scheme selection.
+    expect(screen.queryByRole("group", { name: "Scheme" })).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
+
+    const darkOrb = screen.getByRole("button", { name: "Smoked lime dark" });
+    const lightOrb = screen.getByRole("button", { name: "Smoked lime light" });
+    expect(darkOrb.getAttribute("aria-pressed")).toBeDefined();
+    expect(lightOrb.getAttribute("aria-pressed")).toBeDefined();
+    darkOrb.focus();
+    expect(document.activeElement).toBe(darkOrb);
+    expect(darkOrb.className).toContain("focus-visible:ring-2");
     expect(screen.getByRole("button", { name: "Iris light" })).toBeTruthy();
     // Theme creation has no product behavior yet, so both actions render disabled.
     const createTheme = screen.getByRole("button", { name: "Create theme" }) as HTMLButtonElement;
     const importTheme = screen.getByRole("button", { name: "Import theme" }) as HTMLButtonElement;
-    expect(createTheme.disabled).toBe(false);
+    expect(createTheme.disabled).toBe(true);
     expect(createTheme.getAttribute("aria-disabled")).toBe("true");
+    expect(createTheme.title).toMatch(/Custom themes/);
+    expect(createTheme.className).toContain("opacity-60");
+    expect(importTheme.disabled).toBe(true);
     expect(importTheme.getAttribute("aria-disabled")).toBe("true");
+    expect(importTheme.title).toMatch(/Custom themes/);
+
+    // Appearance controls are now real and default to the mock values.
+    expect(screen.getByRole("slider", { name: "Glass opacity" })).toBeTruthy();
+    expect((screen.getByRole("slider", { name: "Glass opacity" }) as HTMLInputElement).value).toBe(
+      "26",
+    );
+    expect(screen.getByText("26%")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Density" })).toBeTruthy();
+    expect((screen.getByRole("combobox", { name: "Density" }) as HTMLSelectElement).value).toBe(
+      "compact",
+    );
+    expect(screen.getByRole("switch", { name: "Reduced motion" }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
   });
 
   it("renders the reference settings navigation with section switching, search, and Back", async () => {
@@ -1196,7 +1362,7 @@ describe("Application routes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
     dialog = await screen.findByRole("dialog", { name: "Blackglass navigation" });
     fireEvent.click(within(dialog).getByRole("link", { name: "Settings" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "General" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "Appearance" })).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
@@ -1238,6 +1404,23 @@ describe("Application routes", () => {
     expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Available" }));
   });
 
+  it("shows the v5 plugins header with Blackglass breadcrumb and disabled Install from path", async () => {
+    await renderApp("/plugins");
+
+    const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(within(breadcrumb).getByText("Blackglass")).toBeTruthy();
+    expect(within(breadcrumb).getByText("Plugins")).toBeTruthy();
+    expect(within(breadcrumb).getByRole("link", { name: "Blackglass" }).getAttribute("href")).toBe("/");
+
+    const install = screen.getByRole("button", { name: "Install from path" });
+    expect(install.hasAttribute("disabled") || install.getAttribute("aria-disabled") === "true").toBe(true);
+    expect(install.title).toMatch(/D5/);
+    // Plugins stage keeps truthful Nmap and no fake plugins
+    expect(screen.getByText("Nmap")).toBeTruthy();
+    expect(screen.queryByText("HTTP Probe")).toBeNull();
+    expect(screen.getByText(/bundled contract/)).toBeTruthy();
+  });
+
   it("closes stale Advisor details on non-endpoint hits and resets on Settings re-entry", async () => {
     await renderApp("/settings");
     const search = () => screen.getByRole("combobox", { name: "Search settings" });
@@ -1257,11 +1440,11 @@ describe("Application routes", () => {
     expect(await screen.findByRole("button", { name: "Details" })).toBeTruthy();
     expect(screen.queryByLabelText("Model endpoint")).toBeNull();
 
-    // Re-entering Settings from elsewhere starts with the disclosure closed.
+    // Re-entering Settings from elsewhere starts with the disclosure closed and resets to Appearance.
     fireEvent.click(screen.getByTestId("settings-back"));
     expect(await screen.findByRole("heading", { level: 1, name: "Workspace" })).toBeTruthy();
     fireEvent.click(screen.getByRole("link", { name: "Settings" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "General" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "Appearance" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Advisor" }));
     expect(await screen.findByRole("button", { name: "Details" })).toBeTruthy();
   });

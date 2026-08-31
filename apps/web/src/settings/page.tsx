@@ -7,10 +7,15 @@ import {
   useTheme,
   type ResolvedTheme,
   type ThemeFamily,
-  type ThemePreference,
 } from "@blackglass/ui";
 import { useEffect, useState, type ReactNode } from "react";
 
+import {
+  GLASS_OPACITY_MAX,
+  GLASS_OPACITY_MIN,
+  glassSliderProgress,
+  useAppearancePrefs,
+} from "./appearance.js";
 import { SETTINGS_SECTIONS, type SettingsSectionId } from "./model.js";
 import { useSettingsView } from "./settings-view.js";
 import { useSystemStatusQuery } from "../system-status-query.js";
@@ -34,7 +39,7 @@ function SetRow({
   return (
     <div
       className={cn(
-        "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-7 border-b border-border py-3.5 last:border-b-0",
+        "density-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-7 border-b border-border last:border-b-0",
         highlighted && "-mx-2 rounded-lg bg-sidebar-active px-2",
       )}
       id={settingId === undefined ? undefined : `setting-${settingId}`}
@@ -57,23 +62,28 @@ function ToggleSwitch({
   checked,
   label,
   locked = true,
+  onCheckedChange,
 }: {
   checked: boolean;
   label: string;
   locked?: boolean;
+  onCheckedChange?: (checked: boolean) => void;
 }) {
+  const disabled = locked && !onCheckedChange;
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
-      aria-disabled={locked || undefined}
+      aria-disabled={disabled || undefined}
       aria-label={label}
+      disabled={disabled || undefined}
       className={cn(
         "relative h-[18px] w-8 shrink-0 rounded-full p-0 transition-colors duration-100",
         checked ? "bg-primary" : "bg-foreground/15",
-        locked && "cursor-default opacity-55",
+        disabled ? "cursor-default opacity-55" : "cursor-pointer",
       )}
+      onClick={onCheckedChange ? () => onCheckedChange(!checked) : undefined}
     >
       <span
         className="absolute top-0.5 size-3.5 rounded-full bg-white"
@@ -89,20 +99,28 @@ interface FieldOption {
 }
 
 function SelectField({
+  disabled = true,
   label,
+  onValueChange,
   options,
   value,
 }: {
+  disabled?: boolean;
   label: string;
+  onValueChange?: (value: string) => void;
   options: readonly FieldOption[];
   value: string;
 }) {
   return (
     <select
       aria-label={label}
-      disabled
-      className="min-h-8 min-w-[148px] rounded-lg border border-border bg-accent px-2.5 text-[13px] text-foreground opacity-80"
+      disabled={disabled}
+      className={cn(
+        "min-h-8 min-w-[148px] rounded-lg border border-border bg-accent px-2.5 text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        disabled && "opacity-80",
+      )}
       value={value}
+      onChange={onValueChange ? (event) => onValueChange(event.target.value) : undefined}
     >
       {options.map((option) => (
         <option key={option.value} value={option.value}>
@@ -130,6 +148,7 @@ function LockedButton({ label, reason }: { label: string; reason: string }) {
     <button
       type="button"
       aria-disabled="true"
+      disabled
       className="inline-flex min-h-8 items-center justify-center rounded-lg border border-border px-3 text-[13px] text-muted-foreground opacity-60"
       title={reason}
     >
@@ -330,60 +349,13 @@ function ThemeOrbs() {
   );
 }
 
-function SchemeRadios() {
-  const { preference, setPreference } = useTheme();
-  const systemResolved = useSystemResolvedTheme();
-  const options: ReadonlyArray<{ description: string; label: string; value: ThemePreference }> = [
-    { label: "System", description: "Follow this device's appearance.", value: "system" },
-    { label: "Light", description: "Keep the workspace light.", value: "light" },
-    { label: "Dark", description: "Keep the workspace dark.", value: "dark" },
-  ];
-
-  return (
-    <fieldset className="m-0 border-0 p-0">
-      <legend className="mb-2 text-[13px] font-semibold text-foreground">Scheme</legend>
-      <div className="appearance-scheme-options">
-        {options.map((option) => {
-          const selected = preference === option.value;
-          const descriptionId = `theme-${option.value}-description`;
-          return (
-            <label key={option.value} className="relative block min-h-11 cursor-pointer md:min-h-8">
-              <input
-                aria-describedby={descriptionId}
-                aria-label={option.label}
-                className="peer sr-only"
-                type="radio"
-                name="theme"
-                value={option.value}
-                checked={selected}
-                onChange={() => setPreference(option.value)}
-              />
-              <span
-                className={cn(
-                  "flex h-full min-h-11 items-center rounded-[10px] border border-transparent bg-accent px-3 py-2 text-foreground outline-none transition-[border-color,box-shadow,background-color] duration-150 peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-background motion-reduce:transition-none md:min-h-8",
-                  selected && "border-primary",
-                )}
-                data-selected={selected ? "true" : "false"}
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[13px] font-medium">{option.label}</span>
-                  <span id={descriptionId} className="mt-0.5 block text-xs leading-4 text-muted-foreground">
-                    {option.value === "system" ? `Currently ${systemResolved}` : option.description}
-                  </span>
-                </span>
-              </span>
-            </label>
-          );
-        })}
-      </div>
-    </fieldset>
-  );
-}
-
 function AppearanceSection() {
+  const { density, glassOpacity, reducedMotion, setDensity, setGlassOpacity, setReducedMotion } =
+    useAppearancePrefs();
+
   return (
     <>
-      <div className="appearance-settings mb-6" id="setting-theme" tabIndex={-1}>
+      <div className="appearance-settings mb-[22px]" id="setting-theme" tabIndex={-1}>
         <div className="mb-2.5 flex items-center justify-between gap-3">
           <h2 className="m-0 text-[13px] font-semibold">Themes</h2>
           <div className="flex gap-2">
@@ -402,39 +374,43 @@ function AppearanceSection() {
         </p>
         <ThemeOrbs />
       </div>
-      <div className="mb-6">
-        <SchemeRadios />
-      </div>
       <SetRow
         description="How solid transient menus and dialogs appear. The workspace stays black."
         settingId="glass-opacity"
         title="Glass opacity"
       >
-        <span className="flex items-center gap-2.5">
-          <output className="min-w-[42px] text-right font-mono text-xs">92%</output>
+        <span className="flex items-center gap-3">
           <input
+            id="glass-opacity"
             aria-label="Glass opacity"
-            defaultValue={92}
-            disabled
-            max={100}
-            min={0}
+            className="glass-slider h-1 w-[120px] shrink-0"
+            max={GLASS_OPACITY_MAX}
+            min={GLASS_OPACITY_MIN}
             step={1}
+            style={{ ["--glass-slider-progress" as string]: `${glassSliderProgress(glassOpacity)}%` }}
             type="range"
+            value={glassOpacity}
+            onChange={(event) => setGlassOpacity(Number(event.target.value))}
           />
+          <output className="min-w-[42px] text-right font-mono text-xs tabular-nums" htmlFor="glass-opacity">
+            {glassOpacity}%
+          </output>
         </span>
       </SetRow>
       <SetRow
-        description="Row height and spacing in lists and tables."
+        description="Row height and spacing in settings and plugin rows."
         settingId="density"
         title="Density"
       >
         <SelectField
+          disabled={false}
           label="Density"
+          onValueChange={(value) => setDensity(value as "compact" | "regular")}
           options={[
             { label: "Compact", value: "compact" },
             { label: "Regular", value: "regular" },
           ]}
-          value="compact"
+          value={density}
         />
       </SetRow>
       <SetRow
@@ -442,7 +418,12 @@ function AppearanceSection() {
         settingId="reduced-motion"
         title="Reduced motion"
       >
-        <ToggleSwitch checked={false} label="Reduced motion" />
+        <ToggleSwitch
+          checked={reducedMotion}
+          label="Reduced motion"
+          locked={false}
+          onCheckedChange={setReducedMotion}
+        />
       </SetRow>
     </>
   );
