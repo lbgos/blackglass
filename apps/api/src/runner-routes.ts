@@ -99,9 +99,11 @@ export function registerRunnerControlRoutes(
     if (!body.success || !query.success) {
       return sendRunnerError(reply, 400, { code: "invalid_request" });
     }
-    let result: ReturnType<
-      RunnerRepository["requireAcceptedSession"]
-    > | ReturnType<RunRepository["acquireLease"]>;
+    let result:
+      | ReturnType<RunnerRepository["requireAcceptedSession"]>
+      | ReturnType<RunRepository["acquireLease"]>
+      | { ok: false; error: { code: "invalid_persisted_data" } }
+      | { ok: true; value: { run: unknown; lease: unknown; actionSnapshot: unknown } };
     try {
       result = options.engagementRepository.withWriteTx((transaction) => {
         const session = options.runnerRepository.requireAcceptedSession(
@@ -112,12 +114,46 @@ export function registerRunnerControlRoutes(
         if (!session.ok) return session;
         const queued = selectOldestQueuedRun(transaction.client);
         if (!queued.ok) return queued;
-        return transaction.acquireLease({
+        const actionResult = transaction.getAction(
+          queued.value.engagementId,
+          queued.value.actionId,
+        );
+        if (!actionResult.ok) {
+          return { ok: false as const, error: { code: "invalid_persisted_data" as const } };
+        }
+        const action = actionResult.value;
+        const queuedVersion = action.action.queuedSnapshotVersion;
+        if (queuedVersion === null) {
+          return { ok: false as const, error: { code: "invalid_persisted_data" as const } };
+        }
+        const snapshot = action.action.snapshots.find(
+          (candidate) => candidate.version === queuedVersion,
+        );
+        if (snapshot === undefined) {
+          return { ok: false as const, error: { code: "invalid_persisted_data" as const } };
+        }
+        if (
+          snapshot.actionId !== queued.value.actionId ||
+          snapshot.actionId !== action.action.actionId ||
+          snapshot.version !== queuedVersion
+        ) {
+          return { ok: false as const, error: { code: "invalid_persisted_data" as const } };
+        }
+        const leased = transaction.acquireLease({
           runId: queued.value.id,
           runnerId,
           sessionId: body.data.sessionId,
           serverNow: transaction.now().toISOString(),
         });
+        if (!leased.ok) return leased;
+        return {
+          ok: true as const,
+          value: {
+            run: leased.value.run,
+            lease: leased.value.lease,
+            actionSnapshot: snapshot,
+          },
+        };
       });
     } catch (error) {
       if (
@@ -152,8 +188,9 @@ export function registerRunnerControlRoutes(
       return sendRunnerError(reply, mapped.status, mapped.body);
     }
     const validated = AcquireRunnerLeaseResponseSchema.safeParse({
-      run: result.value.run,
-      lease: result.value.lease,
+      run: (result.value as { run: unknown }).run,
+      lease: (result.value as { lease: unknown }).lease,
+      actionSnapshot: (result.value as { actionSnapshot: unknown }).actionSnapshot,
     });
     if (!validated.success) {
       return sendRunnerError(reply, 500, { code: "invalid_persisted_data" });
