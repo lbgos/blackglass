@@ -58,8 +58,8 @@ interface LeaseIdentity {
 async function publishSingleArtifact(input: {
   config: RunnerConfig;
   lease: LeaseIdentity;
-  slot: "stdout" | "stderr";
-  kind: "stdout" | "stderr";
+  slot: "stdout" | "stderr" | "nmap-xml";
+  kind: "stdout" | "stderr" | "tool_raw";
   buffer: Buffer;
   truncated: boolean;
   isCancelled: boolean;
@@ -68,8 +68,8 @@ async function publishSingleArtifact(input: {
   const digestHex = sha256Hex(buffer);
   const declaredDigest = `sha256:${digestHex}`;
   const declaredSizeBytes = buffer.length;
-  const originalFileName = slot === "stdout" ? "stdout.log" : "stderr.log";
-  const declaredContentType = "text/plain; charset=utf-8";
+  const originalFileName = slot === "nmap-xml" ? "nmap.xml" : slot === "stdout" ? "stdout.log" : "stderr.log";
+  const declaredContentType = slot === "nmap-xml" ? "application/xml" : "text/plain; charset=utf-8";
   const completeness = completenessFor(truncated, isCancelled);
 
   const grantBody = {
@@ -276,7 +276,7 @@ export async function publishEvidenceArtifacts(
   config: RunnerConfig,
   lease: LeaseIdentity,
   result: ProcessResult,
-  options: { isCancelled: boolean },
+  options: { isCancelled: boolean; nmapXml?: Buffer },
 ): Promise<void> {
   const isCancelled = options.isCancelled;
   // Stdout then stderr sequentially. Preserve first slot if second fails.
@@ -298,4 +298,15 @@ export async function publishEvidenceArtifacts(
     truncated: result.stderrMeta.truncated,
     isCancelled,
   });
+  if (options.nmapXml !== undefined) {
+    await publishSingleArtifact({
+      config,
+      lease,
+      slot: "nmap-xml",
+      kind: "tool_raw",
+      buffer: options.nmapXml,
+      truncated: false,
+      isCancelled,
+    });
+  }
 }

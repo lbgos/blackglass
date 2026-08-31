@@ -940,13 +940,30 @@ describe("runner loop shutdown", () => {
       if (u.includes("/artifacts/grants")) {
         const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
         const slot = String(body.artifactSlot ?? "stdout");
-        return new Response(JSON.stringify({ artifactId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`, uploadId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`, runId: "run-1", leaseId: "lease-1", sessionId: "sess-1", fence: "1", eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: body.declaredSizeBytes, declaredDigest: body.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201, headers: { "content-type": "application/json" } });
+        let artifactId = "00000000-0000-4000-8000-000000000001";
+        let uploadId = "00000000-0000-4000-8000-000000000011";
+        let kind = slot;
+        let fileName = `${slot}.log`;
+        let cType = "text/plain; charset=utf-8";
+        if (slot === "stderr") {
+          artifactId = "00000000-0000-4000-8000-000000000002";
+          uploadId = "00000000-0000-4000-8000-000000000012";
+        } else if (slot === "nmap-xml") {
+          artifactId = "00000000-0000-4000-8000-000000000003";
+          uploadId = "00000000-0000-4000-8000-000000000013";
+          kind = "tool_raw";
+          fileName = "nmap.xml";
+          cType = "application/xml";
+        }
+        return new Response(JSON.stringify({ artifactId, uploadId, runId: "run-1", leaseId: "lease-1", sessionId: "sess-1", fence: "1", eventSequence: 1, artifactSlot: slot, kind, declaredSizeBytes: body.declaredSizeBytes, declaredDigest: body.declaredDigest, originalFileName: fileName, declaredContentType: cType, createdAt: new Date().toISOString() }), { status: 201, headers: { "content-type": "application/json" } });
       }
       if (u.includes("/uploads/") && method === "PUT") return new Response(null, { status: 204 });
       if (u.includes("/uploads/") && u.includes("/complete") && method === "POST") {
         const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
         const uploadId = u.split("/uploads/")[1]?.split("/")[0] ?? "";
-        const artifactId = uploadId === "00000000-0000-4000-8000-000000000012" ? "00000000-0000-4000-8000-000000000002" : "00000000-0000-4000-8000-000000000001";
+        let artifactId = "00000000-0000-4000-8000-000000000001";
+        if (uploadId === "00000000-0000-4000-8000-000000000012") artifactId = "00000000-0000-4000-8000-000000000002";
+        else if (uploadId === "00000000-0000-4000-8000-000000000013") artifactId = "00000000-0000-4000-8000-000000000003";
         return new Response(JSON.stringify({ disposition: "published", artifactId, sizeBytes: body.sizeBytes, digest: body.digest, completeness: body.completeness }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (u.includes("/complete") && !u.includes("/artifacts")) {

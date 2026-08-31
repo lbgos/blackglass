@@ -1,7 +1,9 @@
-import { access, lstat, mkdir, realpath, stat as fsStat } from "node:fs/promises";
+import { access, lstat, mkdir, open, realpath, stat as fsStat } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
+
+import { EVIDENCE_QUOTA_DEFAULTS } from "@blackglass/contracts";
 
 import { BoundedCollector, DEFAULT_COMBINED_RETAINED_OUTPUT } from "./bounded-output.js";
 import { buildFakeActionArgv, controlledEnv, type FakeActionRequest } from "./fake-action.js";
@@ -264,4 +266,40 @@ export async function verifyExecutable(executable: string): Promise<void> {
   const st = await fsStat(executable);
   if (!st.isFile()) throw new Error("executable_not_regular_file");
   await access(executable, fsConstants.X_OK);
+}
+
+export async function readNmapXmlSecurely(params: {
+  runRoot: string;
+  runId: string;
+  fence: string;
+}): Promise<Buffer> {
+  const expected = resolveNmapXmlPath(params.runRoot, params.runId, params.fence);
+  const limit = EVIDENCE_QUOTA_DEFAULTS.perArtifactBytes;
+  let fh: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    fh = await open(expected, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  } catch {
+    throw new Error("nmap_xml_unavailable");
+  }
+  try {
+    const st = await fh.stat();
+    if (!st.isFile()) throw new Error("nmap_xml_unavailable");
+    if (st.nlink !== 1) throw new Error("nmap_xml_unavailable");
+    if (st.size > limit) throw new Error("nmap_xml_unavailable");
+    if (st.size === 0) return Buffer.alloc(0);
+    const buf = Buffer.allocUnsafe(st.size);
+    let off = 0;
+    while (off < st.size) {
+      const { bytesRead } = await fh.read(buf, off, st.size - off, null);
+      if (bytesRead === 0) break;
+      off += bytesRead;
+    }
+    if (off !== st.size) throw new Error("nmap_xml_unavailable");
+    return buf;
+  } catch (e) {
+    if (e instanceof Error && e.message === "nmap_xml_unavailable") throw e;
+    throw new Error("nmap_xml_unavailable");
+  } finally {
+    await fh?.close().catch(() => {});
+  }
 }

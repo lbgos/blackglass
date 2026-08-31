@@ -18,7 +18,7 @@ import { buildNmapArgv } from "@blackglass/domain";
 import { resolveRunnerConfig, type RunnerConfig } from "./config.js";
 import { EvidencePublicationError, publishEvidenceArtifacts } from "./evidence-client.js";
 import { getOrCreateOutboxEntry, removeOutboxAtomically } from "./outbox.js";
-import { resolveNmapXmlPath, runSupervisedCommand, verifyExecutable } from "./process.js";
+import { readNmapXmlSecurely, resolveNmapXmlPath, runSupervisedCommand, verifyExecutable } from "./process.js";
 
 export type HandshakeResponse = ReturnType<typeof RunnerHandshakeAcceptedResponseSchema.parse>;
 export type AcquiredLease = ReturnType<typeof AcquireRunnerLeaseResponseSchema.parse>;
@@ -488,8 +488,16 @@ export async function runOnce(
 
   if (isCancelledForEvidence) {
     if (result !== null) {
+      let xml: Buffer | undefined;
       try {
-        await publishEvidenceArtifacts(config, lease, result, { isCancelled: true });
+        xml = await readNmapXmlSecurely({ runRoot: config.runRoot, runId: lease.runId, fence: lease.fence });
+      } catch {}
+      try {
+        if (xml !== undefined) {
+          await publishEvidenceArtifacts(config, lease, result, { isCancelled: true, nmapXml: xml });
+        } else {
+          await publishEvidenceArtifacts(config, lease, result, { isCancelled: true });
+        }
       } catch {}
     }
     await completeRun(config, lease, 2, "failed", "runner_lost").catch(() => {});
@@ -498,8 +506,28 @@ export async function runOnce(
   }
 
   if (result !== null) {
+    let xml: Buffer | undefined;
+    let xmlOk = false;
     try {
-      await publishEvidenceArtifacts(config, lease, result, { isCancelled: false });
+      xml = await readNmapXmlSecurely({ runRoot: config.runRoot, runId: lease.runId, fence: lease.fence });
+      xmlOk = true;
+    } catch {
+      xmlOk = false;
+    }
+    const isSuccess = result.exitCode === 0;
+    if (isSuccess && !xmlOk) {
+      try {
+        await publishEvidenceArtifacts(config, lease, result, { isCancelled: false });
+      } catch {}
+      await completeRun(config, lease, 2, "failed", "evidence_publication_failed").catch(() => {});
+      throw new EvidencePublicationError("evidence_publication_failed");
+    }
+    try {
+      if (xmlOk && xml !== undefined) {
+        await publishEvidenceArtifacts(config, lease, result, { isCancelled: false, nmapXml: xml });
+      } else {
+        await publishEvidenceArtifacts(config, lease, result, { isCancelled: false });
+      }
     } catch (e) {
       try {
         await completeRun(config, lease, 2, "failed", "evidence_publication_failed");
