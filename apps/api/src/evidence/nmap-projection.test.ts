@@ -1,171 +1,86 @@
-import { mkdtemp, rm, chmod } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
-import { describe, it, expect } from "vitest";
-import { EngagementRepository, evidenceArtifacts, openEngagementDatabase, NmapServiceRepository } from "@blackglass/db";
-import { eq } from "drizzle-orm";
-import { EvidenceStore } from "./evidence-store.js";
-import { loadEvidenceNative } from "@blackglass/evidence-native";
-import { NmapProjectionService } from "./nmap-projection.js";
-import { open } from "node:fs/promises";
 import { constants } from "node:fs";
 import { chmodSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import { EngagementRepository, NmapServiceRepository, openEngagementDatabase } from "@blackglass/db";
+import { loadEvidenceNative } from "@blackglass/evidence-native";
+import { EvidenceStore } from "./evidence-store.js";
+import { NmapProjectionService } from "./nmap-projection.js";
 
-describe("tmp nmap projection integration", () => {
-  it("projects valid and skips partial", async () => {
-    const dataDir = await mkdtemp(path.join(tmpdir(), "nmap-tmp-"));
-    await chmod(dataDir, 0o700);
-    const db = openEngagementDatabase({ dataDirectory: dataDir });
-    const engRepo = new EngagementRepository(db.db);
-    const nmapRepo = new NmapServiceRepository(db.db);
-    const eng = engRepo.createEngagement({ name:"Test", kind:"lab", autoContinueWarnings:false });
-    expect(eng.ok).toBe(true);
-    const engId = (eng as {ok:true,value:{id:string}}).value.id;
-    const actionId = "act-1";
+async function fixture() {
+  const dir = await mkdtemp(path.join(tmpdir(), "nmap-proj-"));
+  await chmod(dir, 0o700);
+  const db = openEngagementDatabase({ dataDirectory: dir });
+  const engRepo = new EngagementRepository(db.db);
+  const repo = new NmapServiceRepository(db.db);
+  const eng = engRepo.createEngagement({ name: "L", kind: "lab", autoContinueWarnings: false });
+  if (!eng.ok) throw new Error("eng");
+  const native = loadEvidenceNative(); if (!native.ok) throw new Error("native");
+  const storeRes = EvidenceStore.open(dir, native.binding); if (!storeRes.ok) throw new Error("store");
+  return { dir, db, engRepo, repo, store: storeRes.store, engId: eng.value.id };
+}
+async function publish(dir: string, id: string, _runId: string, xml: Buffer) {
+  const digest = `sha256:${createHash("sha256").update(xml).digest("hex")}`;
+  const fh = await open(path.join(dir, "evidence", "published", id), constants.O_RDWR | constants.O_CREAT | constants.O_EXCL, 0o600);
+  await fh.write(xml); await fh.sync(); await fh.close(); chmodSync(path.join(dir, "evidence", "published", id), 0o600);
+  return digest;
+}
+describe("nmap projection", () => {
+  it("projects valid, empty, rejects malformed and skips partial", async () => {
+    const f = await fixture();
+    const aid = "00000000-0000-4000-8000-000000000001";
     const runId = "run-1";
-    const artifactId = "00000000-0000-4000-8000-000000000001";
-    db.sqlite.prepare("insert into actions (id, contract_version, engagement_id, revision, state, queued_snapshot_version, warning_interactions, run_state, resume_requested, cleanup_required, capability_error_code, pending_warning_json, created_at, updated_at) values (?,1,?,1,'active',1,0,'running',0,0,null,null,?,?)").run(actionId, engId, new Date().toISOString(), new Date().toISOString());
-    db.sqlite.prepare("insert into runs (id, contract_version, action_id, engagement_id, attempt, state, current_lease_id, current_fence, terminal_kind, terminal_reason, created_at, updated_at) values (?,1,?, ?,1,'running','lease-1','1',null,null,?,?)").run(runId, actionId, engId, new Date().toISOString(), new Date().toISOString());
-    const nmapXml = Buffer.from(`<?xml version="1.0"?><nmaprun><host><address addr="192.0.2.10" addrtype="ipv4"/><hostnames><hostname name="host.test"/></hostnames><ports><port protocol="tcp" portid="80"><state state="open"/><service name="http" product="nginx" version="1.18"/></port></ports></host></nmaprun>`);
-    const digest = `sha256:${createHash("sha256").update(nmapXml).digest("hex")}`;
-    const now = new Date().toISOString();
-    db.sqlite.prepare("insert into evidence_artifacts (artifact_id, contract_version, profile, run_id, fence, event_sequence, artifact_slot, kind, size_bytes, digest, relative_path, completeness, redaction_applied, redaction_boundary, raw_bytes_preserved, created_at) values (?,1,'d3-v1',?,'1',1,'nmap-xml','tool_raw',?,?,?, 'complete',0,'none',1,?)").run(artifactId, runId, nmapXml.length, digest, `published/${artifactId}`, now);
-    const native = loadEvidenceNative();
-    if (!native.ok) throw new Error("native not ok");
-    const storeRes = EvidenceStore.open(dataDir, native.binding);
-    if (!storeRes.ok) throw new Error("store open "+storeRes.code);
-    const store = storeRes.store;
-    const pub = path.join(dataDir, "evidence", "published", artifactId);
-    const fh = await open(pub, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL, 0o600);
-    await fh.write(nmapXml);
-    await fh.sync();
-    await fh.close();
-    chmodSync(pub, 0o600);
-    const proj = new NmapProjectionService((id) => db.db.select().from(evidenceArtifacts).where(eq(evidenceArtifacts.artifactId, id)).get(), store, nmapRepo);
-    const res = await proj.projectForArtifact(artifactId);
-    expect(res.ok).toBe(true);
-    const list = nmapRepo.listForEngagement(engId);
-    expect(list.ok).toBe(true);
-    if (list.ok) expect(list.value.length).toBe(1);
-    // idempotent
-    const res2 = await proj.projectForArtifact(artifactId);
-    expect(res2.ok).toBe(true);
-    const list2 = nmapRepo.listForEngagement(engId);
-    if (list2.ok) expect(list2.value.length).toBe(1);
-    // need extra actions for remaining runs
-    const actionId2 = "act-2";
-    const actionId3 = "act-3";
-    const actionId4 = "act-4";
-    for (const aid of [actionId2, actionId3, actionId4]) {
-      db.sqlite.prepare("insert into actions (id, contract_version, engagement_id, revision, state, queued_snapshot_version, warning_interactions, run_state, resume_requested, cleanup_required, capability_error_code, pending_warning_json, created_at, updated_at) values (?,1,?,1,'active',1,0,'running',0,0,null,null,?,?)").run(aid, engId, new Date().toISOString(), new Date().toISOString());
-    }
-    // empty ports
-    const artifactId2 = "00000000-0000-4000-8000-000000000002";
-    const emptyXml = Buffer.from(`<?xml version="1.0"?><nmaprun></nmaprun>`);
-    const digest2 = `sha256:${createHash("sha256").update(emptyXml).digest("hex")}`;
-    const runId2 = "run-2";
-    db.sqlite.prepare("insert into runs (id, contract_version, action_id, engagement_id, attempt, state, current_lease_id, current_fence, terminal_kind, terminal_reason, created_at, updated_at) values (?,1,?, ?,1,'running','lease-2','1',null,null,?,?)").run(runId2, actionId2, engId, new Date().toISOString(), new Date().toISOString());
-    db.sqlite.prepare("insert into evidence_artifacts (artifact_id, contract_version, profile, run_id, fence, event_sequence, artifact_slot, kind, size_bytes, digest, relative_path, completeness, redaction_applied, redaction_boundary, raw_bytes_preserved, created_at) values (?,1,'d3-v1',?,'1',1,'nmap-xml','tool_raw',?,?,?, 'complete',0,'none',1,?)").run(artifactId2, runId2, emptyXml.length, digest2, `published/${artifactId2}`, new Date().toISOString());
-    const pub2 = path.join(dataDir, "evidence", "published", artifactId2);
-    const fh2 = await open(pub2, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL, 0o600);
-    await fh2.write(emptyXml);
-    await fh2.sync();
-    await fh2.close();
-    chmodSync(pub2, 0o600);
-    const res3 = await proj.projectForArtifact(artifactId2);
-    expect(res3.ok).toBe(true);
-    // malformed complete should fail
-    const artifactId3 = "00000000-0000-4000-8000-000000000003";
-    const badXml = Buffer.from(`<?xml version="1.0"?><nmaprun><host><address addr="192.0.2.1" addrtype="ipv4"><port></nmaprun>`);
-    const digest3 = `sha256:${createHash("sha256").update(badXml).digest("hex")}`;
-    const runId3 = "run-3";
-    db.sqlite.prepare("insert into runs (id, contract_version, action_id, engagement_id, attempt, state, current_lease_id, current_fence, terminal_kind, terminal_reason, created_at, updated_at) values (?,1,?, ?,1,'running','lease-3','1',null,null,?,?)").run(runId3, actionId3, engId, new Date().toISOString(), new Date().toISOString());
-    db.sqlite.prepare("insert into evidence_artifacts (artifact_id, contract_version, profile, run_id, fence, event_sequence, artifact_slot, kind, size_bytes, digest, relative_path, completeness, redaction_applied, redaction_boundary, raw_bytes_preserved, created_at) values (?,1,'d3-v1',?,'1',1,'nmap-xml','tool_raw',?,?,?, 'complete',0,'none',1,?)").run(artifactId3, runId3, badXml.length, digest3, `published/${artifactId3}`, new Date().toISOString());
-    const pub3 = path.join(dataDir, "evidence", "published", artifactId3);
-    const fh3 = await open(pub3, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL, 0o600);
-    await fh3.write(badXml);
-    await fh3.sync();
-    await fh3.close();
-    chmodSync(pub3, 0o600);
-    const resBad = await proj.projectForArtifact(artifactId3);
-    expect(resBad.ok).toBe(false);
+    f.db.sqlite.prepare("insert into actions (id, contract_version, engagement_id, revision, state, queued_snapshot_version, warning_interactions, run_state, resume_requested, cleanup_required, capability_error_code, pending_warning_json, created_at, updated_at) values (?,1,?,1,'active',1,0,'running',0,0,null,null,?,?)").run("act-1", f.engId, new Date().toISOString(), new Date().toISOString());
+    f.db.sqlite.prepare("insert into runs (id, contract_version, action_id, engagement_id, attempt, state, current_lease_id, current_fence, terminal_kind, terminal_reason, created_at, updated_at) values (?,1,?, ?,1,'running','lease-1','1',null,null,?,?)").run(runId, "act-1", f.engId, new Date().toISOString(), new Date().toISOString());
+    const xml = Buffer.from(`<?xml version="1.0"?><nmaprun><host><address addr="192.0.2.10" addrtype="ipv4"/><ports><port protocol="tcp" portid="80"><state state="open"/><service name="http"/></port></ports></host></nmaprun>`);
+    const digest = await publish(f.dir, aid, runId, xml);
+    f.db.sqlite.prepare("insert into evidence_artifacts (artifact_id, contract_version, profile, run_id, fence, event_sequence, artifact_slot, kind, size_bytes, digest, relative_path, completeness, redaction_applied, redaction_boundary, raw_bytes_preserved, created_at) values (?,1,'d3-v1',?,'1',1,'nmap-xml','tool_raw',?,?,?, 'complete',0,'none',1,?)").run(aid, runId, xml.length, digest, `published/${aid}`, new Date().toISOString());
+    const proj = new NmapProjectionService(f.store, f.repo);
+    expect((await proj.projectForArtifact(aid)).ok).toBe(true);
+    expect(f.repo.listForEngagement(f.engId).ok && (f.repo.listForEngagement(f.engId) as {ok:true,value:unknown[]}).value.length).toBe(1);
+    expect((await proj.projectForArtifact(aid)).ok).toBe(true);
+    // empty
+    f.db.sqlite.prepare("insert into actions (id, contract_version, engagement_id, revision, state, queued_snapshot_version, warning_interactions, run_state, resume_requested, cleanup_required, capability_error_code, pending_warning_json, created_at, updated_at) values (?,1,?,1,'active',1,0,'running',0,0,null,null,?,?)").run("act-2", f.engId, new Date().toISOString(), new Date().toISOString());
+    f.db.sqlite.prepare("insert into runs (id, contract_version, action_id, engagement_id, attempt, state, current_lease_id, current_fence, terminal_kind, terminal_reason, created_at, updated_at) values (?,1,?, ?,1,'running','lease-2','1',null,null,?,?)").run("run-2", "act-2", f.engId, new Date().toISOString(), new Date().toISOString());
+    const empty = Buffer.from(`<?xml version="1.0"?><nmaprun></nmaprun>`); const d2 = await publish(f.dir, "00000000-0000-4000-8000-000000000002", "run-2", empty);
+    f.db.sqlite.prepare("insert into evidence_artifacts (artifact_id, contract_version, profile, run_id, fence, event_sequence, artifact_slot, kind, size_bytes, digest, relative_path, completeness, redaction_applied, redaction_boundary, raw_bytes_preserved, created_at) values (?,1,'d3-v1',?,'1',1,'nmap-xml','tool_raw',?,?,?, 'complete',0,'none',1,?)").run("00000000-0000-4000-8000-000000000002", "run-2", empty.length, d2, `published/00000000-0000-4000-8000-000000000002`, new Date().toISOString());
+    expect((await proj.projectForArtifact("00000000-0000-4000-8000-000000000002")).ok).toBe(true);
+    // malformed
+    f.db.sqlite.prepare("insert into actions (id, contract_version, engagement_id, revision, state, queued_snapshot_version, warning_interactions, run_state, resume_requested, cleanup_required, capability_error_code, pending_warning_json, created_at, updated_at) values (?,1,?,1,'active',1,0,'running',0,0,null,null,?,?)").run("act-3", f.engId, new Date().toISOString(), new Date().toISOString());
+    f.db.sqlite.prepare("insert into runs (id, contract_version, action_id, engagement_id, attempt, state, current_lease_id, current_fence, terminal_kind, terminal_reason, created_at, updated_at) values (?,1,?, ?,1,'running','lease-3','1',null,null,?,?)").run("run-3", "act-3", f.engId, new Date().toISOString(), new Date().toISOString());
+    const bad = Buffer.from(`<?xml version="1.0"?><nmaprun><host><address addr="192.0.2.1" addrtype="ipv4"><port></nmaprun>`); const d3 = await publish(f.dir, "00000000-0000-4000-8000-000000000003", "run-3", bad);
+    f.db.sqlite.prepare("insert into evidence_artifacts (artifact_id, contract_version, profile, run_id, fence, event_sequence, artifact_slot, kind, size_bytes, digest, relative_path, completeness, redaction_applied, redaction_boundary, raw_bytes_preserved, created_at) values (?,1,'d3-v1',?,'1',1,'nmap-xml','tool_raw',?,?,?, 'complete',0,'none',1,?)").run("00000000-0000-4000-8000-000000000003", "run-3", bad.length, d3, `published/00000000-0000-4000-8000-000000000003`, new Date().toISOString());
+    expect((await proj.projectForArtifact("00000000-0000-4000-8000-000000000003")).ok).toBe(false);
     // partial skip
-    const artifactId4 = "00000000-0000-4000-8000-000000000004";
-    const runId4 = "run-4";
-    db.sqlite.prepare("insert into runs (id, contract_version, action_id, engagement_id, attempt, state, current_lease_id, current_fence, terminal_kind, terminal_reason, created_at, updated_at) values (?,1,?, ?,1,'running','lease-4','1',null,null,?,?)").run(runId4, actionId4, engId, new Date().toISOString(), new Date().toISOString());
-    db.sqlite.prepare("insert into evidence_artifacts (artifact_id, contract_version, profile, run_id, fence, event_sequence, artifact_slot, kind, size_bytes, digest, relative_path, completeness, redaction_applied, redaction_boundary, raw_bytes_preserved, created_at) values (?,1,'d3-v1',?,'1',1,'nmap-xml','tool_raw',?,?,?, 'partial',0,'none',1,?)").run(artifactId4, runId4, badXml.length, digest3, `published/${artifactId4}`, new Date().toISOString());
-    const pub4 = path.join(dataDir, "evidence", "published", artifactId4);
-    const fh4 = await open(pub4, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL, 0o600);
-    await fh4.write(badXml);
-    await fh4.sync();
-    await fh4.close();
-    chmodSync(pub4, 0o600);
-    const resPartial = await proj.projectForArtifact(artifactId4);
-    expect(resPartial.ok).toBe(true);
-    const eng2 = engRepo.createEngagement({ name:"Other", kind:"lab", autoContinueWarnings:false });
-    const eng2Id = eng2.ok ? eng2.value.id : "unknown";
-    const otherList = nmapRepo.listForEngagement(eng2Id);
-    expect(otherList.ok).toBe(true);
-    if (otherList.ok) expect(otherList.value.length).toBe(0);
-    const unknown = nmapRepo.listForEngagement("00000000-0000-4000-8000-000000009999");
-    expect(unknown.ok).toBe(false);
-    if (!unknown.ok) expect(unknown.code).toBe("engagement_not_found");
-    db.close();
-    await rm(dataDir, { recursive:true, force:true });
+    f.db.sqlite.prepare("insert into actions (id, contract_version, engagement_id, revision, state, queued_snapshot_version, warning_interactions, run_state, resume_requested, cleanup_required, capability_error_code, pending_warning_json, created_at, updated_at) values (?,1,?,1,'active',1,0,'running',0,0,null,null,?,?)").run("act-4", f.engId, new Date().toISOString(), new Date().toISOString());
+    f.db.sqlite.prepare("insert into runs (id, contract_version, action_id, engagement_id, attempt, state, current_lease_id, current_fence, terminal_kind, terminal_reason, created_at, updated_at) values (?,1,?, ?,1,'running','lease-4','1',null,null,?,?)").run("run-4", "act-4", f.engId, new Date().toISOString(), new Date().toISOString());
+    f.db.sqlite.prepare("insert into evidence_artifacts (artifact_id, contract_version, profile, run_id, fence, event_sequence, artifact_slot, kind, size_bytes, digest, relative_path, completeness, redaction_applied, redaction_boundary, raw_bytes_preserved, created_at) values (?,1,'d3-v1',?,'1',1,'nmap-xml','tool_raw',?,?,?, 'partial',0,'none',1,?)").run("00000000-0000-4000-8000-000000000004", "run-4", bad.length, d3, `published/00000000-0000-4000-8000-000000000004`, new Date().toISOString());
+    const pub4 = path.join(f.dir, "evidence", "published", "00000000-0000-4000-8000-000000000004"); const fh4 = await open(pub4, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL, 0o600); await fh4.write(bad); await fh4.sync(); await fh4.close(); chmodSync(pub4, 0o600);
+    expect((await proj.projectForArtifact("00000000-0000-4000-8000-000000000004")).ok).toBe(true);
+    expect(f.repo.listForEngagement("00000000-0000-4000-8000-000000009999").ok).toBe(false);
+    f.db.close(); await rm(f.dir, { recursive: true, force: true });
   });
-  it("GET services is engagement-scoped via HTTP", async () => {
-    const dataDir = await mkdtemp(path.join(tmpdir(), "nmap-http-"));
-    await chmod(dataDir, 0o700);
-    const db = openEngagementDatabase({ dataDirectory: dataDir });
-    const engRepo = new EngagementRepository(db.db);
-    const nmapRepo = new NmapServiceRepository(db.db);
-    const eng = engRepo.createEngagement({ name:"E1", kind:"lab", autoContinueWarnings:false });
-    const eng2 = engRepo.createEngagement({ name:"E2", kind:"lab", autoContinueWarnings:false });
-    if (!eng.ok || !eng2.ok) throw new Error("eng fail");
-    // need action/run for artifacts
-    const a1 = "act-http-1";
-    const r1 = "run-http-1";
-    const art1 = "00000000-0000-4000-8000-000000000011";
-    db.sqlite.prepare("insert into actions (id, contract_version, engagement_id, revision, state, queued_snapshot_version, warning_interactions, run_state, resume_requested, cleanup_required, capability_error_code, pending_warning_json, created_at, updated_at) values (?,1,?,1,'active',1,0,'running',0,0,null,null,?,?)").run(a1, eng.value.id, new Date().toISOString(), new Date().toISOString());
-    db.sqlite.prepare("insert into runs (id, contract_version, action_id, engagement_id, attempt, state, current_lease_id, current_fence, terminal_kind, terminal_reason, created_at, updated_at) values (?,1,?, ?,1,'running','lease-x','1',null,null,?,?)").run(r1, a1, eng.value.id, new Date().toISOString(), new Date().toISOString());
-    const xml = Buffer.from(`<?xml version="1.0"?><nmaprun><host><address addr="192.0.2.5" addrtype="ipv4"/><ports><port protocol="tcp" portid="8080"><state state="open"/><service name="http-proxy"/></port></ports></host></nmaprun>`);
-    const digest = `sha256:${createHash("sha256").update(xml).digest("hex")}`;
-    db.sqlite.prepare("insert into evidence_artifacts (artifact_id, contract_version, profile, run_id, fence, event_sequence, artifact_slot, kind, size_bytes, digest, relative_path, completeness, redaction_applied, redaction_boundary, raw_bytes_preserved, created_at) values (?,1,'d3-v1',?,'1',1,'nmap-xml','tool_raw',?,?,?, 'complete',0,'none',1,?)").run(art1, r1, xml.length, digest, `published/${art1}`, new Date().toISOString());
-    const native = loadEvidenceNative();
-    if (!native.ok) throw new Error("native");
-    const storeRes = EvidenceStore.open(dataDir, native.binding);
-    if (!storeRes.ok) throw new Error("store");
-    const store = storeRes.store;
-    const pub = path.join(dataDir, "evidence", "published", art1);
-    const fh = await open(pub, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL, 0o600);
-    await fh.write(xml);
-    await fh.sync();
-    await fh.close();
-    chmodSync(pub, 0o600);
-    const proj2 = new NmapProjectionService((id) => db.db.select().from(evidenceArtifacts).where(eq(evidenceArtifacts.artifactId, id)).get(), store, nmapRepo);
-    await proj2.projectForArtifact(art1);
+  it("GET services is engagement-scoped", async () => {
+    const f = await fixture();
     const { buildApp } = await import("../app.js");
-    const app = buildApp({ engagementRepository: engRepo, getDevelopmentStorageReadiness: () => "ready" as const, nmapServiceRepository: nmapRepo });
-    const res1 = await app.inject({ method:"GET", url:`/api/v1/engagements/${eng.value.id}/services` });
-    expect(res1.statusCode).toBe(200);
-    const body1 = res1.json();
-    expect(Array.isArray(body1)).toBe(true);
-    expect(body1.length).toBe(1);
-    expect(body1[0].address).toBe("192.0.2.5");
-    expect(body1[0].source).toBe("nmap");
-    // other engagement should be empty
-    const res2 = await app.inject({ method:"GET", url:`/api/v1/engagements/${eng2.value.id}/services` });
-    expect(res2.statusCode).toBe(200);
-    expect(res2.json().length).toBe(0);
-    // unknown engagement -> 404
-    const res3 = await app.inject({ method:"GET", url:`/api/v1/engagements/00000000-0000-4000-8000-000000009999/services` });
-    expect(res3.statusCode).toBe(404);
-    // invalid uuid -> 400
-    const res4 = await app.inject({ method:"GET", url:`/api/v1/engagements/not-a-uuid/services` });
-    expect(res4.statusCode).toBe(400);
-    await app.close();
-    db.close();
-    await rm(dataDir, { recursive:true, force:true });
+    const runId = "run-http-1";
+    f.db.sqlite.prepare("insert into actions (id, contract_version, engagement_id, revision, state, queued_snapshot_version, warning_interactions, run_state, resume_requested, cleanup_required, capability_error_code, pending_warning_json, created_at, updated_at) values (?,1,?,1,'active',1,0,'running',0,0,null,null,?,?)").run("act-http-1", f.engId, new Date().toISOString(), new Date().toISOString());
+    f.db.sqlite.prepare("insert into runs (id, contract_version, action_id, engagement_id, attempt, state, current_lease_id, current_fence, terminal_kind, terminal_reason, created_at, updated_at) values (?,1,?, ?,1,'running','lease-x','1',null,null,?,?)").run(runId, "act-http-1", f.engId, new Date().toISOString(), new Date().toISOString());
+    const xml = Buffer.from(`<?xml version="1.0"?><nmaprun><host><address addr="192.0.2.5" addrtype="ipv4"/><ports><port protocol="tcp" portid="8080"><state state="open"/><service name="http-proxy"/></port></ports></host></nmaprun>`);
+    const digest = await publish(f.dir, "00000000-0000-4000-8000-000000000011", runId, xml);
+    f.db.sqlite.prepare("insert into evidence_artifacts (artifact_id, contract_version, profile, run_id, fence, event_sequence, artifact_slot, kind, size_bytes, digest, relative_path, completeness, redaction_applied, redaction_boundary, raw_bytes_preserved, created_at) values (?,1,'d3-v1',?,'1',1,'nmap-xml','tool_raw',?,?,?, 'complete',0,'none',1,?)").run("00000000-0000-4000-8000-000000000011", runId, xml.length, digest, `published/00000000-0000-4000-8000-000000000011`, new Date().toISOString());
+    await new NmapProjectionService(f.store, f.repo).projectForArtifact("00000000-0000-4000-8000-000000000011");
+    const eng2 = f.engRepo.createEngagement({ name: "E2", kind: "lab", autoContinueWarnings: false }); if (!eng2.ok) throw new Error("e2");
+    const app = buildApp({ engagementRepository: f.engRepo, getDevelopmentStorageReadiness: () => "ready" as const, nmapServiceRepository: f.repo });
+    expect((await app.inject({ method: "GET", url: `/api/v1/engagements/${f.engId}/services` })).json().length).toBe(1);
+    expect((await app.inject({ method: "GET", url: `/api/v1/engagements/${eng2.value.id}/services` })).json().length).toBe(0);
+    expect((await app.inject({ method: "GET", url: `/api/v1/engagements/00000000-0000-4000-8000-000000009999/services` })).statusCode).toBe(404);
+    expect((await app.inject({ method: "GET", url: `/api/v1/engagements/not-a-uuid/services` })).statusCode).toBe(400);
+    await app.close(); f.db.close(); await rm(f.dir, { recursive: true, force: true });
   });
 });

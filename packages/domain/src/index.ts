@@ -31,4 +31,4 @@ export {
   selectExecutionRepresentation,
 } from "./saved-scope.js";
 export { buildNmapArgv } from "./nmap-argv.js";
-export { parseNmapXml, NMAP_PARSER_VERSION, NMAP_MAX_BYTES, type ParsedNmapService, type ParseNmapXmlResult } from "./nmap-xml.js";
+export { parseNmapXml, type ParsedNmapService, type ParseNmapXmlResult } from "./nmap-xml.js";

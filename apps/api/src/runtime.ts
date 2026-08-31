@@ -5,11 +5,9 @@ import {
   OperatorCommandRepository,
   RunRepository,
   RunnerRepository,
-  evidenceArtifacts,
   openEngagementDatabase,
   type EngagementDatabase,
 } from "@blackglass/db";
-import { eq } from "drizzle-orm";
 import { loadEvidenceNative } from "@blackglass/evidence-native";
 import type { FastifyInstance } from "fastify";
 
@@ -62,7 +60,7 @@ export async function buildStorageBackedApp(
           throw new Error("backup lockfile could not be established");
         }
         backupLock = lockResult.lock;
-        const projection = new NmapProjectionService((id) => database.db.select().from(evidenceArtifacts).where(eq(evidenceArtifacts.artifactId, id)).get(), storeResult.store, nmapServiceRepository);
+        const projection = new NmapProjectionService(storeResult.store, nmapServiceRepository);
         evidencePublication = new EvidencePublicationService({
           repository: evidenceGrantRepository,
           store: storeResult.store,

@@ -58,6 +58,12 @@ export const NMAP_MAX_XML_BYTES = 16 * 1024 * 1024;
 export const NMAP_MAX_HOSTS = 2048;
 export const NMAP_MAX_SERVICES = 8192;
 
+export const NmapParserVersionSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9._-]*$/);
+
 const BoundedString = (min: number, max: number) => z.string().min(min).max(max);
 const BoundedNullableString = (max: number) => z.string().min(1).max(max).nullable();
 
@@ -73,7 +79,7 @@ export const NmapServiceObservationSchema = z.strictObject({
 
 export const NmapProjectedServiceSchema = NmapServiceObservationSchema.extend({
   source: z.literal("nmap"),
-  parserVersion: z.literal(NMAP_PARSER_VERSION),
+  parserVersion: NmapParserVersionSchema,
   runId: z.string().min(1).max(255),
   artifactId: OpaqueArtifactIdSchema,
   artifactDigest: EvidenceDigestSchema,

@@ -11,7 +11,7 @@ CREATE TABLE `nmap_services` (
 	`observed_at` text NOT NULL,
 	PRIMARY KEY(`artifact_id`, `parser_version`, `address`, `port`, `protocol`),
 	CONSTRAINT "nmap_service_artifact_id" CHECK(length("nmap_services"."artifact_id") between 1 and 127 and substr("nmap_services"."artifact_id", 1, 1) glob '[a-z0-9]' and "nmap_services"."artifact_id" not glob '*[^a-z0-9-]*'),
-	CONSTRAINT "nmap_service_parser_version" CHECK("nmap_services"."parser_version" = 'nmap-xml-v1'),
+	CONSTRAINT "nmap_service_parser_version" CHECK(length("nmap_services"."parser_version") between 1 and 64 and "nmap_services"."parser_version" not glob '*[^a-z0-9._-]*' and substr("nmap_services"."parser_version", 1, 1) glob '[a-z0-9]'),
 	CONSTRAINT "nmap_service_address" CHECK(length("nmap_services"."address") between 1 and 45),
 	CONSTRAINT "nmap_service_port" CHECK("nmap_services"."port" between 1 and 65535),
 	CONSTRAINT "nmap_service_protocol" CHECK("nmap_services"."protocol" = 'tcp'),

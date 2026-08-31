@@ -99,7 +99,11 @@ export class EvidencePublicationService {
   }
   private async invokeCommitHook(artifactId: string): Promise<{ ok: true } | { ok: false; code: "storage_busy" | "invalid_persisted_data" }> {
     if (this.onCommitted === undefined) return { ok: true };
-    return this.onCommitted(artifactId);
+    try {
+      return await this.onCommitted(artifactId);
+    } catch {
+      return { ok: false, code: "invalid_persisted_data" };
+    }
   }
 
   // Streams the PUT body into the exclusive staging descriptor bounded by the

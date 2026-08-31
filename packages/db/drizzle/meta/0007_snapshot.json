@@ -2547,7 +2547,7 @@
       "uniqueConstraints": {},
       "checkConstraints": {
         "nmap_service_artifact_id": { "name": "nmap_service_artifact_id", "value": "length(\"nmap_services\".\"artifact_id\") between 1 and 127 and substr(\"nmap_services\".\"artifact_id\", 1, 1) glob '[a-z0-9]' and \"nmap_services\".\"artifact_id\" not glob '*[^a-z0-9-]*'" },
-        "nmap_service_parser_version": { "name": "nmap_service_parser_version", "value": "\"nmap_services\".\"parser_version\" = 'nmap-xml-v1'" },
+        "nmap_service_parser_version": { "name": "nmap_service_parser_version", "value": "length(\"nmap_services\".\"parser_version\") between 1 and 64 and \"nmap_services\".\"parser_version\" not glob '*[^a-z0-9._-]*' and substr(\"nmap_services\".\"parser_version\", 1, 1) glob '[a-z0-9]'" },
         "nmap_service_address": { "name": "nmap_service_address", "value": "length(\"nmap_services\".\"address\") between 1 and 45" },
         "nmap_service_port": { "name": "nmap_service_port", "value": "\"nmap_services\".\"port\" between 1 and 65535" },
         "nmap_service_protocol": { "name": "nmap_service_protocol", "value": "\"nmap_services\".\"protocol\" = 'tcp'" },
