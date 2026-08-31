@@ -364,7 +364,7 @@ describe("evidence publishing grant flow", () => {
 
     let thrown: unknown = null;
     try {
-      await runOnce({ dataDir: dataDir2, runnerId: "runner-1", secret: "a".repeat(43), apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dataDir2, "runs") });
+      await runOnce({ dataDir: dataDir2, runnerId: "runner-1", secret: "a".repeat(43), apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dataDir2, "runs"), executable: process.execPath });
     } catch (e) { thrown = e; }
     // runOnce should have thrown evidence publication error, not succeeded
     expect(thrown).toBeInstanceOf(EvidencePublicationError);
