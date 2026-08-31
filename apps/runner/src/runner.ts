@@ -13,6 +13,7 @@ import {
 } from "@blackglass/contracts";
 
 import { resolveRunnerConfig, type RunnerConfig } from "./config.js";
+import { EvidencePublicationError, publishEvidenceArtifacts } from "./evidence-client.js";
 import { getOrCreateOutboxEntry, removeOutboxAtomically } from "./outbox.js";
 import { runSupervised } from "./process.js";
 
@@ -370,11 +371,31 @@ export async function runOnce(
     cancelledByFence = true;
   }
 
-  if (cancelledByFence || hbFailed || signal?.aborted) {
+  const isCancelledForEvidence = cancelledByFence || hbFailed || Boolean(signal?.aborted) || shutdownAfterStarted;
+
+  if (isCancelledForEvidence) {
+    if (result !== null) {
+      try {
+        await publishEvidenceArtifacts(config, lease, result, { isCancelled: true });
+      } catch {}
+    }
     await completeRun(config, lease, 2, "failed", "runner_lost").catch(() => {});
     // Never report success after shutdown
     if (signal?.aborted) throw new RunnerShutdownError();
     return true;
+  }
+
+  if (result !== null) {
+    try {
+      await publishEvidenceArtifacts(config, lease, result, { isCancelled: false });
+    } catch (e) {
+      // Never complete succeeded: attempt failed evidence_publication_failed while authority remains.
+      try {
+        await completeRun(config, lease, 2, "failed", "evidence_publication_failed");
+      } catch {}
+      if (e instanceof EvidencePublicationError) throw e;
+      throw new EvidencePublicationError("evidence_publication_failed");
+    }
   }
 
   const terminalKind = result !== null && result.exitCode === 0 ? "succeeded" : "failed";
