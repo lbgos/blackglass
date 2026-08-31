@@ -11,6 +11,7 @@ import {
   RunnerHeartbeatResponseSchema,
   commandJsonV1RunnerAppendStartedDigest,
   commandJsonV1RunnerCompleteDigest,
+  type ActionSnapshot,
 } from "@blackglass/contracts";
 import { buildNmapArgv } from "@blackglass/domain";
 
@@ -78,6 +79,28 @@ function adaptToNmapOptions(value: unknown): NmapSliceOptions | null {
     return base;
   }
   return { ...base, ports };
+}
+
+export function prepareNmapExecution(params: {
+  snapshot: ActionSnapshot;
+  runRoot: string;
+  runId: string;
+  fence: string;
+}): { ok: true; argv: readonly string[] } | { ok: false; reason: "invalid_action_snapshot" } {
+  try {
+    const xmlPath = resolveNmapXmlPath(params.runRoot, params.runId, params.fence);
+    const adapted = adaptToNmapOptions(params.snapshot.typedOptions);
+    if (adapted === null) return { ok: false, reason: "invalid_action_snapshot" };
+    const built = buildNmapArgv({
+      options: adapted,
+      canonicalTargets: params.snapshot.canonicalTargets,
+      xmlPath,
+    });
+    if (!built.ok) return { ok: false, reason: "invalid_action_snapshot" };
+    return { ok: true, argv: built.argv };
+  } catch {
+    return { ok: false, reason: "invalid_action_snapshot" };
+  }
 }
 
 export async function handshake(config: RunnerConfig): Promise<HandshakeResponse> {
@@ -362,50 +385,40 @@ export async function runOnce(
     if (signal) signal.removeEventListener("abort", onAbortAfterStarted);
   };
 
-  // Build and validate Nmap command from immutable snapshot before spawn
   let nmapArgv: readonly string[] | null = null;
   let earlyReason: string | null = null;
-  try {
-    const xmlPath = resolveNmapXmlPath(config.runRoot, lease.runId, lease.fence);
-    const snapshot = acquired.actionSnapshot;
-    const adapted = adaptToNmapOptions(snapshot.typedOptions);
-    if (adapted === null) {
-      earlyReason = "invalid_action_snapshot";
+  {
+    const prepared = prepareNmapExecution({
+      snapshot: acquired.actionSnapshot,
+      runRoot: config.runRoot,
+      runId: lease.runId,
+      fence: lease.fence,
+    });
+    if (!prepared.ok) {
+      earlyReason = prepared.reason;
     } else {
-      const built = buildNmapArgv({
-        options: adapted,
-        canonicalTargets: snapshot.canonicalTargets,
-        xmlPath,
-      });
-      if (!built.ok) {
-        earlyReason = "invalid_action_snapshot";
+      nmapArgv = prepared.argv;
+      if (config.executable.includes("\0") || !config.executable.startsWith("/")) {
+        earlyReason = "nmap_unavailable";
+        nmapArgv = null;
       } else {
-        nmapArgv = built.argv;
-        if (config.executable.includes("\0") || !config.executable.startsWith("/")) {
-          earlyReason = "nmap_unavailable";
-          nmapArgv = null;
-        } else {
-          for (const arg of nmapArgv) {
-            if (arg.includes("\0")) {
-              earlyReason = "nmap_unavailable";
-              nmapArgv = null;
-              break;
-            }
+        for (const arg of nmapArgv) {
+          if (arg.includes("\0")) {
+            earlyReason = "nmap_unavailable";
+            nmapArgv = null;
+            break;
           }
-          if (earlyReason === null) {
-            try {
-              await verifyExecutable(config.executable);
-            } catch {
-              earlyReason = "nmap_unavailable";
-              nmapArgv = null;
-            }
+        }
+        if (earlyReason === null) {
+          try {
+            await verifyExecutable(config.executable);
+          } catch {
+            earlyReason = "nmap_unavailable";
+            nmapArgv = null;
           }
         }
       }
     }
-  } catch {
-    earlyReason = "invalid_action_snapshot";
-    nmapArgv = null;
   }
 
   if (signal?.aborted || shutdownAfterStarted) {

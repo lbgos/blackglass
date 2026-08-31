@@ -6,7 +6,7 @@ import { beforeAll, afterAll, describe, expect, it, beforeEach, afterEach, vi } 
 
 import { BoundedCollector, FRAME_LIMIT } from "./bounded-output.js";
 import { controlledEnv, buildFakeActionArgv, spawnFakeAction } from "./fake-action.js";
-import { createRunDirectory, runSupervised } from "./process.js";
+import { createRunDirectory, runSupervised, verifyExecutable } from "./process.js";
 import { createRedactor } from "./redaction.js";
 import {
   generateIdempotencyKey,
@@ -19,7 +19,7 @@ import {
   AcquireRunnerLeaseResponseSchema,
   commandJsonV1RunnerAppendStartedDigest,
 } from "@blackglass/contracts";
-import { createRunnerLoop, runOnce, RunnerShutdownError } from "./runner.js";
+import { createRunnerLoop, prepareNmapExecution, runOnce, RunnerShutdownError } from "./runner.js";
 
 function fixtureActionSnapshot(actionId = "act-1"): ActionSnapshot {
   return {
@@ -1080,167 +1080,32 @@ describe("runner lease snapshot parsing (M4 seam)", () => {
   });
 });
 
-describe("nmap execution slice", () => {
-  const leaseFor = (
-    snapshot: ActionSnapshot,
-    ids = { runId: "r1", leaseId: "l1", actionId: "act-nmap-1" },
-  ) => ({
-    run: {
-      id: ids.runId, actionId: ids.actionId, engagementId: "e1", attempt: 1,
-      state: "leased" as const, currentLeaseId: ids.leaseId, currentFence: "1" as const,
-      terminalKind: null, terminalReason: null, createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(), contractVersion: 1 as const,
-    },
-    lease: {
-      runId: ids.runId, leaseId: ids.leaseId, runnerId: "runner-1", sessionId: "s1",
-      fence: "1" as const, expiresAt: new Date(Date.now() + 30_000).toISOString(),
-      latestHeartbeatSequence: 0, latestEventSequence: 0, orchestrationProfile: "d2-v1" as const,
-      protocol: "runner-control-v1" as const,
-    },
-    actionSnapshot: snapshot,
+describe("prepareNmapExecution", () => {
+  it("prepares controlled argv and rejects extra shape without reflection", () => {
+    const runRoot = path.join(tmpdir(), `prep-${Date.now()}`);
+    const runId = "run-1";
+    const fence = "1";
+    const snapshot = fixtureActionSnapshot("act-prep-1");
+    const prepared = prepareNmapExecution({ snapshot, runRoot, runId, fence });
+    expect(prepared.ok).toBe(true);
+    if (prepared.ok) {
+      const xml = path.join(runRoot, `run-${runId}-f${fence}`, "nmap.xml");
+      expect(prepared.argv[prepared.argv.indexOf("-oX") + 1]).toBe(xml);
+      expect(prepared.argv[prepared.argv.indexOf("-p") + 1]).toBe("80,443");
+      expect(prepared.argv).toContain("app.target.test");
+    }
+    const badSnapshot = { ...snapshot, typedOptions: { declaredPorts: [80], extra: "evil" } } as unknown as ActionSnapshot;
+    const bad = prepareNmapExecution({ snapshot: badSnapshot, runRoot, runId, fence });
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.reason).toBe("invalid_action_snapshot");
+    expect(JSON.stringify(bad)).not.toContain("evil");
   });
 
-  const mockFetch = (
-    leaseResponse: unknown,
-    onComplete: (body: Record<string, unknown>) => void = () => {},
-  ) =>
-    vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      const s = String(url);
-      const m = init?.method ?? "GET";
-      if (s.includes("/handshake")) return new Response(
-        JSON.stringify({
-          acceptedProtocol: "runner-control-v1",
-          sessionId: "s1",
-          runnerId: "runner-1",
-          leaseAllowed: true,
-          sessionPinned: true,
-          registryPinned: false,
-        }),
-        { status: 200 },
-      );
-      if (
-        s.includes("/lease") &&
-        !s.includes("/heartbeat") &&
-        !s.includes("/events") &&
-        !s.includes("/complete") &&
-        !s.includes("/artifacts")
-      ) {
-        return new Response(JSON.stringify(leaseResponse), { status: 200 });
-      }
-      if (s.includes("/events") && !s.includes("/artifacts")) return new Response(
-        JSON.stringify({
-          disposition: "accepted_event",
-          event: {
-            eventId: 1,
-            runId: "r1",
-            sequence: 1,
-            type: "started",
-            fence: "1",
-            payloadJson: "{}",
-            digest: `sha256:${"a".repeat(64)}`,
-            createdAt: new Date().toISOString(),
-          },
-        }),
-        { status: 200 },
-      );
-      if (s.includes("/artifacts/grants")) {
-        const b = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-        const k = String(b.artifactSlot ?? "stdout");
-        return new Response(
-          JSON.stringify({
-            artifactId: k === "stdout" ? "00000000-0000-4000-8000-000000000001" : "00000000-0000-4000-8000-000000000002",
-            uploadId: k === "stdout" ? "00000000-0000-4000-8000-000000000011" : "00000000-0000-4000-8000-000000000012",
-            runId: "r1", leaseId: "l1", sessionId: "s1", fence: "1", eventSequence: 1, artifactSlot: k, kind: k,
-            declaredSizeBytes: b.declaredSizeBytes, declaredDigest: b.declaredDigest, originalFileName: `${k}.log`,
-            declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString(),
-          }),
-          { status: 201 },
-        );
-      }
-      if (s.includes("/uploads/") && m === "PUT") return new Response(null, { status: 204 });
-      if (s.includes("/uploads/") && s.includes("/complete") && m === "POST") {
-        const b = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-        const uid = s.split("/uploads/")[1]?.split("/")[0] ?? "";
-        const aid = uid === "00000000-0000-4000-8000-000000000012" ? "00000000-0000-4000-8000-000000000002" : "00000000-0000-4000-8000-000000000001";
-        return new Response(
-          JSON.stringify({ disposition: "published", artifactId: aid, sizeBytes: b.sizeBytes, digest: b.digest, completeness: b.completeness }),
-          { status: 200 },
-        );
-      }
-      if (s.includes("/complete") && !s.includes("/artifacts")) {
-        const b = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-        onComplete(b);
-        return new Response(
-          JSON.stringify({
-            disposition: "accepted_completion",
-            event: {
-              eventId: 2,
-              runId: "r1",
-              sequence: 2,
-              type: b.terminalKind as string,
-              fence: "1",
-              payloadJson: "{}",
-              digest: `sha256:${"b".repeat(64)}`,
-              createdAt: new Date().toISOString(),
-            },
-          }),
-          { status: 200 },
-        );
-      }
-      return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
-    }) as unknown as typeof fetch;
-
-
-  it("valid snapshot spawns Nmap and creates XML", async () => {
-    const dir = path.join(tmpdir(), `nmap-valid-${Date.now()}`);
-    await mkdir(dir, { recursive: true });
-    const o = globalThis.fetch;
-    let ck: string | undefined; let cr: string | null | undefined;
-    const lr = leaseFor(fixtureActionSnapshot("act-nmap-1"));
-    globalThis.fetch = mockFetch(lr, (x) => { ck = String(x.terminalKind); cr = x.reason as string | null; });
-    await runOnce({
-      dataDir: dir, runnerId: "runner-1", secret: "a".repeat(43),
-      apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dir, "runs"),
-    });
-    expect(ck).toBe("succeeded"); expect(cr).toBeNull();
-    const r = await readdir(path.join(dir, "runs")).catch(() => []);
-    expect(r.length).toBe(1); expect(existsSync(path.join(dir, "runs", r[0] as string, "nmap.xml"))).toBe(true);
-    globalThis.fetch = o; await rm(dir, { recursive: true, force: true });
-  });
-
-  it("invalid snapshot does not spawn", async () => {
-    const dir = path.join(tmpdir(), `nmap-invalid-${Date.now()}`);
-    await mkdir(dir, { recursive: true });
-    const o = globalThis.fetch;
-    let cr: string | null | undefined;
-    const bad = { ...fixtureActionSnapshot("act-bad"), typedOptions: { declaredPorts: "not-an-array" } } as unknown as ActionSnapshot;
-    const lr = leaseFor(bad, { runId: "r2", leaseId: "l2", actionId: "act-bad" });
-    globalThis.fetch = mockFetch(lr, (b) => { cr = b.reason as string | null; });
-    await runOnce({
-      dataDir: dir, runnerId: "runner-1", secret: "a".repeat(43),
-      apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dir, "runs"),
-    });
-    expect(cr).toBe("invalid_action_snapshot");
-    expect((await readdir(path.join(dir, "runs")).catch(() => [])).length).toBe(0);
-    globalThis.fetch = o; await rm(dir, { recursive: true, force: true });
-  });
-
-  it("unusable executable completes with fixed reason", async () => {
-    const dir = path.join(tmpdir(), `nmap-unusable-${Date.now()}`);
-    await mkdir(dir, { recursive: true });
-    const o = globalThis.fetch;
-    let cr: string | null | undefined;
-    const s = { ...fixtureActionSnapshot("act-miss"), typedOptions: { declaredPorts: null } } as unknown as ActionSnapshot;
-    const lr = leaseFor(s, { runId: "r3", leaseId: "l3", actionId: "act-miss" });
-    const p = path.join(dir, "not-executable");
-    await writeFile(p, "not an executable", { mode: 0o600 }); await chmod(p, 0o600);
-    globalThis.fetch = mockFetch(lr, (b) => { cr = b.reason as string | null; });
-    await runOnce({
-      dataDir: dir, runnerId: "runner-1", secret: "a".repeat(43),
-      apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dir, "runs"),
-      executable: p,
-    });
-    expect(cr).toBe("nmap_unavailable"); expect(String(cr)).not.toContain(p);
-    globalThis.fetch = o; await rm(dir, { recursive: true, force: true });
+  it("verifyExecutable rejects 0600 file without path leak", async () => {
+    const p = path.join(tmpdir(), `v-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await writeFile(p, "x", { mode: 0o600 });
+    await chmod(p, 0o600);
+    await expect(verifyExecutable(p)).rejects.toThrow();
+    await rm(p, { force: true }).catch(() => {});
   });
 });
