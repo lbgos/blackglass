@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { chmod, mkdir, rm, readdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rm, readdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeAll, afterAll, describe, expect, it, beforeEach, afterEach, vi } from "vitest";
@@ -65,14 +65,13 @@ beforeAll(async () => {
   );
   const s =
     "#!/bin/sh\n" +
-    'prev=""\n' +
-    'for arg in "$@"' +
-    "; do\n" +
-    '  if [ "$prev" = "-oX" ]; then ' +
-    'mkdir -p "$(dirname "$arg")"; ' +
-    "echo '<nmaprun></nmaprun>' > \"$arg\"; exit 0; fi\n" +
+    'oX=""\nprev=""\n' +
+    'for arg in "$@"; do\n' +
+    '  if [ "$prev" = "-oX" ]; then oX="$arg"; fi\n' +
     '  prev="$arg"\n' +
-    "done\nexit 0\n";
+    "done\n" +
+    'if [ -n "$oX" ]; then mkdir -p "$(dirname "$oX")"; echo \'<nmaprun></nmaprun>\' > "$oX"; fi\n' +
+    "sleep 1\nexit 0\n";
   await writeFile(p, s, { mode: 0o700 });
   await chmod(p, 0o700);
   fakeNmapPath = p;
@@ -186,6 +185,21 @@ describe("working directory defenses", () => {
     expect(tmpDir).toBe(path.join(runDir, "tmp"));
     expect(existsSync(runDir)).toBe(true);
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("rejects symlinked runRoot", async () => {
+    const real = path.join(tmpdir(), `blackglass-real-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const link = path.join(tmpdir(), `blackglass-link-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(real, { recursive: true });
+    await symlink(real, link);
+    await expect(createRunDirectory(link, "run-1", "1")).rejects.toThrow(/working_directory_escape|runRoot/);
+    try {
+      await createRunDirectory(link, "run-1", "1");
+    } catch (e) {
+      expect(String(e)).not.toContain(link);
+    }
+    await rm(link, { force: true });
+    await rm(real, { recursive: true, force: true });
   });
 });
 
@@ -837,7 +851,8 @@ describe("runner loop shutdown", () => {
       lease: { runId: "run-1", leaseId: "lease-1", runnerId: "runner-1", sessionId: "sess-1", fence: "1", expiresAt: new Date(Date.now() + 30000).toISOString(), latestHeartbeatSequence: 0, latestEventSequence: 0, orchestrationProfile: "d2-v1", protocol: "runner-control-v1" },
       actionSnapshot: fixtureActionSnapshot("act-1"),
     };
-    globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+    let completeCaptured: { terminalKind: string; reason: string | null } | null = null;
+    globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
       if (u.includes("/handshake")) {
         return new Response(JSON.stringify({ acceptedProtocol: "runner-control-v1", sessionId: "sess-1", runnerId: "runner-1", leaseAllowed: true, sessionPinned: true, registryPinned: false }), { status: 200, headers: { "content-type": "application/json" } });
@@ -852,6 +867,10 @@ describe("runner loop shutdown", () => {
         return new Response(JSON.stringify({ leaseExpiresAt: new Date(Date.now() + 30000).toISOString(), heartbeatSequence: 2 }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (u.includes("/complete")) {
+        try {
+          const body = JSON.parse(String(init?.body ?? "{}")) as { terminalKind?: string; reason?: string | null };
+          completeCaptured = { terminalKind: String(body.terminalKind ?? ""), reason: (body.reason as string | null) ?? null };
+        } catch {}
         return new Response(JSON.stringify({ disposition: "accepted_completion", event: { eventId: 2, runId: "run-1", sequence: 2, type: "failed", fence: "1", payloadJson: "{}", digest: "sha256:" + "b".repeat(64), createdAt: new Date().toISOString() } }), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400, headers: { "content-type": "application/json" } });
@@ -859,16 +878,13 @@ describe("runner loop shutdown", () => {
 
     const loop = createRunnerLoop({ dataDir, runnerId: "runner-1", secret: "a".repeat(43), apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dataDir, "runs") });
     loop.start();
-    // Wait for child to be spawned (runSupervised with 40ms duration, but we will stop quickly)
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 150));
     const stopPromise = loop.stop();
     await stopPromise;
     expect(loop.isStopped()).toBe(true);
-    // No new lease after stop: ensure fetch not called for lease after stop
-    // Child should not survive: check that no child process remains (we can't easily check pid, but ensure loop stopped)
-    // And that complete was with failed runner_lost, never succeeded
-    // We check that dataDir/runs does not contain a running child (process group cleaned)
-    // For this test, just ensure stop resolved and loop is stopped
+    expect(completeCaptured).not.toBeNull();
+    expect(completeCaptured!.terminalKind).toBe("failed");
+    expect(completeCaptured!.reason).toBe("runner_lost");
   });
 
   it("repeated stop is idempotent and does not race", async () => {

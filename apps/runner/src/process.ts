@@ -1,4 +1,4 @@
-import { access, mkdir, stat as fsStat } from "node:fs/promises";
+import { access, lstat, mkdir, realpath, stat as fsStat } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
@@ -54,10 +54,31 @@ export function resolveNmapXmlPath(runRoot: string, runId: string, fence: string
 
 export async function createRunDirectory(runRoot: string, runId: string, fence: string): Promise<RunDirectories> {
   const runDir = resolveRunDirPath(runRoot, runId, fence);
-  const rootStat = await fsStat(runRoot).catch(() => null);
-  if (rootStat !== null && !rootStat.isDirectory()) throw new Error("runRoot not a directory");
-  await mkdir(runRoot, { recursive: true, mode: 0o700 });
-  await mkdir(runDir, { recursive: false, mode: 0o700 });
+  await mkdir(runRoot, { recursive: true, mode: 0o700 }).catch(() => {
+    throw new Error("working_directory_escape");
+  });
+  const rootLstat = await lstat(runRoot).catch(() => {
+    throw new Error("working_directory_escape");
+  });
+  if (rootLstat.isSymbolicLink()) throw new Error("working_directory_escape");
+  if (!rootLstat.isDirectory()) throw new Error("runRoot not a directory");
+  const rootReal = await realpath(runRoot).catch(() => {
+    throw new Error("working_directory_escape");
+  });
+  if (rootReal !== path.resolve(runRoot)) throw new Error("working_directory_escape");
+  await mkdir(runDir, { recursive: false, mode: 0o700 }).catch(() => {
+    throw new Error("working_directory_escape");
+  });
+  const dirLstat = await lstat(runDir).catch(() => {
+    throw new Error("working_directory_escape");
+  });
+  if (dirLstat.isSymbolicLink()) throw new Error("working_directory_escape");
+  if (!dirLstat.isDirectory()) throw new Error("working_directory_escape");
+  const dirReal = await realpath(runDir).catch(() => {
+    throw new Error("working_directory_escape");
+  });
+  if (dirReal !== path.resolve(runDir)) throw new Error("working_directory_escape");
+  if (path.dirname(dirReal) !== rootReal) throw new Error("working_directory_escape");
   const tmpDir = path.join(runDir, "tmp");
   await mkdir(tmpDir, { recursive: true, mode: 0o700 });
   return { runDir, tmpDir };

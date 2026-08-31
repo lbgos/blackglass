@@ -385,60 +385,47 @@ export async function runOnce(
     if (signal) signal.removeEventListener("abort", onAbortAfterStarted);
   };
 
-  let nmapArgv: readonly string[] | null = null;
-  let earlyReason: string | null = null;
-  {
-    const prepared = prepareNmapExecution({
-      snapshot: acquired.actionSnapshot,
-      runRoot: config.runRoot,
-      runId: lease.runId,
-      fence: lease.fence,
-    });
-    if (!prepared.ok) {
-      earlyReason = prepared.reason;
-    } else {
-      nmapArgv = prepared.argv;
-      if (config.executable.includes("\0") || !config.executable.startsWith("/")) {
-        earlyReason = "nmap_unavailable";
-        nmapArgv = null;
-      } else {
-        for (const arg of nmapArgv) {
-          if (arg.includes("\0")) {
-            earlyReason = "nmap_unavailable";
-            nmapArgv = null;
-            break;
-          }
-        }
-        if (earlyReason === null) {
-          try {
-            await verifyExecutable(config.executable);
-          } catch {
-            earlyReason = "nmap_unavailable";
-            nmapArgv = null;
-          }
-        }
-      }
+  const prepared = prepareNmapExecution({
+    snapshot: acquired.actionSnapshot,
+    runRoot: config.runRoot,
+    runId: lease.runId,
+    fence: lease.fence,
+  });
+  let executableUnavailable = false;
+  if (prepared.ok) {
+    try {
+      await verifyExecutable(config.executable);
+    } catch {
+      executableUnavailable = true;
     }
   }
 
-  if (signal?.aborted || shutdownAfterStarted) {
+  const isAuthorityLost = (): boolean =>
+    Boolean(signal?.aborted) ||
+    shutdownAfterStarted ||
+    hbFailed ||
+    globalThis.performance.now() >= authorityDeadlineMonotonic - 7000;
+
+  if (isAuthorityLost()) {
     cleanup();
     await completeRun(config, lease, 2, "failed", "runner_lost").catch(() => {});
     if (signal?.aborted) throw new RunnerShutdownError();
     return true;
   }
 
-  if (earlyReason !== null) {
+  if (!prepared.ok) {
     cleanup();
-    await completeRun(config, lease, 2, "failed", earlyReason).catch(() => {});
+    await completeRun(config, lease, 2, "failed", prepared.reason).catch(() => {});
     return true;
   }
 
-  if (nmapArgv === null) {
+  if (executableUnavailable) {
     cleanup();
-    await completeRun(config, lease, 2, "failed", "invalid_action_snapshot").catch(() => {});
+    await completeRun(config, lease, 2, "failed", "nmap_unavailable").catch(() => {});
     return true;
   }
+
+  const nmapArgv = prepared.argv;
 
   let result: Awaited<ReturnType<typeof runSupervisedCommand>> | null = null;
   let cancelledByFence = false;
@@ -483,7 +470,7 @@ export async function runOnce(
     if (fenceCheck !== null) clearInterval(fenceCheck);
   } catch {
     fullCleanup();
-    if (signal?.aborted || shutdownAfterStarted) {
+    if (isAuthorityLost()) {
       await completeRun(config, lease, 2, "failed", "runner_lost").catch(() => {});
       if (signal?.aborted) throw new RunnerShutdownError();
       return true;
