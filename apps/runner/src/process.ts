@@ -317,10 +317,8 @@ export async function readNmapXmlSecurely(params: {
     if (extra !== 0) throw new Error("nmap_xml_unavailable");
     const st2 = await fh.stat();
     if (st2.size !== st.size || st2.nlink !== 1) throw new Error("nmap_xml_unavailable");
-    const s1 = st as unknown as Record<string, unknown>;
-    const s2 = st2 as unknown as Record<string, unknown>;
-    if (s1["ino"] !== undefined && s2["ino"] !== s1["ino"]) throw new Error("nmap_xml_unavailable");
-    if (s1["dev"] !== undefined && s2["dev"] !== s1["dev"]) throw new Error("nmap_xml_unavailable");
+    if (st.ino !== st2.ino) throw new Error("nmap_xml_unavailable");
+    if (st.dev !== st2.dev) throw new Error("nmap_xml_unavailable");
     if (st2.mtimeMs !== st.mtimeMs || st2.ctimeMs !== st.ctimeMs) throw new Error("nmap_xml_unavailable");
     return buf;
   } catch (e) {
