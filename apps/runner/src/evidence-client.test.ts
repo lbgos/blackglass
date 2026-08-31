@@ -304,6 +304,20 @@ describe("evidence publishing grant flow", () => {
     const leaseResponse = {
       run: { id: "run-1", actionId: "act-1", engagementId: "eng-1", attempt: 1, state: "leased", currentLeaseId: "lease-1", currentFence: "1", terminalKind: null, terminalReason: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), contractVersion: 1 },
       lease: { runId: "run-1", leaseId: "lease-1", runnerId: "runner-1", sessionId: "sess-1", fence: "1", expiresAt: new Date(Date.now() + 30000).toISOString(), latestHeartbeatSequence: 0, latestEventSequence: 0, orchestrationProfile: "d2-v1", protocol: "runner-control-v1" },
+      actionSnapshot: {
+        normalizationProfile: "d1-v1",
+        orchestrationProfile: "d2-v1",
+        snapshotId: "snapshot-act-1",
+        version: 1,
+        binding: `sha256:${"a".repeat(64)}`,
+        actionId: "act-1",
+        canonicalTargets: [{ normalizationProfile: "d1-v1", kind: "hostname", hostname: "app.target.test" }],
+        concreteDestinations: [{ normalizationProfile: "d1-v1", kind: "ip", family: 4, address: "192.0.2.10", zone: null }],
+        typedOptions: { fixture: true },
+        resolutionSnapshots: [],
+        scopeRevisionId: null,
+        warningState: { reasonCodes: [], knownAdditions: [], acknowledgment: null },
+      },
     };
     const completeCalls: { terminalKind: string; reason: string | null }[] = [];
     let grantCall = 0;

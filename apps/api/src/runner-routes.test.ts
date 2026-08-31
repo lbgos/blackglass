@@ -697,3 +697,320 @@ describe("runner enrollment and lease routes", () => {
     ).toEqual({ count: 0 });
   });
 });
+
+describe("runner lease snapshot seam (M4)", () => {
+  it("successful lease carries exact canonical bound snapshot pinned by queued version", async () => {
+    const harness = await createHarness();
+    const enrolled = await enroll(harness.app);
+    const runId = await queueRun(harness, "action-snapshot-positive");
+    const action = harness.engagementRepository.getAction(
+      (await harness.engagementRepository.listEngagements()).value[0].id,
+      "action-snapshot-positive",
+    );
+    // Ensure we can locate engagementId via DB query for robustness
+    const engagementId = harness.database.sqlite
+      .prepare("select engagement_id from actions where id = ?")
+      .get("action-snapshot-positive") as { engagement_id: string } | undefined;
+    expect(engagementId).toBeDefined();
+    const handshakeRes = await handshake(harness.app, enrolled.runner.id, enrolled.secret);
+    expect(handshakeRes.statusCode).toBe(200);
+    const leased = await harness.app.inject({
+      method: "POST",
+      url: "/api/v1/runner/lease",
+      headers: runnerHeaders(enrolled.runner.id, enrolled.secret),
+      payload: { sessionId: "session-fixture-1" },
+    });
+    expect(leased.statusCode).toBe(200);
+    const body = leased.json() as {
+      run: { id: string; actionId: string; currentFence: string };
+      lease: { runId: string; fence: string };
+      actionSnapshot: ActionSnapshot;
+    };
+    expect(body.run.id).toBe(runId);
+    expect(body.lease.runId).toBe(runId);
+    expect(body.lease.fence).toBe(body.run.currentFence);
+    expect(body.actionSnapshot.actionId).toBe(body.run.actionId);
+    expect(body.actionSnapshot.actionId).toBe("action-snapshot-positive");
+    // queuedSnapshotVersion is 1 for first queued action; snapshot version must equal it
+    expect(body.actionSnapshot.version).toBe(1);
+    // canonicalTargets use reserved synthetic fixture target
+    expect(body.actionSnapshot.canonicalTargets[0]).toMatchObject({
+      kind: "hostname",
+      hostname: "app.target.test",
+    });
+    // binding must be canonical via existing repository validation
+    const persisted = harness.engagementRepository.getAction(engagementId!.engagement_id, "action-snapshot-positive");
+    expect(persisted.ok).toBe(true);
+    if (persisted.ok) {
+      const queuedVersion = persisted.value.action.queuedSnapshotVersion;
+      const expectedSnapshot = persisted.value.action.snapshots.find((s) => s.version === queuedVersion);
+      expect(expectedSnapshot).toBeDefined();
+      expect(body.actionSnapshot.binding).toBe(expectedSnapshot!.binding);
+      expect(body.actionSnapshot.snapshotId).toBe(expectedSnapshot!.snapshotId);
+      // Verify binding recomputed matches snapshot content
+      const recomputed = bindActionSnapshot(body.actionSnapshot);
+      expect(recomputed.ok).toBe(true);
+      if (recomputed.ok) expect(recomputed.binding).toBe(body.actionSnapshot.binding);
+    }
+    // Ensure strict: response contains exactly three keys
+    expect(Object.keys(body).sort()).toEqual(["actionSnapshot", "lease", "run"]);
+    // No mutation beyond lease: action state should be active after lease
+    expect(
+      harness.database.sqlite.prepare("select state from actions where id = ?").get("action-snapshot-positive"),
+    ).toMatchObject({ state: "active" });
+  });
+
+  it("fails closed without lease mutation when queuedSnapshotVersion is null (capability_error)", async () => {
+    const harness = await createHarness();
+    const enrolled = await enroll(harness.app);
+    // Create a capability_error action directly via persistPlannedAction with representable false
+    const engagement = harness.engagementRepository.createEngagement({
+      name: "Capability lab",
+      kind: "lab",
+      description: null,
+      authorizationContext: "Synthetic",
+      autoContinueWarnings: false,
+    });
+    expect(engagement.ok).toBe(true);
+    if (!engagement.ok) throw new Error("engagement failed");
+    // Create a snapshot that will become capability_error
+    const capSnapshot: ActionSnapshot = {
+      ...boundSnapshot("action-capability-lease"),
+      actionId: "action-capability-lease",
+      snapshotId: "snapshot-capability-lease",
+      version: 1,
+      binding: `sha256:${"a".repeat(64)}`,
+      warningState: { reasonCodes: [], knownAdditions: [], acknowledgment: null },
+    };
+    // Use bind to get correct binding
+    const bound = bindActionSnapshot({ ...capSnapshot, binding: `sha256:${"a".repeat(64)}` });
+    // Actually use boundSnapshot helper with capability_error path: persistPlannedAction with representable false
+    const fixedSnapshot = bound.ok ? { ...capSnapshot, binding: bound.binding } : capSnapshot;
+    const persisted = harness.engagementRepository.persistPlannedAction({
+      engagementId: engagement.value.id,
+      snapshot: fixedSnapshot,
+      representable: false,
+      capabilityErrorCode: "capability_error",
+      occurredAt: "2026-08-09T12:00:00.000Z",
+    });
+    expect(persisted.ok).toBe(true);
+    // Manually insert a queued run for this capability_error action to simulate corrupted queued state with null queuedSnapshotVersion
+    // Instead we directly test the lease path: there is no queued run for capability_error, so lease should be no_work, not invalid_persisted_data
+    // So we test the null queuedSnapshotVersion case via tampering a queued action's queuedSnapshotVersion to null
+    const goodRunId = await queueRun(harness, "action-null-queued");
+    // Tamper: set queuedSnapshotVersion to null via direct SQL (drop trigger not needed for actions table? Check)
+    harness.database.sqlite.exec("drop trigger if exists action_snapshots_no_update");
+    harness.database.sqlite.exec("drop trigger if exists action_snapshots_no_delete");
+    // For actions table, update queued_snapshot_version to null
+    harness.database.sqlite.prepare("update actions set queued_snapshot_version = null where id = ?").run("action-null-queued");
+    await handshake(harness.app, enrolled.runner.id, enrolled.secret);
+    const beforeRun = harness.database.sqlite.prepare("select state, current_fence from runs where id = ?").get(goodRunId) as { state: string; current_fence: string };
+    const beforeLeaseCount = (harness.database.sqlite.prepare("select count(*) as c from run_leases where run_id = ?").get(goodRunId) as { c: number }).c;
+    const leased = await harness.app.inject({
+      method: "POST",
+      url: "/api/v1/runner/lease",
+      headers: runnerHeaders(enrolled.runner.id, enrolled.secret),
+      payload: { sessionId: "session-fixture-1" },
+    });
+    expect(leased.statusCode).toBe(500);
+    expect(leased.json()).toEqual({ code: "invalid_persisted_data" });
+    expect(JSON.stringify(leased.json())).not.toContain("SENSITIVE");
+    // No lease mutation
+    const afterRun = harness.database.sqlite.prepare("select state, current_fence from runs where id = ?").get(goodRunId) as { state: string; current_fence: string };
+    expect(afterRun).toEqual(beforeRun);
+    expect((harness.database.sqlite.prepare("select count(*) as c from run_leases where run_id = ?").get(goodRunId) as { c: number }).c).toBe(beforeLeaseCount);
+    expect(afterRun.state).toBe("queued");
+  });
+
+  it("fails closed without lease mutation when snapshot row missing for queued version", async () => {
+    const harness = await createHarness();
+    const enrolled = await enroll(harness.app);
+    const runId = await queueRun(harness, "action-missing-snapshot");
+    // Remove the snapshot row for version 1
+    harness.database.sqlite.exec("drop trigger if exists action_snapshots_no_update");
+    harness.database.sqlite.exec("drop trigger if exists action_snapshots_no_delete");
+    harness.database.sqlite.prepare("delete from action_snapshots where action_id = ? and version = 1").run("action-missing-snapshot");
+    await handshake(harness.app, enrolled.runner.id, enrolled.secret);
+    const before = harness.database.sqlite.prepare("select state from runs where id = ?").get(runId) as { state: string };
+    const leased = await harness.app.inject({
+      method: "POST",
+      url: "/api/v1/runner/lease",
+      headers: runnerHeaders(enrolled.runner.id, enrolled.secret),
+      payload: { sessionId: "session-fixture-1" },
+    });
+    expect(leased.statusCode).toBe(500);
+    expect(leased.json()).toEqual({ code: "invalid_persisted_data" });
+    expect(JSON.stringify(leased.body)).not.toContain("action-missing-snapshot");
+    expect(harness.database.sqlite.prepare("select state from runs where id = ?").get(runId)).toEqual(before);
+    expect(harness.database.sqlite.prepare("select count(*) as c from run_leases where run_id = ?").get(runId)).toEqual({ c: 0 });
+  });
+
+  it("fails closed without lease mutation when snapshot binding is unbound (mismatched digest)", async () => {
+    const harness = await createHarness();
+    const enrolled = await enroll(harness.app);
+    const runId = await queueRun(harness, "action-unbound");
+    const marker = "SENSITIVE_UNTRUSTED_MARKER";
+    // Tamper snapshotJson to have correct JSON but binding column mismatched
+    harness.database.sqlite.exec("drop trigger if exists action_snapshots_no_update");
+    harness.database.sqlite.exec("drop trigger if exists action_snapshots_no_delete");
+    const row = harness.database.sqlite.prepare("select snapshot_json from action_snapshots where action_id = ?").get("action-unbound") as { snapshot_json: string };
+    const snapshotObj = JSON.parse(row.snapshot_json) as ActionSnapshot;
+    // Keep snapshotJson's binding as before but change binding column to wrong digest, and add marker in typedOptions
+    const tamperedJson = JSON.stringify({ ...snapshotObj, typedOptions: { fixture: true, note: marker } });
+    // Need to recompute binding? We will keep binding column as old (which will now be mismatched to JSON)
+    harness.database.sqlite.prepare("update action_snapshots set snapshot_json = ?, binding = ? where action_id = ?").run(tamperedJson, `sha256:${"b".repeat(64)}`, "action-unbound");
+    await handshake(harness.app, enrolled.runner.id, enrolled.secret);
+    const beforeLeases = (harness.database.sqlite.prepare("select count(*) as c from run_leases").get() as { c: number }).c;
+    const leased = await harness.app.inject({
+      method: "POST",
+      url: "/api/v1/runner/lease",
+      headers: runnerHeaders(enrolled.runner.id, enrolled.secret),
+      payload: { sessionId: "session-fixture-1" },
+    });
+    expect(leased.statusCode).toBe(500);
+    expect(leased.json()).toEqual({ code: "invalid_persisted_data" });
+    expect(leased.body).not.toContain(marker);
+    expect(JSON.stringify(leased.json())).not.toContain(marker);
+    expect((harness.database.sqlite.prepare("select count(*) as c from run_leases").get() as { c: number }).c).toBe(beforeLeases);
+    expect(harness.database.sqlite.prepare("select state from runs where id = ?").get(runId)).toMatchObject({ state: "queued" });
+  });
+
+  it("fails closed without lease mutation when snapshot is foreign (actionId mismatch)", async () => {
+    const harness = await createHarness();
+    const enrolled = await enroll(harness.app);
+    const runId = await queueRun(harness, "action-foreign-check");
+    harness.database.sqlite.exec("drop trigger if exists action_snapshots_no_update");
+    harness.database.sqlite.exec("drop trigger if exists action_snapshots_no_delete");
+    const row = harness.database.sqlite.prepare("select snapshot_json from action_snapshots where action_id = ?").get("action-foreign-check") as { snapshot_json: string };
+    const obj = JSON.parse(row.snapshot_json) as ActionSnapshot;
+    const foreign = { ...obj, actionId: "action-foreign-other", snapshotId: "snapshot-foreign-other" };
+    // Keep binding column as before but snapshotJson now has foreign actionId; getAction will detect snapshot action mismatch
+    harness.database.sqlite.prepare("update action_snapshots set snapshot_json = ? where action_id = ?").run(JSON.stringify(foreign), "action-foreign-check");
+    await handshake(harness.app, enrolled.runner.id, enrolled.secret);
+    const leased = await harness.app.inject({
+      method: "POST",
+      url: "/api/v1/runner/lease",
+      headers: runnerHeaders(enrolled.runner.id, enrolled.secret),
+      payload: { sessionId: "session-fixture-1" },
+    });
+    expect(leased.statusCode).toBe(500);
+    expect(leased.json()).toEqual({ code: "invalid_persisted_data" });
+    expect(harness.database.sqlite.prepare("select count(*) as c from run_leases where run_id = ?").get(runId)).toEqual({ c: 0 });
+  });
+
+  it("fails closed without lease mutation on malformed snapshot JSON", async () => {
+    const harness = await createHarness();
+    const enrolled = await enroll(harness.app);
+    const runId = await queueRun(harness, "action-malformed");
+    harness.database.sqlite.exec("drop trigger if exists action_snapshots_no_update");
+    harness.database.sqlite.exec("drop trigger if exists action_snapshots_no_delete");
+    // Make snapshotJson invalid (empty canonicalTargets violates schema, but we store as JSON)
+    const row = harness.database.sqlite.prepare("select snapshot_json from action_snapshots where action_id = ?").get("action-malformed") as { snapshot_json: string };
+    const obj = JSON.parse(row.snapshot_json) as ActionSnapshot;
+    const malformed = { ...obj, canonicalTargets: [] };
+    harness.database.sqlite.prepare("update action_snapshots set snapshot_json = ? where action_id = ?").run(JSON.stringify(malformed), "action-malformed");
+    await handshake(harness.app, enrolled.runner.id, enrolled.secret);
+    const leased = await harness.app.inject({
+      method: "POST",
+      url: "/api/v1/runner/lease",
+      headers: runnerHeaders(enrolled.runner.id, enrolled.secret),
+      payload: { sessionId: "session-fixture-1" },
+    });
+    expect(leased.statusCode).toBe(500);
+    expect(leased.json()).toEqual({ code: "invalid_persisted_data" });
+    expect(harness.database.sqlite.prepare("select count(*) as c from run_leases where run_id = ?").get(runId)).toEqual({ c: 0 });
+  });
+
+  it("replay/transaction: snapshot resolution failure does not advance fence or create lease, second attempt still fails closed", async () => {
+    const harness = await createHarness();
+    const enrolled = await enroll(harness.app);
+    const runId = await queueRun(harness, "action-replay-snapshot");
+    harness.database.sqlite.exec("drop trigger if exists action_snapshots_no_update");
+    harness.database.sqlite.exec("drop trigger if exists action_snapshots_no_delete");
+    // Corrupt binding to force failure
+    harness.database.sqlite.prepare("update action_snapshots set binding = ? where action_id = ?").run(`sha256:${"c".repeat(64)}`, "action-replay-snapshot");
+    await handshake(harness.app, enrolled.runner.id, enrolled.secret);
+    const first = await harness.app.inject({
+      method: "POST",
+      url: "/api/v1/runner/lease",
+      headers: runnerHeaders(enrolled.runner.id, enrolled.secret),
+      payload: { sessionId: "session-fixture-1" },
+    });
+    expect(first.statusCode).toBe(500);
+    const afterFirstLeases = (harness.database.sqlite.prepare("select count(*) as c from run_leases where run_id = ?").get(runId) as { c: number }).c;
+    const afterFirstFence = (harness.database.sqlite.prepare("select current_fence from runs where id = ?").get(runId) as { current_fence: string }).current_fence;
+    expect(afterFirstLeases).toBe(0);
+    expect(afterFirstFence).toBe("0");
+    // Second attempt should also fail closed with same bounded error and no mutation
+    const second = await harness.app.inject({
+      method: "POST",
+      url: "/api/v1/runner/lease",
+      headers: runnerHeaders(enrolled.runner.id, enrolled.secret),
+      payload: { sessionId: "session-fixture-1" },
+    });
+    expect(second.statusCode).toBe(500);
+    expect(second.json()).toEqual({ code: "invalid_persisted_data" });
+    expect((harness.database.sqlite.prepare("select count(*) as c from run_leases where run_id = ?").get(runId) as { c: number }).c).toBe(0);
+    expect((harness.database.sqlite.prepare("select current_fence from runs where id = ?").get(runId) as { current_fence: string }).current_fence).toBe("0");
+  });
+
+  it("bounded non-reflective errors never leak snapshot marker or synthetic target details", async () => {
+    const harness = await createHarness();
+    const enrolled = await enroll(harness.app);
+    const marker = "SENSITIVE_MARKER_12345";
+    // Create a snapshot with marker in typedOptions, then corrupt to trigger failure
+    const engagement = harness.engagementRepository.createEngagement({
+      name: "Leak lab",
+      kind: "lab",
+      description: null,
+      authorizationContext: "Synthetic",
+      autoContinueWarnings: false,
+    });
+    expect(engagement.ok).toBe(true);
+    if (!engagement.ok) throw new Error("engagement failed");
+    const snapshotWithMarker: ActionSnapshot = {
+      normalizationProfile: "d1-v1",
+      orchestrationProfile: "d2-v1",
+      snapshotId: "snapshot-leak-test",
+      version: 1,
+      binding: `sha256:${"a".repeat(64)}`,
+      actionId: "action-leak-test",
+      canonicalTargets: [
+        { normalizationProfile: "d1-v1", kind: "hostname", hostname: "app.target.test" },
+      ],
+      concreteDestinations: [{ normalizationProfile: "d1-v1", kind: "ip", family: 4, address: "192.0.2.99", zone: null }],
+      typedOptions: { marker, secret: "192.0.2.99" },
+      resolutionSnapshots: [],
+      scopeRevisionId: null,
+      warningState: { reasonCodes: [], knownAdditions: [], acknowledgment: null },
+    };
+    const bound = bindActionSnapshot(snapshotWithMarker);
+    expect(bound.ok).toBe(true);
+    if (!bound.ok) throw new Error("bind failed");
+    const toPersist = { ...snapshotWithMarker, binding: bound.binding };
+    const persisted = harness.engagementRepository.persistPlannedAction({
+      engagementId: engagement.value.id,
+      snapshot: toPersist,
+      representable: true,
+      capabilityErrorCode: null,
+      occurredAt: "2026-08-09T12:00:00.000Z",
+    });
+    expect(persisted.ok).toBe(true);
+    // Corrupt the stored binding to force invalid_persisted_data
+    harness.database.sqlite.exec("drop trigger if exists action_snapshots_no_update");
+    harness.database.sqlite.exec("drop trigger if exists action_snapshots_no_delete");
+    harness.database.sqlite.prepare("update action_snapshots set binding = ? where id = ?").run(`sha256:${"d".repeat(64)}`, "snapshot-leak-test");
+    await handshake(harness.app, enrolled.runner.id, enrolled.secret);
+    const leased = await harness.app.inject({
+      method: "POST",
+      url: "/api/v1/runner/lease",
+      headers: runnerHeaders(enrolled.runner.id, enrolled.secret),
+      payload: { sessionId: "session-fixture-1" },
+    });
+    expect(leased.statusCode).toBe(500);
+    expect(leased.json()).toEqual({ code: "invalid_persisted_data" });
+    expect(leased.body).not.toContain(marker);
+    expect(JSON.stringify(leased.json())).not.toContain(marker);
+    expect(JSON.stringify(leased.json())).not.toContain("192.0.2.99");
+  });
+});

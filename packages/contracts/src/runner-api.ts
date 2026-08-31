@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { ActionSnapshotSchema } from "./action-planning.js";
 import {
   PersistedRunEventSchema,
   PersistedRunSchema,
@@ -144,10 +145,35 @@ export const AcquireRunnerLeaseRequestSchema = z.strictObject({
   sessionId: IdentifierSchema,
 });
 
-export const AcquireRunnerLeaseResponseSchema = z.strictObject({
-  run: PersistedRunSchema,
-  lease: RunnerLeaseSchema,
-});
+export const AcquireRunnerLeaseResponseSchema = z
+  .strictObject({
+    run: PersistedRunSchema,
+    lease: RunnerLeaseSchema,
+    actionSnapshot: ActionSnapshotSchema,
+  })
+  .superRefine((value, context) => {
+    if (value.run.actionId !== value.actionSnapshot.actionId) {
+      context.addIssue({
+        code: "custom",
+        message: "snapshot action mismatch",
+        path: ["actionSnapshot", "actionId"],
+      });
+    }
+    if (value.lease.runId !== value.run.id) {
+      context.addIssue({
+        code: "custom",
+        message: "lease run mismatch",
+        path: ["lease", "runId"],
+      });
+    }
+    if (value.lease.fence !== value.run.currentFence) {
+      context.addIssue({
+        code: "custom",
+        message: "lease fence mismatch",
+        path: ["lease", "fence"],
+      });
+    }
+  });
 
 export const RunnerLeaseIdParamsSchema = z.strictObject({
   leaseId: IdentifierSchema,

@@ -14,8 +14,46 @@ import {
   loadOutboxEntry,
   removeOutboxAtomically,
 } from "./outbox.js";
-import { commandJsonV1RunnerAppendStartedDigest } from "@blackglass/contracts";
+import {
+  AcquireRunnerLeaseResponseSchema,
+  commandJsonV1RunnerAppendStartedDigest,
+} from "@blackglass/contracts";
 import { createRunnerLoop, runOnce, RunnerShutdownError } from "./runner.js";
+
+function fixtureActionSnapshot(actionId = "act-1"): unknown {
+  return {
+    normalizationProfile: "d1-v1",
+    orchestrationProfile: "d2-v1",
+    snapshotId: `snapshot-${actionId}`,
+    version: 1,
+    binding: `sha256:${"a".repeat(64)}`,
+    actionId,
+    canonicalTargets: [
+      {
+        normalizationProfile: "d1-v1",
+        kind: "hostname",
+        hostname: "app.target.test",
+      },
+    ],
+    concreteDestinations: [
+      {
+        normalizationProfile: "d1-v1",
+        kind: "ip",
+        family: 4,
+        address: "192.0.2.10",
+        zone: null,
+      },
+    ],
+    typedOptions: { fixture: true },
+    resolutionSnapshots: [],
+    scopeRevisionId: null,
+    warningState: {
+      reasonCodes: [],
+      knownAdditions: [],
+      acknowledgment: null,
+    },
+  };
+}
 
 describe("fake-action argv invariants", () => {
   it("shell metacharacters remain one literal argv value and never execute", async () => {
@@ -717,6 +755,7 @@ describe("runner loop shutdown", () => {
     const leaseResponse = {
       run: { id: "run-1", actionId: "act-1", engagementId: "eng-1", attempt: 1, state: "leased", currentLeaseId: "lease-1", currentFence: "1", terminalKind: null, terminalReason: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), contractVersion: 1 },
       lease: { runId: "run-1", leaseId: "lease-1", runnerId: "runner-1", sessionId: "sess-1", fence: "1", expiresAt: new Date(Date.now() + 30000).toISOString(), latestHeartbeatSequence: 0, latestEventSequence: 0, orchestrationProfile: "d2-v1", protocol: "runner-control-v1" },
+      actionSnapshot: fixtureActionSnapshot("act-1"),
     };
     let startedCalled = false;
     void startedCalled;
@@ -765,6 +804,7 @@ describe("runner loop shutdown", () => {
     const leaseResponse = {
       run: { id: "run-1", actionId: "act-1", engagementId: "eng-1", attempt: 1, state: "leased", currentLeaseId: "lease-1", currentFence: "1", terminalKind: null, terminalReason: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), contractVersion: 1 },
       lease: { runId: "run-1", leaseId: "lease-1", runnerId: "runner-1", sessionId: "sess-1", fence: "1", expiresAt: new Date(Date.now() + 30000).toISOString(), latestHeartbeatSequence: 0, latestEventSequence: 0, orchestrationProfile: "d2-v1", protocol: "runner-control-v1" },
+      actionSnapshot: fixtureActionSnapshot("act-1"),
     };
     globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
       const u = typeof url === "string" ? url : url.toString();
@@ -831,7 +871,7 @@ describe("runner loop shutdown", () => {
         return new Response(JSON.stringify({ disposition: "accepted_completion", event: { eventId: 2, runId: "run-1", sequence: 2, type: "failed", fence: "1", payloadJson: "{}", digest: "sha256:" + "b".repeat(64), createdAt: new Date().toISOString() } }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (u.includes("/lease")) {
-        return new Response(JSON.stringify({ run: { id: "run-1", actionId: "act-1", engagementId: "eng-1", attempt: 1, state: "leased", currentLeaseId: "lease-1", currentFence: "1", terminalKind: null, terminalReason: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), contractVersion: 1 }, lease: { runId: "run-1", leaseId: "lease-1", runnerId: "runner-1", sessionId: "sess-1", fence: "1", expiresAt: new Date(Date.now() + 30000).toISOString(), latestHeartbeatSequence: 0, latestEventSequence: 0, orchestrationProfile: "d2-v1", protocol: "runner-control-v1" } }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ run: { id: "run-1", actionId: "act-1", engagementId: "eng-1", attempt: 1, state: "leased", currentLeaseId: "lease-1", currentFence: "1", terminalKind: null, terminalReason: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), contractVersion: 1 }, lease: { runId: "run-1", leaseId: "lease-1", runnerId: "runner-1", sessionId: "sess-1", fence: "1", expiresAt: new Date(Date.now() + 30000).toISOString(), latestHeartbeatSequence: 0, latestEventSequence: 0, orchestrationProfile: "d2-v1", protocol: "runner-control-v1" }, actionSnapshot: fixtureActionSnapshot("act-1") }), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400, headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
@@ -841,6 +881,7 @@ describe("runner loop shutdown", () => {
     const leaseResponse = {
       run: { id: "run-1", actionId: "act-1", engagementId: "eng-1", attempt: 1, state: "leased", currentLeaseId: "lease-1", currentFence: "1", terminalKind: null, terminalReason: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), contractVersion: 1 },
       lease: { runId: "run-1", leaseId: "lease-1", runnerId: "runner-1", sessionId: "sess-1", fence: "1", expiresAt: new Date(Date.now() + 30000).toISOString(), latestHeartbeatSequence: 0, latestEventSequence: 0, orchestrationProfile: "d2-v1", protocol: "runner-control-v1" },
+      actionSnapshot: fixtureActionSnapshot("act-1"),
     };
     globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
@@ -890,5 +931,120 @@ describe("runner loop shutdown", () => {
 
     await rm(dataDir2, { recursive: true, force: true });
     await rm(dataDir3, { recursive: true, force: true });
+  });
+});
+
+describe("runner lease snapshot parsing (M4 seam)", () => {
+  it("parses valid lease with canonical snapshot and rejects strict mismatches without leaking", () => {
+    const run = {
+      contractVersion: 1 as const,
+      id: "run-snapshot-1",
+      actionId: "action-snapshot-1",
+      engagementId: "engagement-1",
+      attempt: 1,
+      state: "leased" as const,
+      currentLeaseId: "lease-snapshot-1",
+      currentFence: "1" as const,
+      terminalKind: null,
+      terminalReason: null,
+      createdAt: "2026-08-09T12:00:00.000Z",
+      updatedAt: "2026-08-09T12:00:00.000Z",
+    };
+    const lease = {
+      orchestrationProfile: "d2-v1" as const,
+      protocol: "runner-control-v1" as const,
+      runId: "run-snapshot-1",
+      leaseId: "lease-snapshot-1",
+      runnerId: "runner-1",
+      sessionId: "sess-1",
+      fence: "1" as const,
+      expiresAt: "2026-08-09T12:00:30.000Z",
+      latestHeartbeatSequence: 0,
+      latestEventSequence: 0,
+    };
+    const snapshot = fixtureActionSnapshot("action-snapshot-1");
+    const valid = { run, lease, actionSnapshot: snapshot };
+    expect(AcquireRunnerLeaseResponseSchema.safeParse(valid).success).toBe(true);
+    // missing snapshot -> strict reject
+    expect(AcquireRunnerLeaseResponseSchema.safeParse({ run, lease } as unknown as Record<string, unknown>).success).toBe(false);
+    // extra field -> strict reject
+    expect(AcquireRunnerLeaseResponseSchema.safeParse({ ...valid, extra: "evil" }).success).toBe(false);
+    // mismatched actionId -> untrusted rejection
+    const tamperedActionId = { ...valid, actionSnapshot: { ...(snapshot as Record<string, unknown>), actionId: "action-tampered" } };
+    const tamperedRes = AcquireRunnerLeaseResponseSchema.safeParse(tamperedActionId);
+    expect(tamperedRes.success).toBe(false);
+    expect(JSON.stringify(tamperedRes)).not.toContain("SENSITIVE");
+    // mismatched lease runId
+    const tamperedLease = { ...valid, lease: { ...lease, runId: "run-tampered" } };
+    expect(AcquireRunnerLeaseResponseSchema.safeParse(tamperedLease).success).toBe(false);
+    // mismatched fence
+    const tamperedFence = { ...valid, lease: { ...lease, fence: "2" } };
+    expect(AcquireRunnerLeaseResponseSchema.safeParse(tamperedFence).success).toBe(false);
+    // malformed snapshot: empty canonicalTargets
+    const malformed = { ...valid, actionSnapshot: { ...(snapshot as Record<string, unknown>), canonicalTargets: [] } };
+    expect(AcquireRunnerLeaseResponseSchema.safeParse(malformed).success).toBe(false);
+    // arbitrary JSON rejected
+    expect(AcquireRunnerLeaseResponseSchema.safeParse({ run, lease, actionSnapshot: { arbitrary: "json" } }).success).toBe(false);
+  });
+
+  it("runner acquireLease rejects untrusted mismatched response via schema (no execution)", async () => {
+    const tmp = path.join(tmpdir(), `blackglass-runner-mismatch-${Date.now()}`);
+    await mkdir(tmp, { recursive: true });
+    const originalFetch = globalThis.fetch;
+    const run = {
+      contractVersion: 1 as const,
+      id: "run-mismatch-1",
+      actionId: "action-mismatch-1",
+      engagementId: "eng-1",
+      attempt: 1,
+      state: "leased" as const,
+      currentLeaseId: "lease-mismatch-1",
+      currentFence: "1" as const,
+      terminalKind: null,
+      terminalReason: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const lease = {
+      orchestrationProfile: "d2-v1" as const,
+      protocol: "runner-control-v1" as const,
+      runId: "run-mismatch-1",
+      leaseId: "lease-mismatch-1",
+      runnerId: "runner-1",
+      sessionId: "sess-1",
+      fence: "1" as const,
+      expiresAt: new Date(Date.now() + 30000).toISOString(),
+      latestHeartbeatSequence: 0,
+      latestEventSequence: 0,
+    };
+    const goodSnapshot = fixtureActionSnapshot("action-mismatch-1");
+    const tamperedSnapshot = { ...(goodSnapshot as Record<string, unknown>), actionId: "action-tampered" };
+    const tamperedResponse = { run, lease, actionSnapshot: tamperedSnapshot };
+    globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+      const u = typeof url === "string" ? url : url.toString();
+      if (u.includes("/handshake")) {
+        return new Response(
+          JSON.stringify({
+            acceptedProtocol: "runner-control-v1",
+            sessionId: "sess-1",
+            runnerId: "runner-1",
+            leaseAllowed: true,
+            sessionPinned: true,
+            registryPinned: false,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (u.includes("/lease") && !u.includes("/heartbeat") && !u.includes("/events") && !u.includes("/complete")) {
+        return new Response(JSON.stringify(tamperedResponse), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
+    }) as unknown as typeof fetch;
+    const { acquireLease } = await import("./runner.js");
+    const { resolveRunnerConfig } = await import("./config.js");
+    const config = resolveRunnerConfig({ dataDir: tmp, runnerId: "runner-1", secret: "a".repeat(43), apiBaseUrl: "http://127.0.0.1:9" });
+    await expect(acquireLease(config)).rejects.toThrow();
+    globalThis.fetch = originalFetch;
+    await rm(tmp, { recursive: true, force: true });
   });
 });

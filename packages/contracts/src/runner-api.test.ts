@@ -4,6 +4,7 @@ import fixtureData from "../../../docs/architecture/fixtures/d2/runner-identity.
   type: "json",
 };
 import {
+  AcquireRunnerLeaseResponseSchema,
   ConfirmEnrollmentRequestSchema,
   ConfirmEnrollmentResponseSchema,
   InstallationFingerprintSchema,
@@ -19,6 +20,7 @@ import {
   parseRunnerAuthorizationHeader,
 } from "./runner-api.js";
 import { RUNNER_CONTROL_PROTOCOL } from "./runner-control.js";
+import { ActionSnapshotSchema } from "./action-planning.js";
 
 const MUST_IMPLEMENT = [
   "d2.runner.enrollment-owner-confirmation",
@@ -186,5 +188,131 @@ describe("runner API contracts", () => {
       ok: false,
     });
     expect(parseRunnerAuthorizationHeader(undefined)).toEqual({ ok: false });
+  });
+
+  it("requires canonical actionSnapshot in AcquireRunnerLeaseResponse and rejects strict mismatches", () => {
+    const validSnapshot = {
+      normalizationProfile: "d1-v1" as const,
+      orchestrationProfile: "d2-v1" as const,
+      snapshotId: "snapshot-fixture-lease",
+      version: 1,
+      binding: `sha256:${"a".repeat(64)}`,
+      actionId: "action-fixture-lease",
+      canonicalTargets: [
+        {
+          normalizationProfile: "d1-v1" as const,
+          kind: "hostname" as const,
+          hostname: "app.target.test",
+        },
+      ],
+      concreteDestinations: [
+        {
+          normalizationProfile: "d1-v1" as const,
+          kind: "ip" as const,
+          family: 4 as const,
+          address: "192.0.2.10",
+          zone: null,
+        },
+      ],
+      typedOptions: { fixture: true },
+      resolutionSnapshots: [],
+      scopeRevisionId: null,
+      warningState: {
+        reasonCodes: [],
+        knownAdditions: [],
+        acknowledgment: null,
+      },
+    } as const;
+    expect(ActionSnapshotSchema.safeParse(validSnapshot).success).toBe(true);
+    const validRun = {
+      contractVersion: 1 as const,
+      id: "run-fixture-lease-1",
+      actionId: "action-fixture-lease",
+      engagementId: "engagement-fixture-1",
+      attempt: 1,
+      state: "leased" as const,
+      currentLeaseId: "lease-fixture-1",
+      currentFence: "1" as const,
+      terminalKind: null,
+      terminalReason: null,
+      createdAt: "2026-08-09T12:00:00.000Z",
+      updatedAt: "2026-08-09T12:00:00.000Z",
+    } as const;
+    const validLease = {
+      orchestrationProfile: "d2-v1" as const,
+      protocol: "runner-control-v1" as const,
+      runId: "run-fixture-lease-1",
+      leaseId: "lease-fixture-1",
+      runnerId: "runner-fixture-1",
+      sessionId: "session-fixture-1",
+      fence: "1" as const,
+      expiresAt: "2026-08-09T12:00:30.000Z",
+      latestHeartbeatSequence: 0,
+      latestEventSequence: 0,
+    } as const;
+    const validResponse = {
+      run: validRun,
+      lease: validLease,
+      actionSnapshot: validSnapshot,
+    };
+    expect(AcquireRunnerLeaseResponseSchema.safeParse(validResponse).success).toBe(true);
+    // strict: missing snapshot
+    expect(
+      AcquireRunnerLeaseResponseSchema.safeParse({ run: validRun, lease: validLease }).success,
+    ).toBe(false);
+    // strict: extra top-level field
+    expect(
+      AcquireRunnerLeaseResponseSchema.safeParse({ ...validResponse, extra: "evil" }).success,
+    ).toBe(false);
+    // strict: extra field inside snapshot
+    expect(
+      AcquireRunnerLeaseResponseSchema.safeParse({
+        ...validResponse,
+        actionSnapshot: { ...validSnapshot, extra: "evil" },
+      }).success,
+    ).toBe(false);
+    // malformed snapshot: invalid hostname (non-synthetic but also invalid shape)
+    expect(
+      AcquireRunnerLeaseResponseSchema.safeParse({
+        ...validResponse,
+        actionSnapshot: { ...validSnapshot, canonicalTargets: [] },
+      }).success,
+    ).toBe(false);
+    // mismatched snapshot actionId (untrusted tampering)
+    expect(
+      AcquireRunnerLeaseResponseSchema.safeParse({
+        ...validResponse,
+        actionSnapshot: { ...validSnapshot, actionId: "action-tampered" },
+      }).success,
+    ).toBe(false);
+    // mismatched lease runId
+    expect(
+      AcquireRunnerLeaseResponseSchema.safeParse({
+        ...validResponse,
+        lease: { ...validLease, runId: "run-tampered" },
+      }).success,
+    ).toBe(false);
+    // mismatched fence
+    expect(
+      AcquireRunnerLeaseResponseSchema.safeParse({
+        ...validResponse,
+        lease: { ...validLease, fence: "2" },
+      }).success,
+    ).toBe(false);
+    // malformed binding (fails opaque binding shape)
+    expect(
+      AcquireRunnerLeaseResponseSchema.safeParse({
+        ...validResponse,
+        actionSnapshot: { ...validSnapshot, binding: "sha256:!!!" },
+      }).success,
+    ).toBe(false);
+    // arbitrary JSON rejected (no parallel type)
+    expect(
+      AcquireRunnerLeaseResponseSchema.safeParse({
+        run: validRun,
+        lease: validLease,
+        actionSnapshot: { arbitrary: "json" },
+      }).success,
+    ).toBe(false);
   });
 });
