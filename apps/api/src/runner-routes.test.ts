@@ -703,11 +703,6 @@ describe("runner lease snapshot seam (M4)", () => {
     const harness = await createHarness();
     const enrolled = await enroll(harness.app);
     const runId = await queueRun(harness, "action-snapshot-positive");
-    const action = harness.engagementRepository.getAction(
-      (await harness.engagementRepository.listEngagements()).value[0].id,
-      "action-snapshot-positive",
-    );
-    // Ensure we can locate engagementId via DB query for robustness
     const engagementId = harness.database.sqlite
       .prepare("select engagement_id from actions where id = ?")
       .get("action-snapshot-positive") as { engagement_id: string } | undefined;
