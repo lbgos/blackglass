@@ -50,7 +50,7 @@ function GatedInstallButton({ entry }: { entry: PluginCatalogEntry }) {
 
 function PluginCard({ entry }: { entry: PluginCatalogEntry }) {
   return (
-    <article className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2.5 rounded-[10px] border border-border bg-card p-3.5 text-left">
+    <article className="density-row grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2.5 rounded-[10px] border border-border bg-card p-3.5 text-left">
       <div>
         <h3 className="m-0 text-sm font-semibold">{entry.name}</h3>
         <p className="mt-1 mb-0 text-xs leading-[1.45] text-muted-foreground">{entry.description}</p>
