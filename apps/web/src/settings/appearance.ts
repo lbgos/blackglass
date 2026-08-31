@@ -245,19 +245,28 @@ export function glassSliderProgress(opacity: number): number {
 export function installAppearanceSync(browserWindow: Window = window): () => void {
   const root = browserWindow.document.documentElement as unknown as AppearanceRoot;
 
-  applyAppearance(root, {
-    glassOpacity: readGlassOpacity(browserWindow.localStorage),
-    density: readDensity(browserWindow.localStorage),
-    reducedMotion: readReducedMotion(browserWindow.localStorage),
-  });
+  const getPrefs = (): { glassOpacity: number; density: Density; reducedMotion: boolean } => {
+    try {
+      const storage = browserWindow.localStorage;
+      return {
+        glassOpacity: readGlassOpacity(storage),
+        density: readDensity(storage),
+        reducedMotion: readReducedMotion(storage),
+      };
+    } catch {
+      return {
+        glassOpacity: DEFAULT_GLASS_OPACITY,
+        density: DEFAULT_DENSITY,
+        reducedMotion: DEFAULT_REDUCED_MOTION,
+      };
+    }
+  };
+
+  applyAppearance(root, getPrefs());
 
   const onStorage = (event: StorageEvent) => {
     if (event.key === null) {
-      applyAppearance(root, {
-        glassOpacity: readGlassOpacity(browserWindow.localStorage),
-        density: readDensity(browserWindow.localStorage),
-        reducedMotion: readReducedMotion(browserWindow.localStorage),
-      });
+      applyAppearance(root, getPrefs());
       return;
     }
     if (event.key === GLASS_OPACITY_STORAGE_KEY) {
@@ -287,8 +296,11 @@ export function installAppearanceSync(browserWindow: Window = window): () => voi
 
   browserWindow.addEventListener("storage", onStorage);
 
-  const observer = new MutationObserver(() => {
-    const current = parseGlassOpacity(root.dataset.glassOpacity) ?? readGlassOpacity(browserWindow.localStorage);
+  const ObserverCtor: typeof MutationObserver =
+    (browserWindow as unknown as { MutationObserver?: typeof MutationObserver }).MutationObserver ??
+    MutationObserver;
+  const observer = new ObserverCtor(() => {
+    const current = parseGlassOpacity(root.dataset.glassOpacity) ?? getPrefs().glassOpacity;
     applyGlassOpacity(root, current);
   });
 

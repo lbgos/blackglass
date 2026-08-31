@@ -4,7 +4,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import {
+  DEFAULT_DENSITY,
   DEFAULT_GLASS_OPACITY,
+  DEFAULT_REDUCED_MOTION,
   applyGlassOpacity,
   clampGlassOpacity,
   glassSliderProgress,
@@ -143,5 +145,56 @@ describe("installAppearanceSync", () => {
     cleanup();
     window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "32" }));
     expect(document.documentElement.dataset.glassOpacity).toBe("30");
+  });
+
+  it("stays operable when localStorage getter throws", () => {
+    const el = document.createElement("div");
+    el.dataset.theme = "dark";
+    const pending = new Map<string, Set<(e: Event) => void>>();
+    const fakeWindow = {
+      document: { documentElement: el } as unknown as Document,
+      addEventListener: (type: string, listener: (e: Event) => void) => {
+        const set = pending.get(type) ?? new Set<(e: Event) => void>();
+        set.add(listener);
+        pending.set(type, set);
+      },
+      removeEventListener: (type: string, listener: (e: Event) => void) => {
+        pending.get(type)?.delete(listener);
+      },
+      dispatchEvent: (event: Event) => {
+        pending.get(event.type)?.forEach((cb) => cb(event));
+        return true;
+      },
+      get localStorage(): Storage {
+        throw new DOMException("Blocked", "SecurityError");
+      },
+      MutationObserver: window.MutationObserver,
+    } as unknown as Window;
+
+    let cleanup: (() => void) | undefined;
+    expect(() => {
+      cleanup = installAppearanceSync(fakeWindow);
+    }).not.toThrow();
+    expect(typeof cleanup).toBe("function");
+    expect(el.dataset.glassOpacity).toBe(String(DEFAULT_GLASS_OPACITY));
+    expect(el.dataset.density).toBe(DEFAULT_DENSITY);
+    expect(el.dataset.reducedMotion).toBe(String(DEFAULT_REDUCED_MOTION));
+
+    const direct = new StorageEvent("storage", {
+      key: "blackglass.glassOpacity",
+      newValue: "30",
+    });
+    expect(() => {
+      fakeWindow.dispatchEvent(direct);
+    }).not.toThrow();
+    expect(el.dataset.glassOpacity).toBe("30");
+
+    const bulk = new StorageEvent("storage", { key: null, newValue: null });
+    expect(() => {
+      fakeWindow.dispatchEvent(bulk);
+    }).not.toThrow();
+    expect(el.dataset.glassOpacity).toBe(String(DEFAULT_GLASS_OPACITY));
+
+    expect(() => cleanup?.()).not.toThrow();
   });
 });
