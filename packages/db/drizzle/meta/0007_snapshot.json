@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "d7a1b2c3-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+  "id": "0f145852-c508-46c9-bd09-935460967425",
   "prevId": "c0243cf9-a3a1-4774-9a35-3166b80e8cbd",
   "tables": {
     "action_covered_destinations": {
@@ -1383,6 +1383,152 @@
         }
       }
     },
+    "nmap_services": {
+      "name": "nmap_services",
+      "columns": {
+        "artifact_id": {
+          "name": "artifact_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "parser_version": {
+          "name": "parser_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "address": {
+          "name": "address",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "port": {
+          "name": "port",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "protocol": {
+          "name": "protocol",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "hostname": {
+          "name": "hostname",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "service_name": {
+          "name": "service_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "product": {
+          "name": "product",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "observed_at": {
+          "name": "observed_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "nmap_service_artifact_fk": {
+          "name": "nmap_service_artifact_fk",
+          "tableFrom": "nmap_services",
+          "tableTo": "evidence_artifacts",
+          "columnsFrom": [
+            "artifact_id"
+          ],
+          "columnsTo": [
+            "artifact_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "nmap_services_artifact_id_parser_version_address_port_protocol_pk": {
+          "columns": [
+            "artifact_id",
+            "parser_version",
+            "address",
+            "port",
+            "protocol"
+          ],
+          "name": "nmap_services_artifact_id_parser_version_address_port_protocol_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "nmap_service_artifact_id": {
+          "name": "nmap_service_artifact_id",
+          "value": "length(\"nmap_services\".\"artifact_id\") between 1 and 127 and substr(\"nmap_services\".\"artifact_id\",1,1) glob '[a-z0-9]' and \"nmap_services\".\"artifact_id\" not glob '*[^a-z0-9-]*'"
+        },
+        "nmap_service_parser_version": {
+          "name": "nmap_service_parser_version",
+          "value": "length(\"nmap_services\".\"parser_version\") between 1 and 64 and \"nmap_services\".\"parser_version\" not glob '*[^a-z0-9._-]*' and substr(\"nmap_services\".\"parser_version\", 1, 1) glob '[a-z0-9]'"
+        },
+        "nmap_service_address": {
+          "name": "nmap_service_address",
+          "value": "length(\"nmap_services\".\"address\") between 1 and 45"
+        },
+        "nmap_service_port": {
+          "name": "nmap_service_port",
+          "value": "\"nmap_services\".\"port\" between 1 and 65535"
+        },
+        "nmap_service_protocol": {
+          "name": "nmap_service_protocol",
+          "value": "\"nmap_services\".\"protocol\" = 'tcp'"
+        },
+        "nmap_service_hostname": {
+          "name": "nmap_service_hostname",
+          "value": "\"nmap_services\".\"hostname\" is null or length(\"nmap_services\".\"hostname\") between 1 and 253"
+        },
+        "nmap_service_service_name": {
+          "name": "nmap_service_service_name",
+          "value": "\"nmap_services\".\"service_name\" is null or length(\"nmap_services\".\"service_name\") between 1 and 64"
+        },
+        "nmap_service_product": {
+          "name": "nmap_service_product",
+          "value": "\"nmap_services\".\"product\" is null or length(\"nmap_services\".\"product\") between 1 and 64"
+        },
+        "nmap_service_version": {
+          "name": "nmap_service_version",
+          "value": "\"nmap_services\".\"version\" is null or length(\"nmap_services\".\"version\") between 1 and 64"
+        },
+        "nmap_service_observed_at": {
+          "name": "nmap_service_observed_at",
+          "value": "length(\"nmap_services\".\"observed_at\") >= 20"
+        }
+      }
+    },
     "operator_command_idempotency": {
       "name": "operator_command_idempotency",
       "columns": {
@@ -2521,41 +2667,6 @@
           "name": "scope_revision_rules_json",
           "value": "json_valid(\"scope_revisions\".\"rules_json\")"
         }
-      }
-    },
-    "nmap_services": {
-      "name": "nmap_services",
-      "columns": {
-        "artifact_id": { "name": "artifact_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
-        "parser_version": { "name": "parser_version", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
-        "address": { "name": "address", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
-        "port": { "name": "port", "type": "integer", "primaryKey": false, "notNull": true, "autoincrement": false },
-        "protocol": { "name": "protocol", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
-        "hostname": { "name": "hostname", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false },
-        "service_name": { "name": "service_name", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false },
-        "product": { "name": "product", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false },
-        "version": { "name": "version", "type": "text", "primaryKey": false, "notNull": false, "autoincrement": false },
-        "observed_at": { "name": "observed_at", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false }
-      },
-      "indexes": {
-        "nmap_service_artifact_idx": { "name": "nmap_service_artifact_idx", "columns": ["artifact_id"], "isUnique": false }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "nmap_services_artifact_id_parser_version_address_port_protocol_pk": { "columns": ["artifact_id", "parser_version", "address", "port", "protocol"], "name": "nmap_services_artifact_id_parser_version_address_port_protocol_pk" }
-      },
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "nmap_service_artifact_id": { "name": "nmap_service_artifact_id", "value": "length(\"nmap_services\".\"artifact_id\") between 1 and 127 and substr(\"nmap_services\".\"artifact_id\", 1, 1) glob '[a-z0-9]' and \"nmap_services\".\"artifact_id\" not glob '*[^a-z0-9-]*'" },
-        "nmap_service_parser_version": { "name": "nmap_service_parser_version", "value": "length(\"nmap_services\".\"parser_version\") between 1 and 64 and \"nmap_services\".\"parser_version\" not glob '*[^a-z0-9._-]*' and substr(\"nmap_services\".\"parser_version\", 1, 1) glob '[a-z0-9]'" },
-        "nmap_service_address": { "name": "nmap_service_address", "value": "length(\"nmap_services\".\"address\") between 1 and 45" },
-        "nmap_service_port": { "name": "nmap_service_port", "value": "\"nmap_services\".\"port\" between 1 and 65535" },
-        "nmap_service_protocol": { "name": "nmap_service_protocol", "value": "\"nmap_services\".\"protocol\" = 'tcp'" },
-        "nmap_service_hostname": { "name": "nmap_service_hostname", "value": "\"nmap_services\".\"hostname\" is null or length(\"nmap_services\".\"hostname\") between 1 and 253" },
-        "nmap_service_service_name": { "name": "nmap_service_service_name", "value": "\"nmap_services\".\"service_name\" is null or length(\"nmap_services\".\"service_name\") between 1 and 64" },
-        "nmap_service_product": { "name": "nmap_service_product", "value": "\"nmap_services\".\"product\" is null or length(\"nmap_services\".\"product\") between 1 and 64" },
-        "nmap_service_version": { "name": "nmap_service_version", "value": "\"nmap_services\".\"version\" is null or length(\"nmap_services\".\"version\") between 1 and 64" },
-        "nmap_service_observed_at": { "name": "nmap_service_observed_at", "value": "length(\"nmap_services\".\"observed_at\") >= 20" }
       }
     }
   },

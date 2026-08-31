@@ -1018,20 +1018,13 @@ export const nmapServices = sqliteTable(
   },
   (table) => [
     primaryKey({ columns: [table.artifactId, table.parserVersion, table.address, table.port, table.protocol] }),
+    foreignKey({ columns: [table.artifactId], foreignColumns: [evidenceArtifacts.artifactId], name: "nmap_service_artifact_fk" }).onDelete("restrict"),
     check("nmap_service_artifact_id", sql`length(${table.artifactId}) between 1 and 127 and substr(${table.artifactId},1,1) glob '[a-z0-9]' and ${table.artifactId} not glob '*[^a-z0-9-]*'`),
-    check(
-      "nmap_service_parser_version",
-      sql`length(${table.parserVersion}) between 1 and 64 and ${table.parserVersion} not glob '*[^a-z0-9._-]*' and substr(${table.parserVersion}, 1, 1) glob '[a-z0-9]'`,
-    ),
-    check("nmap_service_address", sql`length(${table.address}) between 1 and 45`),
-    check("nmap_service_port", sql`${table.port} between 1 and 65535`),
-    check("nmap_service_protocol", sql`${table.protocol} = 'tcp'`),
-    check("nmap_service_hostname", sql`${table.hostname} is null or length(${table.hostname}) between 1 and 253`),
-    check("nmap_service_service_name", sql`${table.serviceName} is null or length(${table.serviceName}) between 1 and 64`),
-    check("nmap_service_product", sql`${table.product} is null or length(${table.product}) between 1 and 64`),
-    check("nmap_service_version", sql`${table.version} is null or length(${table.version}) between 1 and 64`),
-    check("nmap_service_observed_at", sql`length(${table.observedAt}) >= 20`),
-    index("nmap_service_artifact_idx").on(table.artifactId),
+    check("nmap_service_parser_version", sql`length(${table.parserVersion}) between 1 and 64 and ${table.parserVersion} not glob '*[^a-z0-9._-]*' and substr(${table.parserVersion}, 1, 1) glob '[a-z0-9]'`),
+    check("nmap_service_address", sql`length(${table.address}) between 1 and 45`), check("nmap_service_port", sql`${table.port} between 1 and 65535`),
+    check("nmap_service_protocol", sql`${table.protocol} = 'tcp'`), check("nmap_service_hostname", sql`${table.hostname} is null or length(${table.hostname}) between 1 and 253`),
+    check("nmap_service_service_name", sql`${table.serviceName} is null or length(${table.serviceName}) between 1 and 64`), check("nmap_service_product", sql`${table.product} is null or length(${table.product}) between 1 and 64`),
+    check("nmap_service_version", sql`${table.version} is null or length(${table.version}) between 1 and 64`), check("nmap_service_observed_at", sql`length(${table.observedAt}) >= 20`),
   ],
 );
 

@@ -281,15 +281,40 @@ export async function publishEvidenceArtifacts(
 ): Promise<void> {
   const isCancelled = options.isCancelled;
   await publishSingleArtifact({
-    config, lease, slot: "stdout", kind: "stdout", buffer: result.stdout, truncated: result.stdoutMeta.truncated, isCancelled,
+    config,
+    lease,
+    slot: "stdout",
+    kind: "stdout",
+    buffer: result.stdout,
+    truncated: result.stdoutMeta.truncated,
+    isCancelled,
   });
   await publishSingleArtifact({
-    config, lease, slot: "stderr", kind: "stderr", buffer: result.stderr, truncated: result.stderrMeta.truncated, isCancelled,
+    config,
+    lease,
+    slot: "stderr",
+    kind: "stderr",
+    buffer: result.stderr,
+    truncated: result.stderrMeta.truncated,
+    isCancelled,
   });
   if (options.nmapXml !== undefined) {
-    const nmapCompleteness: "complete" | "partial" = isCancelled || (options.nmapExitCode !== undefined && options.nmapExitCode !== null && options.nmapExitCode !== 0) ? "partial" : "complete";
+    const nmapCompleteness: "complete" | "partial" =
+      isCancelled ||
+      (options.nmapExitCode !== undefined &&
+        options.nmapExitCode !== null &&
+        options.nmapExitCode !== 0)
+        ? "partial"
+        : "complete";
     await publishSingleArtifact({
-      config, lease, slot: "nmap-xml", kind: "tool_raw", buffer: options.nmapXml, truncated: false, isCancelled, completenessOverride: nmapCompleteness,
+      config,
+      lease,
+      slot: "nmap-xml",
+      kind: "tool_raw",
+      buffer: options.nmapXml,
+      truncated: false,
+      isCancelled,
+      completenessOverride: nmapCompleteness,
     });
   }
 }
