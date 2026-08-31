@@ -274,7 +274,23 @@ export async function readNmapXmlSecurely(params: {
   fence: string;
 }): Promise<Buffer> {
   const expected = resolveNmapXmlPath(params.runRoot, params.runId, params.fence);
+  const expectedResolved = path.resolve(expected);
+  const runDir = resolveRunDirPath(params.runRoot, params.runId, params.fence);
+  const rootResolved = path.resolve(params.runRoot);
   const limit = EVIDENCE_QUOTA_DEFAULTS.perArtifactBytes;
+  try {
+    const rootLstat = await lstat(params.runRoot);
+    if (rootLstat.isSymbolicLink() || !rootLstat.isDirectory()) throw new Error("nmap_xml_unavailable");
+    const rootReal = await realpath(params.runRoot);
+    if (rootReal !== rootResolved) throw new Error("nmap_xml_unavailable");
+    const dirLstat = await lstat(runDir);
+    if (dirLstat.isSymbolicLink() || !dirLstat.isDirectory()) throw new Error("nmap_xml_unavailable");
+    const dirReal = await realpath(runDir);
+    if (dirReal !== path.resolve(runDir) || path.dirname(dirReal) !== rootReal) throw new Error("nmap_xml_unavailable");
+  } catch (e) {
+    if (e instanceof Error && e.message === "nmap_xml_unavailable") throw e;
+    throw new Error("nmap_xml_unavailable");
+  }
   let fh: Awaited<ReturnType<typeof open>> | null = null;
   try {
     fh = await open(expected, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
@@ -282,11 +298,12 @@ export async function readNmapXmlSecurely(params: {
     throw new Error("nmap_xml_unavailable");
   }
   try {
+    const fdPath = await realpath(`/proc/self/fd/${fh.fd}`).catch(() => {
+      throw new Error("nmap_xml_unavailable");
+    });
+    if (fdPath !== expectedResolved) throw new Error("nmap_xml_unavailable");
     const st = await fh.stat();
-    if (!st.isFile()) throw new Error("nmap_xml_unavailable");
-    if (st.nlink !== 1) throw new Error("nmap_xml_unavailable");
-    if (st.size > limit) throw new Error("nmap_xml_unavailable");
-    if (st.size === 0) return Buffer.alloc(0);
+    if (!st.isFile() || st.nlink !== 1 || st.size === 0 || st.size > limit) throw new Error("nmap_xml_unavailable");
     const buf = Buffer.allocUnsafe(st.size);
     let off = 0;
     while (off < st.size) {
@@ -295,6 +312,16 @@ export async function readNmapXmlSecurely(params: {
       off += bytesRead;
     }
     if (off !== st.size) throw new Error("nmap_xml_unavailable");
+    const probe = Buffer.alloc(1);
+    const { bytesRead: extra } = await fh.read(probe, 0, 1, null);
+    if (extra !== 0) throw new Error("nmap_xml_unavailable");
+    const st2 = await fh.stat();
+    if (st2.size !== st.size || st2.nlink !== 1) throw new Error("nmap_xml_unavailable");
+    const s1 = st as unknown as Record<string, unknown>;
+    const s2 = st2 as unknown as Record<string, unknown>;
+    if (s1["ino"] !== undefined && s2["ino"] !== s1["ino"]) throw new Error("nmap_xml_unavailable");
+    if (s1["dev"] !== undefined && s2["dev"] !== s1["dev"]) throw new Error("nmap_xml_unavailable");
+    if (st2.mtimeMs !== st.mtimeMs || st2.ctimeMs !== st.ctimeMs) throw new Error("nmap_xml_unavailable");
     return buf;
   } catch (e) {
     if (e instanceof Error && e.message === "nmap_xml_unavailable") throw e;
