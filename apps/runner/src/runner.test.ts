@@ -929,7 +929,7 @@ describe("runner loop shutdown", () => {
     };
     let nmapGrant: Record<string, unknown> | null = null;
     let nmapPut: Buffer | null = null;
-    let order: string[] = [];
+    const order: string[] = [];
     let finalCompleteBody: Record<string, unknown> | null = null;
     globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
@@ -941,7 +941,7 @@ describe("runner loop shutdown", () => {
       if (u.includes("/artifacts/grants")) {
         const b = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
         const s = String(b.artifactSlot ?? "stdout");
-        if (s === "nmap-xml") { nmapGrant = b as Record<string, unknown>; order.push("nmap"); }
+        if (s === "nmap-xml") { nmapGrant = b; order.push("nmap"); }
         const isN = s === "nmap-xml";
         const isE = s === "stderr";
         const aId = isN ? "00000000-0000-4000-8000-000000000003" : isE ? "00000000-0000-4000-8000-000000000002" : "00000000-0000-4000-8000-000000000001";
@@ -1168,35 +1168,62 @@ describe("prepareNmapExecution", () => {
 
 describe("readNmapXmlSecurely", () => {
   it("accepts exact nonempty bytes", async () => {
-    const rr = path.join(tmpdir(), `ok-${Date.now()}`);
-    await createRunDirectory(rr, "run-ok-1", "1");
-    const exp = Buffer.from("<nmaprun><host>ok</host></nmaprun>");
-    await writeFile(resolveNmapXmlPath(rr, "run-ok-1", "1"), exp);
-    expect((await readNmapXmlSecurely({ runRoot: rr, runId: "run-ok-1", fence: "1" })).equals(exp)).toBe(true);
-    await rm(rr, { recursive: true, force: true });
+    const runRoot = path.join(tmpdir(), `ok-${Date.now()}`);
+    await createRunDirectory(runRoot, "run-ok-1", "1");
+    const expected = Buffer.from("<nmaprun><host>ok</host></nmaprun>");
+    await writeFile(resolveNmapXmlPath(runRoot, "run-ok-1", "1"), expected);
+    expect((await readNmapXmlSecurely({ runRoot, runId: "run-ok-1", fence: "1" })).equals(expected)).toBe(true);
+    await rm(runRoot, { recursive: true, force: true });
   });
   it("rejects empty, symlink, hardlink, oversized and parent escape with fixed error", async () => {
     const limit = EVIDENCE_QUOTA_DEFAULTS.perArtifactBytes;
-    const cases: Array<{ name: string; setup: (rr: string, id: string, f: string) => Promise<string | void> }> = [
-      { name: "empty", setup: async (rr, id, f) => { await writeFile(resolveNmapXmlPath(rr, id, f), Buffer.alloc(0)); } },
-      {name:"symlink",setup:async(a,b,c)=>{await writeFile("/tmp/e",Buffer.from("evil"));await symlink("/tmp/e",resolveNmapXmlPath(a,b,c));return"/tmp/e"}},
-      { name: "hardlink", setup: async (rr,id,f) => { const p=resolveNmapXmlPath(rr,id,f); await writeFile(p,Buffer.from("xml")); await link(p,`${p}.hl`); } },
-      {name:"oversized",setup:async(a,b,c)=>{const p=resolveNmapXmlPath(a,b,c);await writeFile(p,Buffer.from("x"));await truncate(p,limit+1)}},
-      { name: "parent-escape",
-        setup: async (rr,id,f) => { const d=path.join(rr,`run-${id}-f${f}`); const a="/tmp/a";
-          await mkdir(a,{recursive:true});await writeFile(a+"/nmap.xml",Buffer.from("evil"));
-          await rm(d,{recursive:true,force:true});await symlink(a,d);return a;} },
+    const cases: Array<{ name: string; setup: (runRoot: string, runId: string, fence: string) => Promise<string | void> }> = [
+      { name: "empty", setup: async (runRoot, runId, fence) => { await writeFile(resolveNmapXmlPath(runRoot, runId, fence), Buffer.alloc(0)); } },
+      { name: "symlink", setup: async (runRoot, runId, fence) => {
+        const outside = `${runRoot}-outside`;
+        await writeFile(outside, Buffer.from("evil"));
+        await symlink(outside, resolveNmapXmlPath(runRoot, runId, fence));
+        return outside;
+      } },
+      { name: "hardlink", setup: async (runRoot, runId, fence) => {
+        await writeFile(resolveNmapXmlPath(runRoot, runId, fence), Buffer.from("xml"));
+        await link(resolveNmapXmlPath(runRoot, runId, fence), `${resolveNmapXmlPath(runRoot, runId, fence)}.hl`);
+      } },
+      { name: "oversized", setup: async (runRoot, runId, fence) => {
+        await writeFile(resolveNmapXmlPath(runRoot, runId, fence), Buffer.from("x"));
+        await truncate(resolveNmapXmlPath(runRoot, runId, fence), limit + 1);
+      } },
+      { name: "parent-escape", setup: async (runRoot, runId, fence) => {
+        const runDir = path.join(runRoot, `run-${runId}-f${fence}`);
+        await mkdir(`${runRoot}-outside`, { recursive: true });
+        await writeFile(path.join(`${runRoot}-outside`, "nmap.xml"), Buffer.from("evil"));
+        await rm(runDir, { recursive: true, force: true });
+        await symlink(`${runRoot}-outside`, runDir);
+        return `${runRoot}-outside`;
+      } },
     ];
-    async function expectFixed(rr:string,id:string,fe:string,xp:string){
-      await expect(readNmapXmlSecurely({runRoot:rr,runId:id,fence:fe})).rejects.toThrow("nmap_xml_unavailable");
-      try{await readNmapXmlSecurely({runRoot:rr,runId:id,fence:fe})}catch(e){const m=String(e);
-        expect(m).not.toContain(rr);expect(m).not.toContain(xp);expect(m).not.toContain("evil")}
+    async function expectFixed(runRoot: string, runId: string, fence: string, xmlPath: string): Promise<void> {
+      let thrown: unknown;
+      try {
+        await readNmapXmlSecurely({ runRoot, runId, fence });
+      } catch (error: unknown) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toBe("nmap_xml_unavailable");
+      const message = String(thrown);
+      expect(message).not.toContain(runRoot);
+      expect(message).not.toContain(xmlPath);
+      expect(message).not.toContain("evil");
     }
-    for (const c of cases) {
-      const rr=path.join(tmpdir(),`x-${c.name}-${Date.now()}`);await createRunDirectory(rr,"run-1","1");
-      const atk=await c.setup(rr,"run-1","1") as string|undefined;const xp=resolveNmapXmlPath(rr,"run-1","1");
-      await expectFixed(rr,"run-1","1",xp);await rm(rr,{recursive:true,force:true}).catch(()=>{});
-      if(typeof atk==="string") await rm(atk,{recursive:true,force:true}).catch(()=>{});
+    for (const testCase of cases) {
+      const runRoot = path.join(tmpdir(), `x-${testCase.name}-${Date.now()}`);
+      await createRunDirectory(runRoot, "run-1", "1");
+      const attackerPath = await testCase.setup(runRoot, "run-1", "1") as string | undefined;
+      const xmlPath = resolveNmapXmlPath(runRoot, "run-1", "1");
+      await expectFixed(runRoot, "run-1", "1", xmlPath);
+      await rm(runRoot, { recursive: true, force: true }).catch(() => {});
+      if (typeof attackerPath === "string") await rm(attackerPath, { recursive: true, force: true }).catch(() => {});
     }
   });
 });
