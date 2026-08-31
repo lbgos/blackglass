@@ -11,6 +11,7 @@ import {
   RunnerHeartbeatResponseSchema,
   commandJsonV1RunnerAppendStartedDigest,
   commandJsonV1RunnerCompleteDigest,
+  type NmapTcpConnectOptions,
 } from "@blackglass/contracts";
 import { buildNmapArgv } from "@blackglass/domain";
 
@@ -40,48 +41,7 @@ function authHeader(runnerId: string, secret: string): string {
   return `Blackglass-Runner ${runnerId} ${secret}`;
 }
 
-function adaptToNmapOptions(typedOptions: unknown): unknown | null {
-  if (typeof typedOptions !== "object" || typedOptions === null || Array.isArray(typedOptions)) return null;
-  const strict = NmapTcpConnectOptionsSchema.safeParse(typedOptions);
-  if (strict.success) return strict.data;
-  const record = typedOptions as Record<string, unknown>;
-  const keys = Object.keys(record);
-  if (keys.length === 1 && keys[0] === "fixture" && record.fixture === true) {
-    return {
-      serviceDetection: true,
-      timingTemplate: "T4",
-      skipHostDiscovery: true,
-      versionIntensity: 7,
-      maxRetries: 2,
-    };
-  }
-  if (keys.length !== 1 || keys[0] !== "declaredPorts") return null;
-  const declared = record.declaredPorts;
-  if (declared === null) {
-    return {
-      serviceDetection: true,
-      timingTemplate: "T4",
-      skipHostDiscovery: true,
-      versionIntensity: 7,
-      maxRetries: 2,
-    };
-  }
-  if (!Array.isArray(declared)) return null;
-  const ports: { from: number; to: number }[] = [];
-  for (const p of declared) {
-    if (typeof p !== "number" || !Number.isInteger(p) || p < 1 || p > 65535) return null;
-    ports.push({ from: p, to: p });
-  }
-  const base: Record<string, unknown> = {
-    serviceDetection: true,
-    timingTemplate: "T4",
-    skipHostDiscovery: true,
-    versionIntensity: 7,
-    maxRetries: 2,
-  };
-  if (ports.length > 0) base.ports = ports;
-  return base;
-}
+function adaptToNmapOptions(o: unknown): NmapTcpConnectOptions | null { if (typeof o !== "object" || o === null || Array.isArray(o)) return null; const s = NmapTcpConnectOptionsSchema.safeParse(o); if (s.success) return s.data; const r = o as Record<string, unknown>, k = Object.keys(r); if (k.length !== 1 || k[0] !== "declaredPorts") return null; const d = r.declaredPorts; if (d === null) return { serviceDetection: true, timingTemplate: "T4", skipHostDiscovery: true, versionIntensity: 7, maxRetries: 2 }; if (!Array.isArray(d)) return null; const p: { from: number; to: number }[] = []; for (const x of d) { if (typeof x !== "number" || !Number.isInteger(x) || x < 1 || x > 65535) return null; p.push({ from: x, to: x }); } const b: NmapTcpConnectOptions = { serviceDetection: true, timingTemplate: "T4", skipHostDiscovery: true, versionIntensity: 7, maxRetries: 2 }; if (p.length > 0) b.ports = p; return b; }
 
 export async function handshake(config: RunnerConfig): Promise<HandshakeResponse> {
   const url = `${config.apiBaseUrl}/api/v1/runner/handshake`;
@@ -370,13 +330,12 @@ export async function runOnce(
   let earlyReason: string | null = null;
   try {
     const xmlPath = resolveNmapXmlPath(config.runRoot, lease.runId, lease.fence);
-    const snapshot: unknown = (acquired as unknown as { actionSnapshot: unknown }).actionSnapshot;
-    const snap = snapshot as { typedOptions: unknown; canonicalTargets: unknown };
-    const adapted = adaptToNmapOptions(snap.typedOptions);
+    const snapshot = acquired.actionSnapshot;
+    const adapted = adaptToNmapOptions(snapshot.typedOptions);
     if (adapted === null) {
       earlyReason = "invalid_action_snapshot";
     } else {
-      const built = buildNmapArgv({ options: adapted, canonicalTargets: snap.canonicalTargets as never, xmlPath });
+      const built = buildNmapArgv({ options: adapted, canonicalTargets: snapshot.canonicalTargets, xmlPath });
       if (!built.ok) {
         earlyReason = "invalid_action_snapshot";
       } else {
@@ -385,7 +344,7 @@ export async function runOnce(
           earlyReason = "nmap_unavailable";
           nmapArgv = null;
         } else {
-          for (const a of nmapArgv as readonly string[]) if (a.includes("\0")) { earlyReason = "nmap_unavailable"; nmapArgv = null; break; }
+          for (const a of nmapArgv) if (a.includes("\0")) { earlyReason = "nmap_unavailable"; nmapArgv = null; break; }
           if (earlyReason === null) {
             try {
               await verifyExecutable(config.executable);
@@ -403,17 +362,14 @@ export async function runOnce(
   }
 
   if (signal?.aborted || shutdownAfterStarted) {
-    earlyReason = null;
-    nmapArgv = null;
+    cleanup();
+    await completeRun(config, lease, 2, "failed", "runner_lost").catch(() => {});
+    if (signal?.aborted) throw new RunnerShutdownError();
+    return true;
   }
 
   if (earlyReason !== null) {
     cleanup();
-    if (signal?.aborted || shutdownAfterStarted) {
-      await completeRun(config, lease, 2, "failed", "runner_lost").catch(() => {});
-      if (signal?.aborted) throw new RunnerShutdownError();
-      return true;
-    }
     await completeRun(config, lease, 2, "failed", earlyReason).catch(() => {});
     return true;
   }
@@ -465,9 +421,17 @@ export async function runOnce(
 
     result = await handle;
     if (fenceCheck !== null) clearInterval(fenceCheck);
-  } finally {
+  } catch {
     fullCleanup();
+    if (signal?.aborted || shutdownAfterStarted) {
+      await completeRun(config, lease, 2, "failed", "runner_lost").catch(() => {});
+      if (signal?.aborted) throw new RunnerShutdownError();
+      return true;
+    }
+    await completeRun(config, lease, 2, "failed", "nmap_unavailable").catch(() => {});
+    return true;
   }
+  fullCleanup();
 
   if (signal?.aborted || shutdownAfterStarted) {
     cancelledByFence = true;

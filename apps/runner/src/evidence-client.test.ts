@@ -313,7 +313,7 @@ describe("evidence publishing grant flow", () => {
         actionId: "act-1",
         canonicalTargets: [{ normalizationProfile: "d1-v1", kind: "hostname", hostname: "app.target.test" }],
         concreteDestinations: [{ normalizationProfile: "d1-v1", kind: "ip", family: 4, address: "192.0.2.10", zone: null }],
-        typedOptions: { fixture: true },
+        typedOptions: { declaredPorts: [80] },
         resolutionSnapshots: [],
         scopeRevisionId: null,
         warningState: { reasonCodes: [], knownAdditions: [], acknowledgment: null },

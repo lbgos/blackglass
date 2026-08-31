@@ -41,6 +41,9 @@ importers:
       '@blackglass/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@blackglass/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
     devDependencies:
       '@types/node':
         specifier: 24.13.3

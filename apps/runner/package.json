@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Blackglass native host runner — nmap execution slice for M4",
+  "description": "Blackglass native host runner - nmap execution slice for M4",
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
     "start": "node dist/index.js",

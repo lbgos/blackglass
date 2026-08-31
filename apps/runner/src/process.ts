@@ -152,8 +152,7 @@ function spawnSupervised(params: {
               child?.kill("SIGKILL");
             } catch {}
           }
-          const killDone = await waitForClose(child!, 2000);
-          if (!killDone) {}
+          await waitForClose(child!, 2000);
           void terminatedByRunner;
         };
         (promise as unknown as { cancel: () => Promise<void> }).cancel = () => doCancel();
