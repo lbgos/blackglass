@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
-import { mkdir, rm, readdir } from "node:fs/promises";
+import { chmod, mkdir, rm, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { beforeAll, afterAll, describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 
 import { BoundedCollector, FRAME_LIMIT } from "./bounded-output.js";
 import { controlledEnv, buildFakeActionArgv, spawnFakeAction } from "./fake-action.js";
@@ -44,7 +44,7 @@ function fixtureActionSnapshot(actionId = "act-1"): unknown {
         zone: null,
       },
     ],
-    typedOptions: { fixture: true },
+    typedOptions: { declaredPorts: [80, 443] },
     resolutionSnapshots: [],
     scopeRevisionId: null,
     warningState: {
@@ -54,6 +54,14 @@ function fixtureActionSnapshot(actionId = "act-1"): unknown {
     },
   };
 }
+
+let fakeNmapPath: string | null = null;
+beforeAll(async () => {
+  const p = path.join(tmpdir(), `fake-nmap-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const s = "#!/bin/sh\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"-oX\" ]; then mkdir -p \"$(dirname \"$arg\")\"; echo '<nmaprun></nmaprun>' > \"$arg\"; exit 0; fi\n  prev=\"$arg\"\ndone\nexit 0\n";
+  await writeFile(p, s, { mode: 0o700 }); await chmod(p, 0o700); fakeNmapPath = p; process.env.BLACKGLASS_NMAP_EXECUTABLE = p;
+});
+afterAll(async () => { if (fakeNmapPath !== null) await rm(fakeNmapPath, { force: true }).catch(() => {}); delete process.env.BLACKGLASS_NMAP_EXECUTABLE; });
 
 describe("fake-action argv invariants", () => {
   it("shell metacharacters remain one literal argv value and never execute", async () => {
@@ -1046,5 +1054,71 @@ describe("runner lease snapshot parsing (M4 seam)", () => {
     await expect(acquireLease(config)).rejects.toThrow();
     globalThis.fetch = originalFetch;
     await rm(tmp, { recursive: true, force: true });
+  });
+});
+
+describe("nmap execution slice", () => {
+  it("valid legacy snapshot spawns Nmap with deterministic argv and XML in controlled directory", async () => {
+    const dataDir = path.join(tmpdir(), `nmap-valid-${Date.now()}-${Math.random()}`);
+    await mkdir(dataDir, { recursive: true });
+    const originalFetch = globalThis.fetch;
+    let ck: string | undefined, cr: string | null | undefined;
+    const lr = { run: { id: "run-nmap-1", actionId: "act-nmap-1", engagementId: "eng-1", attempt: 1, state: "leased" as const, currentLeaseId: "lease-nmap-1", currentFence: "1" as const, terminalKind: null, terminalReason: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), contractVersion: 1 as const }, lease: { runId: "run-nmap-1", leaseId: "lease-nmap-1", runnerId: "runner-1", sessionId: "sess-1", fence: "1" as const, expiresAt: new Date(Date.now() + 30000).toISOString(), latestHeartbeatSequence: 0, latestEventSequence: 0, orchestrationProfile: "d2-v1" as const, protocol: "runner-control-v1" as const }, actionSnapshot: { normalizationProfile: "d1-v1" as const, orchestrationProfile: "d2-v1" as const, snapshotId: "snapshot-act-nmap-1", version: 1, binding: `sha256:${"a".repeat(64)}`, actionId: "act-nmap-1", canonicalTargets: [{ normalizationProfile: "d1-v1" as const, kind: "ip" as const, family: 4 as const, address: "127.0.0.1", zone: null }], concreteDestinations: [{ normalizationProfile: "d1-v1" as const, kind: "ip" as const, family: 4 as const, address: "127.0.0.1", zone: null }], typedOptions: { declaredPorts: [80] }, resolutionSnapshots: [], scopeRevisionId: null, warningState: { reasonCodes: [], knownAdditions: [], acknowledgment: null } } };
+    globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const u = typeof url === "string" ? url : url.toString(); const m = init?.method ?? "GET";
+      if (u.includes("/handshake")) return new Response(JSON.stringify({ acceptedProtocol: "runner-control-v1", sessionId: "sess-1", runnerId: "runner-1", leaseAllowed: true, sessionPinned: true, registryPinned: false }), { status: 200 });
+      if (u.includes("/lease") && !u.includes("/heartbeat") && !u.includes("/events") && !u.includes("/complete") && !u.includes("/artifacts")) return new Response(JSON.stringify(lr), { status: 200 });
+      if (u.includes("/events") && !u.includes("/artifacts")) return new Response(JSON.stringify({ disposition: "accepted_event", event: { eventId: 1, runId: "run-nmap-1", sequence: 1, type: "started", fence: "1", payloadJson: "{}", digest: "sha256:" + "a".repeat(64), createdAt: new Date().toISOString() } }), { status: 200 });
+      if (u.includes("/heartbeat")) return new Response(JSON.stringify({ leaseExpiresAt: new Date(Date.now() + 30000).toISOString(), heartbeatSequence: 2 }), { status: 200 });
+      if (u.includes("/artifacts/grants")) { const b = JSON.parse(String(init?.body ?? "{}")); const s = String(b.artifactSlot ?? "stdout"); return new Response(JSON.stringify({ artifactId: `00000000-0000-4000-8000-${s === "stdout" ? "000000000001" : "000000000002"}`, uploadId: `00000000-0000-4000-8000-${s === "stdout" ? "000000000011" : "000000000012"}`, runId: "run-nmap-1", leaseId: "lease-nmap-1", sessionId: "sess-1", fence: "1", eventSequence: 1, artifactSlot: s, kind: s, declaredSizeBytes: b.declaredSizeBytes, declaredDigest: b.declaredDigest, originalFileName: `${s}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 }); }
+      if (u.includes("/uploads/") && m === "PUT") return new Response(null, { status: 204 });
+      if (u.includes("/uploads/") && u.includes("/complete") && m === "POST") { const b = JSON.parse(String(init?.body ?? "{}")); const uid = u.split("/uploads/")[1]?.split("/")[0] ?? ""; const aid = uid === "00000000-0000-4000-8000-000000000012" ? "00000000-0000-4000-8000-000000000002" : "00000000-0000-4000-8000-000000000001"; return new Response(JSON.stringify({ disposition: "published", artifactId: aid, sizeBytes: b.sizeBytes, digest: b.digest, completeness: b.completeness }), { status: 200 }); }
+      if (u.includes("/complete") && !u.includes("/artifacts")) { const b = JSON.parse(String(init?.body ?? "{}")); ck = String(b.terminalKind); cr = b.reason as string | null; return new Response(JSON.stringify({ disposition: "accepted_completion", event: { eventId: 2, runId: "run-nmap-1", sequence: 2, type: ck, fence: "1", payloadJson: "{}", digest: "sha256:" + "b".repeat(64), createdAt: new Date().toISOString() } }), { status: 200 }); }
+      return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
+    }) as unknown as typeof fetch;
+    const { runOnce } = await import("./runner.js");
+    await runOnce({ dataDir, runnerId: "runner-1", secret: "a".repeat(43), apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dataDir, "runs") });
+    expect(ck).toBe("succeeded"); expect(cr).toBeNull();
+    const runs = await readdir(path.join(dataDir, "runs")).catch(() => []); expect(runs.length).toBe(1);
+    expect(existsSync(path.join(dataDir, "runs", runs[0] as string, "nmap.xml"))).toBe(true);
+    globalThis.fetch = originalFetch; await rm(dataDir, { recursive: true, force: true });
+  });
+  it("invalid snapshot does not spawn and completes with fixed non-reflective reason", async () => {
+    const dataDir = path.join(tmpdir(), `nmap-invalid-${Date.now()}`);
+    await mkdir(dataDir, { recursive: true });
+    const originalFetch = globalThis.fetch; let cr: string | null | undefined;
+    const bad = { normalizationProfile: "d1-v1" as const, orchestrationProfile: "d2-v1" as const, snapshotId: "snapshot-bad", version: 1, binding: `sha256:${"a".repeat(64)}`, actionId: "act-bad", canonicalTargets: [{ normalizationProfile: "d1-v1" as const, kind: "hostname" as const, hostname: "valid.test" }], concreteDestinations: [], typedOptions: { declaredPorts: "not-an-array" }, resolutionSnapshots: [], scopeRevisionId: null, warningState: { reasonCodes: [], knownAdditions: [], acknowledgment: null } };
+    const lr = { run: { id: "run-bad", actionId: "act-bad", engagementId: "eng-1", attempt: 1, state: "leased" as const, currentLeaseId: "lease-bad", currentFence: "1" as const, terminalKind: null, terminalReason: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), contractVersion: 1 as const }, lease: { runId: "run-bad", leaseId: "lease-bad", runnerId: "runner-1", sessionId: "sess-1", fence: "1" as const, expiresAt: new Date(Date.now() + 30000).toISOString(), latestHeartbeatSequence: 0, latestEventSequence: 0, orchestrationProfile: "d2-v1" as const, protocol: "runner-control-v1" as const }, actionSnapshot: bad };
+    globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const u = typeof url === "string" ? url : url.toString();
+      if (u.includes("/handshake")) return new Response(JSON.stringify({ acceptedProtocol: "runner-control-v1", sessionId: "sess-1", runnerId: "runner-1", leaseAllowed: true, sessionPinned: true, registryPinned: false }), { status: 200 });
+      if (u.includes("/lease") && !u.includes("/heartbeat") && !u.includes("/events") && !u.includes("/complete")) return new Response(JSON.stringify(lr), { status: 200 });
+      if (u.includes("/events")) return new Response(JSON.stringify({ disposition: "accepted_event", event: { eventId: 1, runId: "run-bad", sequence: 1, type: "started", fence: "1", payloadJson: "{}", digest: "sha256:" + "a".repeat(64), createdAt: new Date().toISOString() } }), { status: 200 });
+      if (u.includes("/complete") && !u.includes("/artifacts")) { const b = JSON.parse(String(init?.body ?? "{}")); cr = b.reason as string | null; return new Response(JSON.stringify({ disposition: "accepted_completion", event: { eventId: 2, runId: "run-bad", sequence: 2, type: "failed", fence: "1", payloadJson: "{}", digest: "sha256:" + "b".repeat(64), createdAt: new Date().toISOString() } }), { status: 200 }); }
+      return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
+    }) as unknown as typeof fetch;
+    const { runOnce } = await import("./runner.js");
+    await runOnce({ dataDir, runnerId: "runner-1", secret: "a".repeat(43), apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dataDir, "runs") });
+    expect(cr).toBe("invalid_action_snapshot");
+    expect((await readdir(path.join(dataDir, "runs")).catch(() => [])).length).toBe(0);
+    globalThis.fetch = originalFetch; await rm(dataDir, { recursive: true, force: true });
+  });
+  it("missing executable does not spawn and completes with fixed reason", async () => {
+    const dataDir = path.join(tmpdir(), `nmap-missing-${Date.now()}`);
+    await mkdir(dataDir, { recursive: true });
+    const originalFetch = globalThis.fetch; let cr: string | null | undefined;
+    const lr = { run: { id: "run-miss", actionId: "act-miss", engagementId: "eng-1", attempt: 1, state: "leased" as const, currentLeaseId: "lease-miss", currentFence: "1" as const, terminalKind: null, terminalReason: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), contractVersion: 1 as const }, lease: { runId: "run-miss", leaseId: "lease-miss", runnerId: "runner-1", sessionId: "sess-1", fence: "1" as const, expiresAt: new Date(Date.now() + 30000).toISOString(), latestHeartbeatSequence: 0, latestEventSequence: 0, orchestrationProfile: "d2-v1" as const, protocol: "runner-control-v1" as const }, actionSnapshot: { normalizationProfile: "d1-v1" as const, orchestrationProfile: "d2-v1" as const, snapshotId: "snapshot-act-miss", version: 1, binding: `sha256:${"a".repeat(64)}`, actionId: "act-miss", canonicalTargets: [{ normalizationProfile: "d1-v1" as const, kind: "ip" as const, family: 4 as const, address: "127.0.0.1", zone: null }], concreteDestinations: [], typedOptions: { declaredPorts: null }, resolutionSnapshots: [], scopeRevisionId: null, warningState: { reasonCodes: [], knownAdditions: [], acknowledgment: null } } };
+    globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const u = typeof url === "string" ? url : url.toString();
+      if (u.includes("/handshake")) return new Response(JSON.stringify({ acceptedProtocol: "runner-control-v1", sessionId: "sess-1", runnerId: "runner-1", leaseAllowed: true, sessionPinned: true, registryPinned: false }), { status: 200 });
+      if (u.includes("/lease") && !u.includes("/heartbeat") && !u.includes("/events") && !u.includes("/complete")) return new Response(JSON.stringify(lr), { status: 200 });
+      if (u.includes("/events")) return new Response(JSON.stringify({ disposition: "accepted_event", event: { eventId: 1, runId: "run-miss", sequence: 1, type: "started", fence: "1", payloadJson: "{}", digest: "sha256:" + "a".repeat(64), createdAt: new Date().toISOString() } }), { status: 200 });
+      if (u.includes("/complete") && !u.includes("/artifacts")) { const b = JSON.parse(String(init?.body ?? "{}")); cr = b.reason as string | null; return new Response(JSON.stringify({ disposition: "accepted_completion", event: { eventId: 2, runId: "run-miss", sequence: 2, type: "failed", fence: "1", payloadJson: "{}", digest: "sha256:" + "b".repeat(64), createdAt: new Date().toISOString() } }), { status: 200 }); }
+      return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
+    }) as unknown as typeof fetch;
+    const { runOnce } = await import("./runner.js");
+    await runOnce({ dataDir, runnerId: "runner-1", secret: "a".repeat(43), apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dataDir, "runs"), executable: "/nonexistent/nmap-missing" });
+    expect(cr).toBe("nmap_unavailable");
+    globalThis.fetch = originalFetch; await rm(dataDir, { recursive: true, force: true });
   });
 });

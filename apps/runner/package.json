@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Blackglass native host runner — fake-action slice for M3",
+  "description": "Blackglass native host runner — nmap execution slice for M4",
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
     "start": "node dist/index.js",
@@ -11,7 +11,8 @@
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@blackglass/contracts": "workspace:*"
+    "@blackglass/contracts": "workspace:*",
+    "@blackglass/domain": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "24.13.3",
