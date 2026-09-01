@@ -8,16 +8,11 @@ import {
 } from "@blackglass/contracts";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 
-import { EngagementDetailQueryError, EngagementsQueryError } from "./errors.js";
-
-export const ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE = "The services request failed.";
-
-export class EngagementServicesQueryError extends Error {
-  constructor() {
-    super(ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE);
-    this.name = "EngagementServicesQueryError";
-  }
-}
+import {
+  EngagementDetailQueryError,
+  EngagementServicesQueryError,
+  EngagementsQueryError,
+} from "./errors.js";
 
 export const ENGAGEMENTS_QUERY_KEY = ["engagements"] as const;
 

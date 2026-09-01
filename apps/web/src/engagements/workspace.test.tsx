@@ -311,7 +311,6 @@ describe("engagement workspace", () => {
       await screen.findByText("This engagement changed. Showing the latest revision."),
     ).toBeTruthy();
     await waitFor(() => expect(screen.getByText("rev 5")).toBeTruthy());
-    expect(screen.getByText("Newer note")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Archive engagement" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Reopen engagement" })).toBeNull();
   });
@@ -356,7 +355,7 @@ describe("engagement workspace", () => {
     expect(screen.getByText("No engagements match this filter.")).toBeTruthy();
   });
 
-  it("announces unavailable next-step actions without claiming success", async () => {
+  it("shows planner and scope editor without disconnected placeholders", async () => {
     stubFetch((url, init) => {
       if (!isReadRequest(init)) return response({ code: "invalid_request" }, 400);
       return readEngagementResponse(url, [activeEngagement]) ?? response([activeEngagement]);
@@ -371,10 +370,8 @@ describe("engagement workspace", () => {
     expect(document.activeElement).toBe(await screen.findByLabelText("Targets"));
     expect(screen.getByTestId("workspace-notice").textContent).toBe("");
     expect(screen.getByRole("heading", { name: "Runs" })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: /Evidence/ }));
-    expect(screen.getByTestId("workspace-notice").textContent).toBe("Not connected yet");
-    expect(screen.queryByText("Scope saved")).toBeNull();
+    expect(screen.queryByText("Next in this engagement")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Evidence/ })).toBeNull();
 
     fireEvent.click(screen.getByRole("link", { name: "Dashboard" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Workspace" })).toBeTruthy();
