@@ -494,9 +494,9 @@ export async function runOnce(
       } catch {}
       try {
         if (xml !== undefined) {
-          await publishEvidenceArtifacts(config, lease, result, { isCancelled: true, nmapXml: xml });
+          await publishEvidenceArtifacts(config, lease, result, { isCancelled: true, nmapXml: xml, nmapExitCode: result.exitCode });
         } else {
-          await publishEvidenceArtifacts(config, lease, result, { isCancelled: true });
+          await publishEvidenceArtifacts(config, lease, result, { isCancelled: true, nmapExitCode: result.exitCode });
         }
       } catch {}
     }
@@ -524,9 +524,9 @@ export async function runOnce(
     }
     try {
       if (xmlOk && xml !== undefined) {
-        await publishEvidenceArtifacts(config, lease, result, { isCancelled: false, nmapXml: xml });
+        await publishEvidenceArtifacts(config, lease, result, { isCancelled: false, nmapXml: xml, nmapExitCode: result.exitCode });
       } else {
-        await publishEvidenceArtifacts(config, lease, result, { isCancelled: false });
+        await publishEvidenceArtifacts(config, lease, result, { isCancelled: false, nmapExitCode: result.exitCode });
       }
     } catch (e) {
       try {

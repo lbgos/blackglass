@@ -65,6 +65,7 @@ export {
   type RunnerRepositoryProviders,
   type RunnerResult,
 } from "./runner.js";
+export { NmapServiceRepository } from "./nmap-service.js";
 export {
   actionCoveredDestinations,
   actionSnapshots,
@@ -74,6 +75,7 @@ export {
   engagements,
   evidenceArtifacts,
   evidenceGrants,
+  nmapServices,
   operatorCommandIdempotency,
   runEvents,
   runLeases,
