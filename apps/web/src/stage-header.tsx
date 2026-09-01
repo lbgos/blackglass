@@ -12,7 +12,7 @@ import { useSelectedEngagementId } from "./engagements/sidebar.js";
 import { useEngagementWorkspace } from "./engagements/workspace-context.js";
 
 interface Crumb {
-  href?: "/engagements";
+  href?: "/" | "/engagements";
   label: string;
 }
 
@@ -31,6 +31,8 @@ export function StageHeader() {
 
   const crumbs = crumbsForPath(pathname, selected?.name);
 
+  // Stage chrome: plugins shows Blackglass / Plugins with disabled Install from path
+  const isPlugins = pathname === "/plugins";
   return (
     <div className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-1">
       <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-[13px] text-muted-foreground">
@@ -59,7 +61,13 @@ export function StageHeader() {
           );
         })}
       </nav>
-      {selected ? <EngagementStageActions engagementId={selected.id} /> : <GlobalStageActions />}
+      {selected ? (
+        <EngagementStageActions engagementId={selected.id} />
+      ) : isPlugins ? (
+        <PluginStageActions />
+      ) : (
+        <GlobalStageActions />
+      )}
     </div>
   );
 }
@@ -74,6 +82,22 @@ function GlobalStageActions() {
         onClick={openCreate}
       >
         New engagement
+      </button>
+    </div>
+  );
+}
+
+function PluginStageActions() {
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      <button
+        type="button"
+        aria-disabled="true"
+        disabled
+        title="Installing from a path stays unavailable until decision gate D5 defines the plugin protocol."
+        className="inline-flex min-h-8 items-center justify-center rounded-lg border border-border px-3 text-[13px] text-muted-foreground opacity-60"
+      >
+        Install from path
       </button>
     </div>
   );
@@ -150,7 +174,9 @@ function crumbsForPath(pathname: string, engagementName?: string): Crumb[] {
       { label: engagementName ?? "Engagement" },
     ];
   }
-  if (pathname === "/plugins") return [{ label: "Plugins" }];
+  if (pathname === "/plugins") return [{ href: "/", label: "Blackglass" }, { label: "Plugins" }];
   if (pathname === "/settings") return [{ label: "Settings" }];
   return [{ label: "Page not found" }];
 }
+
+export { crumbsForPath };
