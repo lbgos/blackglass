@@ -1,46 +1,66 @@
 # Blackglass
 
-A local security workbench I am building for CTFs, labs, and assessments.
+A local-first workbench for CTFs and lab work.
 
-I want one place where I can create an engagement, keep targets and notes together, run tools, watch their output, save the raw evidence, turn results into findings, and ask a local model what to look at next. The main goal is speed. Scope warnings take one click to continue and every installed action stays runnable.
+When I work a box, tool output lives in terminal tabs, notes in one file, screenshots in another folder, and nothing ties them together. Blackglass puts all of it under the engagement: targets, scope, tool runs, raw output, findings. It runs on your machine, keeps everything in a local SQLite file, and works offline.
 
-This is my first serious software project, so I am building it in vertical slices and using each milestone to learn what should stay simple.
+## What it does
 
-## What I am building
+**Engagements.** One per box, lab, or assessment. Targets, scope, runs, and findings live under it instead of scattered across folders.
 
-- Engagements with saved target scopes, notes, flags, findings, and reports
-- Nmap discovery with live output, cancellation, retry, and raw XML evidence
-- HTTP probing and ffuf discovery
-- A native Linux runner for local tools
-- Process plugins that can be written in TypeScript, Python, Go, or Rust
-- A React workbench with a resizable sidebar and bottom console
-- Operator and Mentor modes for local or OpenAI-compatible models
+**Scope.** Saved rules define what is in bounds. Point a tool at something out of scope and you get one concise warning. Continue runs it and records the warning with the exact target, so nothing gets blocked silently and nothing gets forgotten.
 
-The first useful slice is simple: create an engagement, enter a target, run Nmap, and see the services and evidence in the UI.
+**Runner.** Tools run as child processes on your host. Spawned by argv, never shell strings, cancelled with the whole process group, resource-limited. Runs hold leases with fencing tokens, so a stale runner cannot append results after it lost the lease.
 
-## Current status
+**Evidence.** Raw tool output is stored immutable and content-addressed before anything reads or formats it. You can always go back to what the tool actually said.
 
-M1 is complete. The loopback-only Fastify API and React app start through one supervised development command, use guarded isolated development storage, expose strict health and readiness contracts, and render the responsive application shell.
+**Findings.** Turn a run into a finding with your own notes attached.
 
-Current product work is M2: engagement and target context.
+**Advisor.** Point it at any OpenAI-compatible endpoint, local by default, and the model reads your evidence and suggests what to look at next. Optional.
+
+## Status
+
+In active development. Working today: engagements, scope with warnings and continue, the host runner with leases and cancellation, and the workspace UI. Current work is immutable evidence artifacts and the first real tool slice: run Nmap against a target and see services and evidence in the UI. The full plan lives in [docs/development/V0.1_PLAN.md](./docs/development/V0.1_PLAN.md).
+
+## Quick start
+
+Requires Node.js 24 and pnpm 10.
+
+```bash
+pnpm install
+pnpm dev        # supervised API + web with isolated dev storage
+pnpm check      # format, lint, typecheck, test, build
+```
 
 ## Stack
 
-- **Runtime:** Node.js 24, pnpm workspaces, strict TypeScript
-- **Web:** React 19, Vite, TanStack Router and Query, Tailwind CSS v4
-- **API:** Fastify, Zod, REST, Server-Sent Events
-- **Data:** SQLite in WAL mode through Drizzle
-- **Runner:** native unprivileged Linux service, executable plus argv process spawning
-- **Plugins:** versioned NDJSON process protocol
-- **Models:** configurable OpenAI-compatible endpoint, local by default
+- Node.js 24, pnpm workspaces, strict TypeScript
+- React 19, Vite, TanStack Router and Query, Tailwind CSS v4
+- Fastify, Zod, REST, Server-Sent Events
+- SQLite in WAL mode through Drizzle
+- plugins over a versioned NDJSON protocol, adapters in TS, Python, Go, or Rust
 
-Native development is the primary path because my current LXC host does not run Docker. The release build will package the control plane with Compose and keep the tool runner on the host.
+## Layout
 
-## Development docs
+```text
+apps/web            React client
+apps/api            Fastify control plane
+apps/runner         native host runner
+packages/contracts  shared Zod, API, and event contracts
+packages/domain     pure rules and state transitions
+packages/db         Drizzle schema and migrations
+packages/ui         Blackglass-owned UI primitives
+plugins/*           first-party tool adapters (planned)
+docs/               plans, contracts, and status
+```
 
-- [`AGENTS.md`](./AGENTS.md): rules for coding agents working in this repository
-- [`docs/development/V0.1_PLAN.md`](./docs/development/V0.1_PLAN.md): product plan and milestone sequence
-- [`docs/architecture/DECISION_GATES.md`](./docs/architecture/DECISION_GATES.md): decisions that need to be settled before their milestone
-- [`docs/development/MAINTAINER_HANDBOOK.md`](./docs/development/MAINTAINER_HANDBOOK.md): issue, worktree, review, and release workflow
-- [`docs/development/M1_STATUS.md`](./docs/development/M1_STATUS.md): verified executable-shell behavior
-- [`docs/ui/constitution.md`](./docs/ui/constitution.md): shell, motion, theme, responsive, and accessibility behavior
+## Docs
+
+- [AGENTS.md](./AGENTS.md): rules for coding agents in this repository
+- [docs/development/V0.1_PLAN.md](./docs/development/V0.1_PLAN.md): product plan and milestones
+- [docs/architecture/DECISION_GATES.md](./docs/architecture/DECISION_GATES.md): decisions that must settle before their milestone
+- [docs/ui/constitution.md](./docs/ui/constitution.md): shell, motion, theme, and accessibility behavior
+
+## License
+
+[AGPL-3.0](./LICENSE)
