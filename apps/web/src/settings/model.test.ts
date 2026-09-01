@@ -19,7 +19,7 @@ describe("settings model", () => {
       "evidence",
       "diagnostics",
     ]);
-    expect(DEFAULT_SETTINGS_SECTION).toBe("general");
+    expect(DEFAULT_SETTINGS_SECTION).toBe("appearance");
   });
 
   it("indexes at least one entry for every section", () => {
