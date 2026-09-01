@@ -30,7 +30,10 @@ export function resolveRunnerConfig(overrides: Partial<RunnerConfig> = {}): Runn
     overrides.installationFingerprint ??
     process.env.BLACKGLASS_INSTALLATION_FINGERPRINT ??
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-  const executable = overrides.executable ?? process.execPath;
+  const executable =
+    overrides.executable ??
+    process.env.BLACKGLASS_NMAP_EXECUTABLE ??
+    "/usr/bin/nmap";
 
   return {
     apiBaseUrl: apiBaseUrl.replace(/\/+$/, ""),

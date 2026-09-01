@@ -1,6 +1,7 @@
 import {
   AcquireRunnerLeaseRequestSchema,
   AcquireRunnerLeaseResponseSchema,
+  DeclaredPortsSchema,
   RunnerAppendStartedRequestSchema,
   RunnerCompleteRequestSchema,
   RunnerEventResponseSchema,
@@ -10,12 +11,14 @@ import {
   RunnerHeartbeatResponseSchema,
   commandJsonV1RunnerAppendStartedDigest,
   commandJsonV1RunnerCompleteDigest,
+  type ActionSnapshot,
 } from "@blackglass/contracts";
+import { buildNmapArgv } from "@blackglass/domain";
 
 import { resolveRunnerConfig, type RunnerConfig } from "./config.js";
 import { EvidencePublicationError, publishEvidenceArtifacts } from "./evidence-client.js";
 import { getOrCreateOutboxEntry, removeOutboxAtomically } from "./outbox.js";
-import { runSupervised } from "./process.js";
+import { resolveNmapXmlPath, runSupervisedCommand, verifyExecutable } from "./process.js";
 
 export type HandshakeResponse = ReturnType<typeof RunnerHandshakeAcceptedResponseSchema.parse>;
 export type AcquiredLease = ReturnType<typeof AcquireRunnerLeaseResponseSchema.parse>;
@@ -36,6 +39,68 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 function authHeader(runnerId: string, secret: string): string {
   return `Blackglass-Runner ${runnerId} ${secret}`;
+}
+
+type NmapSliceOptions = {
+  serviceDetection: true;
+  timingTemplate: "T4";
+  skipHostDiscovery: true;
+  versionIntensity: 7;
+  maxRetries: 2;
+  ports?: { from: number; to: number }[];
+};
+
+function adaptToNmapOptions(value: unknown): NmapSliceOptions | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length !== 1 || keys[0] !== "declaredPorts") {
+    return null;
+  }
+  const declaredPortsResult = DeclaredPortsSchema.safeParse(record.declaredPorts);
+  if (!declaredPortsResult.success) {
+    return null;
+  }
+  const declaredPorts = declaredPortsResult.data;
+  const base = {
+    serviceDetection: true as const,
+    timingTemplate: "T4" as const,
+    skipHostDiscovery: true as const,
+    versionIntensity: 7 as const,
+    maxRetries: 2 as const,
+  };
+  if (declaredPorts === null) {
+    return base;
+  }
+  const ports = declaredPorts.map((port) => ({ from: port, to: port }));
+  if (ports.length === 0) {
+    return base;
+  }
+  return { ...base, ports };
+}
+
+export function prepareNmapExecution(params: {
+  snapshot: ActionSnapshot;
+  runRoot: string;
+  runId: string;
+  fence: string;
+}): { ok: true; argv: readonly string[] } | { ok: false; reason: "invalid_action_snapshot" } {
+  try {
+    const xmlPath = resolveNmapXmlPath(params.runRoot, params.runId, params.fence);
+    const adapted = adaptToNmapOptions(params.snapshot.typedOptions);
+    if (adapted === null) return { ok: false, reason: "invalid_action_snapshot" };
+    const built = buildNmapArgv({
+      options: adapted,
+      canonicalTargets: params.snapshot.canonicalTargets,
+      xmlPath,
+    });
+    if (!built.ok) return { ok: false, reason: "invalid_action_snapshot" };
+    return { ok: true, argv: built.argv };
+  } catch {
+    return { ok: false, reason: "invalid_action_snapshot" };
+  }
 }
 
 export async function handshake(config: RunnerConfig): Promise<HandshakeResponse> {
@@ -234,10 +299,9 @@ export async function completeRun(
 }
 
 /**
- * Single-iteration synthetic execution: handshake (if needed) -> lease -> started (before spawn) -> heartbeat loop -> supervise -> complete.
- * Returns true if work was done, false if no_work or cancelled before lease.
- * Cancellation is typed via AbortSignal. Checks before handshake, lease, started, spawn.
- * After started, shutdown latches, cancels child, never reports success, records fixed failure reason `runner_lost` (ADR-0002).
+ * Single-iteration Nmap execution: handshake -> lease -> started -> heartbeat -> Nmap spawn -> complete.
+ * Nmap argv is derived deterministically from acquired.actionSnapshot before spawn using the controlled run directory.
+ * Invalid snapshot or unusable executable completes with a fixed non-reflective reason without spawn.
  */
 export async function runOnce(
   overrides: Partial<RunnerConfig> = {},
@@ -261,15 +325,12 @@ export async function runOnce(
 
   const lease = acquired.lease;
 
-  // Before started: if aborted, try to fail the leased run truthfully, then propagate shutdown
   try {
     throwIfAborted(signal);
     await appendStarted(config, lease, 1);
     throwIfAborted(signal);
   } catch (e) {
     if (e instanceof RunnerShutdownError) {
-      // Leased pre-spawn cancellation: attempt definitive completion as failed runner_lost if possible
-      // This is consistent with ADR-0002 leased -> failed (preparation failure)
       try {
         await completeRun(config, lease, 2, "failed", "runner_lost");
       } catch {}
@@ -278,7 +339,6 @@ export async function runOnce(
     throw e;
   }
 
-  // Monotonic authority deadline: request-send instant + 30s, cleanup 7s before
   let authorityDeadlineMonotonic = leaseSendMonotonic + config.leaseDurationMs;
   let hbSeq = 1;
   let hbTimer: ReturnType<typeof setInterval> | null = null;
@@ -320,27 +380,72 @@ export async function runOnce(
   };
   startHeartbeat();
 
-  let result: Awaited<ReturnType<typeof runSupervised>> | null = null;
-  let cancelledByFence = false;
-  let handle: ReturnType<typeof runSupervised> | null = null;
-  let fenceCheck: ReturnType<typeof setInterval> | null = null;
-
   const cleanup = (): void => {
-    if (fenceCheck !== null) clearInterval(fenceCheck);
     if (hbTimer !== null) clearInterval(hbTimer);
     if (signal) signal.removeEventListener("abort", onAbortAfterStarted);
   };
 
+  const prepared = prepareNmapExecution({
+    snapshot: acquired.actionSnapshot,
+    runRoot: config.runRoot,
+    runId: lease.runId,
+    fence: lease.fence,
+  });
+  let executableUnavailable = false;
+  if (prepared.ok) {
+    try {
+      await verifyExecutable(config.executable);
+    } catch {
+      executableUnavailable = true;
+    }
+  }
+
+  const isAuthorityLost = (): boolean =>
+    Boolean(signal?.aborted) ||
+    shutdownAfterStarted ||
+    hbFailed ||
+    globalThis.performance.now() >= authorityDeadlineMonotonic - 7000;
+
+  if (isAuthorityLost()) {
+    cleanup();
+    await completeRun(config, lease, 2, "failed", "runner_lost").catch(() => {});
+    if (signal?.aborted) throw new RunnerShutdownError();
+    return true;
+  }
+
+  if (!prepared.ok) {
+    cleanup();
+    await completeRun(config, lease, 2, "failed", prepared.reason).catch(() => {});
+    return true;
+  }
+
+  if (executableUnavailable) {
+    cleanup();
+    await completeRun(config, lease, 2, "failed", "nmap_unavailable").catch(() => {});
+    return true;
+  }
+
+  const nmapArgv = prepared.argv;
+
+  let result: Awaited<ReturnType<typeof runSupervisedCommand>> | null = null;
+  let cancelledByFence = false;
+  let handle: ReturnType<typeof runSupervisedCommand> | null = null;
+  let fenceCheck: ReturnType<typeof setInterval> | null = null;
+
+  const fullCleanup = (): void => {
+    if (fenceCheck !== null) clearInterval(fenceCheck);
+    cleanup();
+  };
+
   try {
     throwIfAborted(signal);
-    handle = runSupervised({
+    handle = runSupervisedCommand({
       runId: lease.runId,
       leaseId: lease.leaseId,
       fence: lease.fence,
       runRoot: config.runRoot,
       executable: config.executable,
-      durationMs: 40,
-      exitCode: 0,
+      argv: nmapArgv,
       secrets: [config.secret],
     });
 
@@ -363,9 +468,17 @@ export async function runOnce(
 
     result = await handle;
     if (fenceCheck !== null) clearInterval(fenceCheck);
-  } finally {
-    cleanup();
+  } catch {
+    fullCleanup();
+    if (isAuthorityLost()) {
+      await completeRun(config, lease, 2, "failed", "runner_lost").catch(() => {});
+      if (signal?.aborted) throw new RunnerShutdownError();
+      return true;
+    }
+    await completeRun(config, lease, 2, "failed", "nmap_unavailable").catch(() => {});
+    return true;
   }
+  fullCleanup();
 
   if (signal?.aborted || shutdownAfterStarted) {
     cancelledByFence = true;
@@ -380,7 +493,6 @@ export async function runOnce(
       } catch {}
     }
     await completeRun(config, lease, 2, "failed", "runner_lost").catch(() => {});
-    // Never report success after shutdown
     if (signal?.aborted) throw new RunnerShutdownError();
     return true;
   }
@@ -389,7 +501,6 @@ export async function runOnce(
     try {
       await publishEvidenceArtifacts(config, lease, result, { isCancelled: false });
     } catch (e) {
-      // Never complete succeeded: attempt failed evidence_publication_failed while authority remains.
       try {
         await completeRun(config, lease, 2, "failed", "evidence_publication_failed");
       } catch {}

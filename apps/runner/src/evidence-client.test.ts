@@ -313,7 +313,7 @@ describe("evidence publishing grant flow", () => {
         actionId: "act-1",
         canonicalTargets: [{ normalizationProfile: "d1-v1", kind: "hostname", hostname: "app.target.test" }],
         concreteDestinations: [{ normalizationProfile: "d1-v1", kind: "ip", family: 4, address: "192.0.2.10", zone: null }],
-        typedOptions: { fixture: true },
+        typedOptions: { declaredPorts: [80] },
         resolutionSnapshots: [],
         scopeRevisionId: null,
         warningState: { reasonCodes: [], knownAdditions: [], acknowledgment: null },
@@ -364,7 +364,7 @@ describe("evidence publishing grant flow", () => {
 
     let thrown: unknown = null;
     try {
-      await runOnce({ dataDir: dataDir2, runnerId: "runner-1", secret: "a".repeat(43), apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dataDir2, "runs") });
+      await runOnce({ dataDir: dataDir2, runnerId: "runner-1", secret: "a".repeat(43), apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dataDir2, "runs"), executable: process.execPath });
     } catch (e) { thrown = e; }
     // runOnce should have thrown evidence publication error, not succeeded
     expect(thrown).toBeInstanceOf(EvidencePublicationError);
