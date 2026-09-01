@@ -8,8 +8,16 @@ function deriveServiceStats(services: readonly NmapProjectedService[]) {
   const hostCount = new Set(services.map((service) => service.address)).size;
   const artifactCount = new Set(services.map((service) => service.artifactId)).size;
   let latestObservedAt: string | undefined;
+  let latestTime = Number.NEGATIVE_INFINITY;
   for (const service of services) {
-    if (latestObservedAt === undefined || service.observedAt > latestObservedAt) {
+    const time = Date.parse(service.observedAt);
+    const parsed = Number.isNaN(time) ? Number.NEGATIVE_INFINITY : time;
+    if (
+      latestObservedAt === undefined ||
+      parsed > latestTime ||
+      (parsed === latestTime && service.observedAt > latestObservedAt)
+    ) {
+      latestTime = parsed;
       latestObservedAt = service.observedAt;
     }
   }
@@ -26,7 +34,7 @@ function formatPrimaryIdentity(service: NmapProjectedService): string {
 
 function sortServices(services: readonly NmapProjectedService[]): NmapProjectedService[] {
   return [...services].sort((left, right) => {
-    const address = left.address.localeCompare(right.address);
+    const address = left.address.localeCompare(right.address, "en", { numeric: true });
     if (address !== 0) return address;
     return left.port - right.port;
   });

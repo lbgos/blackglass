@@ -22,11 +22,11 @@ const serviceA = {
   runId: "run-1",
   artifactId: "artifact-1",
   artifactDigest: `sha256:${"a".repeat(64)}`,
-  observedAt: "2026-08-13T10:00:00.000Z",
+  observedAt: "2026-08-13T12:00:00.000+02:00",
 };
 
 const serviceB = {
-  address: "192.0.2.10",
+  address: "192.0.2.2",
   port: 443,
   protocol: "tcp" as const,
   hostname: null,
@@ -38,7 +38,7 @@ const serviceB = {
   runId: "run-1",
   artifactId: "artifact-2",
   artifactDigest: `sha256:${"b".repeat(64)}`,
-  observedAt: "2026-08-13T12:30:00.000Z",
+  observedAt: "2026-08-13T11:00:00.000Z",
 };
 
 function response(payload: unknown, status = 200): Response {
@@ -100,10 +100,13 @@ describe("EngagementServicesSection", () => {
   it("derives truthful stats and renders deduplicated identity with provenance", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(response([serviceA, serviceB]))));
     renderSurface();
-    expect((await screen.findAllByText("192.0.2.10")).length).toBeGreaterThanOrEqual(1);
+    const addresses = (await screen.findAllByText(/192\.0\.2\./)).map((element) => element.textContent);
+    expect(addresses[0]).toBe("192.0.2.2");
+    expect(addresses[1]).toBe("192.0.2.10");
     expect(screen.getByText("Services").previousElementSibling?.textContent).toBe("2");
-    expect(screen.getByText("Hosts").previousElementSibling?.textContent).toBe("1");
+    expect(screen.getByText("Hosts").previousElementSibling?.textContent).toBe("2");
     expect(screen.getByText("Evidence artifacts").previousElementSibling?.textContent).toBe("2");
+    expect(screen.getByText("Latest observation").previousElementSibling?.textContent).toMatch(/11:00/);
     expect(screen.getAllByText(/13 Aug 2026/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("host-a.test")).toBeTruthy();
     expect(screen.getByText("22/tcp")).toBeTruthy();

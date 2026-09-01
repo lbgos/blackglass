@@ -24,7 +24,7 @@ const activeEngagement = {
   kind: "lab",
   status: "active",
   description: "Synthetic reserved lab",
-  authorizationContext: null,
+  authorizationContext: "RO-2026-08 authorized lab",
   autoContinueWarnings: false,
   activeScopeRevisionId: null,
   createdAt: "2026-08-12T12:00:00.000Z",
@@ -38,6 +38,7 @@ const archivedEngagement = {
   kind: "ctf",
   status: "archived",
   description: null,
+  authorizationContext: null,
   revision: 3,
 };
 
@@ -363,6 +364,11 @@ describe("engagement workspace", () => {
     await renderWorkspace(`/engagements/${activeEngagement.id}`);
     expect(await screen.findByRole("heading", { level: 1, name: "Target lab" })).toBeTruthy();
     expect(screen.getByRole("navigation", { name: "Breadcrumb" })).toBeTruthy();
+    expect(screen.getByText("Synthetic reserved lab")).toBeTruthy();
+    expect(screen.getByText("Authorization")).toBeTruthy();
+    expect(screen.getByText("RO-2026-08 authorized lab")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Engagement context" })).toBeTruthy();
+    expect(screen.queryByText("Auto-continue warnings")).toBeNull();
     expect(await screen.findByRole("heading", { name: "No saved scope yet" })).toBeTruthy();
     expect(screen.getAllByText(/Scope is context, not authorization/).length).toBeGreaterThan(0);
 

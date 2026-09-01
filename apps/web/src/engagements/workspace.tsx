@@ -217,6 +217,26 @@ function EngagementDetail({ engagement }: { engagement: Engagement }) {
         </div>
       </header>
 
+      {displayed.description !== null || displayed.authorizationContext !== null ? (
+        <section
+          aria-label="Engagement context"
+          className="mt-4 overflow-hidden rounded-[10px] border border-border"
+        >
+          <div className="flex flex-col gap-1.5 px-3 py-2.5 text-[12px] leading-5 sm:flex-row sm:flex-wrap sm:gap-x-4">
+            {displayed.description !== null ? (
+              <p className="m-0 min-w-0 flex-1 whitespace-pre-wrap break-words">{displayed.description}</p>
+            ) : null}
+            {displayed.authorizationContext !== null ? (
+              <p className="m-0 min-w-0 flex-1 whitespace-pre-wrap break-words">
+                <span className="font-medium">Authorization</span>
+                <span className="text-muted-foreground"> · </span>
+                {displayed.authorizationContext}
+              </p>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
       <div className="mt-5">
         <EngagementServicesSection engagementId={displayed.id} />
       </div>
