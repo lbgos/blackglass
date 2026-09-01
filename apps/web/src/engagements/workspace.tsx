@@ -17,6 +17,7 @@ import {
 import { partitionEngagements, useEngagementDetailQuery, useEngagementsQuery } from "./query.js";
 import { ActionPlanner } from "./action-planner.js";
 import { SavedScopeEditor } from "./scope-editor.js";
+import { EngagementServicesSection } from "./service-surface.js";
 import { useEngagementWorkspace } from "./workspace-context.js";
 
 const NEXT_SURFACES = [
@@ -128,9 +129,12 @@ export function EngagementWorkspace({ engagementId }: { engagementId?: string })
       <EngagementIndex engagements={records} />
     );
 
+  const isDetail = selected !== undefined;
+  const containerClass = isDetail ? "mx-auto w-full max-w-none" : "mx-auto w-full max-w-3xl";
+
   return (
     <main className="min-h-full bg-background px-4 py-5 sm:px-6">
-      <div className="mx-auto w-full max-w-3xl">
+      <div className={containerClass}>
         {engagements.isError ? (
           <StaleDataState
             title="Showing the last successful engagement list"
@@ -220,39 +224,51 @@ function EngagementDetail({ engagement }: { engagement: Engagement }) {
   const displayed = selectDisplayedEngagement(engagement, detail.data?.engagement);
 
   return (
-    <article>
-      <p className="m-0 text-[11px] text-muted-foreground">
-        {ENGAGEMENT_KIND_LABELS[displayed.kind]}
-      </p>
-      <h1 className="mt-1 mb-0 text-[26px] leading-none font-semibold tracking-[-0.04em]">
-        {displayed.name}
-      </h1>
-      <p className="mt-2 mb-0 text-[13px] text-muted-foreground">
-        <span aria-label={`Status: ${ENGAGEMENT_STATUS_LABELS[displayed.status]}`}>
-          {ENGAGEMENT_STATUS_LABELS[displayed.status]}
-        </span>
-        <span className="mx-2 text-border">·</span>
-        <span className="font-mono">rev {displayed.revision}</span>
-      </p>
-      <ActionPlanner
-        archived={displayed.status === "archived"}
-        engagementId={displayed.id}
-      />
-      <SavedScopeEditor
-        archived={displayed.status === "archived"}
-        engagementId={displayed.id}
-      />
-      <div className="mt-5 grid gap-4 border-t border-border pt-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(280px,0.85fr)]">
+    <article className="min-w-0">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <p className="m-0 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
+            {ENGAGEMENT_KIND_LABELS[displayed.kind]}
+          </p>
+          <h1 className="mt-1 text-[26px] font-semibold tracking-[-0.04em] leading-none">
+            {displayed.name}
+          </h1>
+          <p className="mt-2 flex flex-wrap items-center gap-x-2 text-[12px] text-muted-foreground">
+            <span aria-label={`Status: ${ENGAGEMENT_STATUS_LABELS[displayed.status]}`}>
+              {ENGAGEMENT_STATUS_LABELS[displayed.status]}
+            </span>
+            <span className="text-border" aria-hidden="true">
+              ·
+            </span>
+            <span className="font-mono">rev {displayed.revision}</span>
+            <span className="text-border" aria-hidden="true">
+              ·
+            </span>
+            <span>{displayed.kind}</span>
+          </p>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className="m-0 text-[11px] text-muted-foreground">Updated</p>
+          <p className="m-0 font-mono text-[11px] text-foreground">
+            {formatEngagementTimestamp(displayed.updatedAt)}
+          </p>
+        </div>
+      </header>
+
+      <div className="mt-5">
+        <EngagementServicesSection engagementId={displayed.id} />
+      </div>
+
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <ActionPlanner archived={displayed.status === "archived"} engagementId={displayed.id} />
+        <SavedScopeEditor archived={displayed.status === "archived"} engagementId={displayed.id} />
+      </div>
+
+      <div className="mt-6 grid gap-6 border-t border-border pt-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(280px,0.85fr)]">
         <dl className="grid gap-3 text-[13px]">
           <Detail term="Description" value={displayed.description ?? "None"} />
-          <Detail
-            term="Authorization context"
-            value={displayed.authorizationContext ?? "None"}
-          />
-          <Detail
-            term="Auto-continue warnings"
-            value={displayed.autoContinueWarnings ? "On" : "Off"}
-          />
+          <Detail term="Authorization context" value={displayed.authorizationContext ?? "None"} />
+          <Detail term="Auto-continue warnings" value={displayed.autoContinueWarnings ? "On" : "Off"} />
           <Detail term="Created" value={formatEngagementTimestamp(displayed.createdAt)} />
           <Detail term="Updated" value={formatEngagementTimestamp(displayed.updatedAt)} />
         </dl>

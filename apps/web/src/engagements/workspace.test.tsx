@@ -53,9 +53,16 @@ function readEngagementResponse(
   url: string,
   list: readonly TestEngagement[],
   scopes: Readonly<Record<string, unknown>> = {},
+  services: Readonly<Record<string, unknown[]>> = {},
 ): Response | undefined {
   if (url.includes("/system/status")) return response(readyStatus);
   if (url === "/api/v1/engagements") return response([...list]);
+  const servicesMatch = /^\/api\/v1\/engagements\/([^/?]+)\/services$/.exec(url);
+  if (servicesMatch?.[1] !== undefined) {
+    const engagement = list.find((item) => item.id === servicesMatch[1]);
+    if (engagement === undefined) return response({ code: "engagement_not_found" }, 404);
+    return response(services[servicesMatch[1]] ?? []);
+  }
   const match = /^\/api\/v1\/engagements\/([^/?]+)$/.exec(url);
   if (match?.[1] === undefined) return undefined;
   const engagement = list.find((item) => item.id === match[1]);
