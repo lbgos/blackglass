@@ -299,13 +299,18 @@ export async function publishEvidenceArtifacts(
     isCancelled,
   });
   if (options.nmapXml !== undefined) {
-    const nmapCompleteness: "complete" | "partial" =
-      isCancelled ||
-      (options.nmapExitCode !== undefined &&
-        options.nmapExitCode !== null &&
-        options.nmapExitCode !== 0)
-        ? "partial"
-        : "complete";
+    let nmapCompleteness: "complete" | "partial" = "complete";
+
+    if (isCancelled) {
+      nmapCompleteness = "partial";
+    } else if (
+      options.nmapExitCode !== undefined &&
+      options.nmapExitCode !== null &&
+      options.nmapExitCode !== 0
+    ) {
+      nmapCompleteness = "partial";
+    }
+
     await publishSingleArtifact({
       config,
       lease,

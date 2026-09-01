@@ -9,17 +9,24 @@ describe("parseNmapXml", () => {
   it("parses valid single service", () => {
     const r = parseNmapXml(valid);
     expect(r.ok).toBe(true);
-    if (r.ok) { expect(r.services).toHaveLength(1); expect(r.services[0]).toMatchObject({ address: "192.0.2.10", port: 80, hostname: "host.test", serviceName: "http" }); }
+    if (r.ok) {
+      expect(r.services).toHaveLength(1);
+      expect(r.services[0]).toMatchObject({ address: "192.0.2.10", port: 80, hostname: "host.test", serviceName: "http" });
+    }
   });
   it("accepts empty nmaprun", () => {
     const r = parseNmapXml(empty);
-    expect(r.ok).toBe(true); if (r.ok) expect(r.services).toHaveLength(0);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.services).toHaveLength(0);
   });
   it("rejects exact ancestry violations", () => {
     const samples = [
-      b(`<nmaprun><hostnames><host><address addr="192.0.2.1" addrtype="ipv4"/></host></hostnames></nmaprun>`), b(`<nmaprun><host><ports><address addr="192.0.2.1" addrtype="ipv4"/></ports></host></nmaprun>`),
-      b(`<nmaprun><host><hostname name="bad.test"/></host></nmaprun>`), b(`<nmaprun><host><port protocol="tcp" portid="80"><state state="open"/></port></host></nmaprun>`),
-      b(`<nmaprun><host><address addr="192.0.2.1" addrtype="ipv4"/><state state="open"/></host></nmaprun>`), b(`<nmaprun><host><host><address addr="192.0.2.1" addrtype="ipv4"/></host></host></nmaprun>`),
+      b(`<nmaprun><hostnames><host><address addr="192.0.2.1" addrtype="ipv4"/></host></hostnames></nmaprun>`),
+      b(`<nmaprun><host><ports><address addr="192.0.2.1" addrtype="ipv4"/></ports></host></nmaprun>`),
+      b(`<nmaprun><host><hostname name="bad.test"/></host></nmaprun>`),
+      b(`<nmaprun><host><port protocol="tcp" portid="80"><state state="open"/></port></host></nmaprun>`),
+      b(`<nmaprun><host><address addr="192.0.2.1" addrtype="ipv4"/><state state="open"/></host></nmaprun>`),
+      b(`<nmaprun><host><host><address addr="192.0.2.1" addrtype="ipv4"/></host></host></nmaprun>`),
       b(`<nmaprun><host><address addr="192.0.2.1" addrtype="ipv4"/><ports><port protocol="tcp" portid="80"><port protocol="tcp" portid="81"><state state="open"/></port></port></ports></host></nmaprun>`),
     ];
     for (const s of samples) expect(parseNmapXml(s).ok).toBe(false);
@@ -29,7 +36,13 @@ describe("parseNmapXml", () => {
     expect(parseNmapXml(v).ok).toBe(true);
   });
   it("rejects deep nesting beyond max depth", () => {
-    const build = (n: number) => { let x = "<nmaprun>"; for (let i = 0; i < n; i += 1) x += "<a>"; for (let i = 0; i < n; i += 1) x += "</a>"; x += "</nmaprun>"; return b(x); };
+    const build = (n: number) => {
+      let x = "<nmaprun>";
+      for (let i = 0; i < n; i += 1) x += "<a>";
+      for (let i = 0; i < n; i += 1) x += "</a>";
+      x += "</nmaprun>";
+      return b(x);
+    };
     expect(parseNmapXml(build(33)).ok).toBe(false);
   });
   it("rejects unsafe character-data entity syntax", () => {

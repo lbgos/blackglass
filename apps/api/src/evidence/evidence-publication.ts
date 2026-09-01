@@ -19,6 +19,12 @@ import type { StorageQuiesceGate } from "./backup-lock.js";
 // an exclusive backup snapshot pauses finalization with
 // storage_backup_quiesced instead of interleaving with the snapshot.
 
+type PublicationHookResult =
+  | { ok: true }
+  | { ok: false; code: "storage_busy" | "invalid_persisted_data" };
+
+type PublicationHook = (artifactId: string) => Promise<PublicationHookResult>;
+
 export interface EvidencePublicationServiceOptions {
   repository: EvidenceGrantRepository;
   store: EvidenceStore;
@@ -26,7 +32,7 @@ export interface EvidencePublicationServiceOptions {
   // Optional so existing deployments and focused tests without a lockfile
   // keep working; production wiring always provides one.
   quiesceGate?: StorageQuiesceGate;
-  onPublicationCommitted?: (artifactId: string) => Promise<{ ok: true } | { ok: false; code: "storage_busy" | "invalid_persisted_data" }>;
+  onPublicationCommitted?: PublicationHook;
 }
 
 export type PutOutcome =
@@ -88,7 +94,7 @@ export class EvidencePublicationService {
   private readonly store: EvidenceStore;
   private readonly now: () => Date;
   private readonly quiesceGate: StorageQuiesceGate | undefined;
-  private readonly onCommitted: EvidencePublicationServiceOptions["onPublicationCommitted"];
+  private readonly onCommitted: PublicationHook | undefined;
 
   constructor(options: EvidencePublicationServiceOptions) {
     this.repository = options.repository;
@@ -97,8 +103,11 @@ export class EvidencePublicationService {
     this.quiesceGate = options.quiesceGate;
     this.onCommitted = options.onPublicationCommitted;
   }
-  private async invokeCommitHook(artifactId: string): Promise<{ ok: true } | { ok: false; code: "storage_busy" | "invalid_persisted_data" }> {
-    if (this.onCommitted === undefined) return { ok: true };
+  private async invokeCommitHook(artifactId: string): Promise<PublicationHookResult> {
+    if (this.onCommitted === undefined) {
+      return { ok: true };
+    }
+
     try {
       return await this.onCommitted(artifactId);
     } catch {

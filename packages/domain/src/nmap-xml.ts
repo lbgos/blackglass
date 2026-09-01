@@ -5,185 +5,320 @@ import {
   type NmapServiceObservation,
 } from "@blackglass/contracts";
 import { normalizeTarget } from "./normalize-target.js";
-const MAX_ATTR = 256, MAX_SVC = 64, MAX_DEPTH = 32;
+const MAX_ATTRIBUTE_VALUE_LENGTH = 256;
+const MAX_SERVICE_FIELD_LENGTH = 64;
+const MAX_ELEMENT_DEPTH = 32;
 export type ParsedNmapService = NmapServiceObservation;
-export type ParseNmapXmlResult = { ok: true; services: ParsedNmapService[] } | { ok: false; error: {
-  code: "nmap_xml_invalid" } };
-const invalid = (): ParseNmapXmlResult => ({ ok: false, error: { code: "nmap_xml_invalid" } });
-function decodeEntities(v: string): string | null {
-  let out = "", i = 0;
-  while (i < v.length) {
-    const a = v.indexOf("&", i);
-    if (a === -1) { out += v.slice(i); break; }
-    out += v.slice(i, a);
-    const s = v.indexOf(";", a + 1);
-    if (s === -1 || s - a > 12) return null;
-    const e = v.slice(a + 1, s);
-    if (e === "lt") out += "<"; else if (e === "gt") out += ">";
-    else if (e === "amp") out += "&"; else if (e === "quot") out += '"';
-    else if (e === "apos") out += "'"; else if (e.startsWith("#")) {
-      let cp: number | null = null;
-      if (e[1] === "x" || e[1] === "X") {
-        const h = e.slice(2); if (!/^[0-9A-Fa-f]{1,6}$/.test(h)) return null; cp = Number.parseInt(h, 16);
-      } else { const d = e.slice(1); if (!/^[0-9]{1,7}$/.test(d)) return null; cp = Number.parseInt(d, 10); }
-      if (cp === null || cp < 1 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return null;
-      out += String.fromCodePoint(cp);
-    } else return null;
-    i = s + 1;
-  }
-  return out;
+export type ParseNmapXmlResult =
+  | { ok: true; services: ParsedNmapService[] }
+  | { ok: false; error: { code: "nmap_xml_invalid" } };
+function invalidResult(): ParseNmapXmlResult {
+  return { ok: false, error: { code: "nmap_xml_invalid" } };
 }
-function findTagEnd(t: string, s: number): number {
-  let q: string | null = null;
-  for (let i = s; i < t.length; i += 1) {
-    const c = t[i];
-    if (q !== null) { if (c === q) q = null; continue; }
-    if (c === '"' || c === "'") { q = c; continue; }
-    if (c === ">") return i;
+function decodeEntities(value: string): string | null {
+  let decoded = "";
+  let index = 0;
+  while (index < value.length) {
+    const entityStart = value.indexOf("&", index);
+    if (entityStart === -1) {
+      decoded += value.slice(index);
+      break;
+    }
+    decoded += value.slice(index, entityStart);
+    const entityEnd = value.indexOf(";", entityStart + 1);
+    if (entityEnd === -1 || entityEnd - entityStart > 12) { return null; }
+    const entity = value.slice(entityStart + 1, entityEnd);
+    if (entity === "lt") {
+      decoded += "<";
+    } else if (entity === "gt") {
+      decoded += ">";
+    } else if (entity === "amp") {
+      decoded += "&";
+    } else if (entity === "quot") {
+      decoded += '"';
+    } else if (entity === "apos") {
+      decoded += "'";
+    } else if (entity.startsWith("#")) {
+      let codePoint: number | null = null;
+      if (entity[1] === "x" || entity[1] === "X") {
+        const hex = entity.slice(2);
+        if (!/^[0-9A-Fa-f]{1,6}$/.test(hex)) return null;
+        codePoint = Number.parseInt(hex, 16);
+      } else {
+        const decimal = entity.slice(1);
+        if (!/^[0-9]{1,7}$/.test(decimal)) return null;
+        codePoint = Number.parseInt(decimal, 10);
+      }
+      if (codePoint === null || codePoint < 1 || codePoint > 0x10ffff
+        || (codePoint >= 0xd800 && codePoint <= 0xdfff)) { return null; }
+      decoded += String.fromCodePoint(codePoint);
+    } else {
+      return null;
+    }
+    index = entityEnd + 1;
+  }
+  return decoded;
+}
+function findTagEnd(text: string, start: number): number {
+  let quote: string | null = null;
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === ">") return index;
   }
   return -1;
 }
-interface HostCtx { address: string | null; hostname: string | null; ports: PortCtx[]; }
-interface PortCtx { protocol: string | null; port: number | null; state: string | null; serviceName: string | null;
-  product: string | null; version: string | null; }
+interface HostContext { address: string | null; hostname: string | null; ports: PortContext[]; }
+interface PortContext { protocol: string | null; port: number | null; state: string | null;
+  serviceName: string | null; product: string | null; version: string | null; }
 export function parseNmapXml(bytes: Uint8Array): ParseNmapXmlResult {
-  if (bytes.length > MAX_BYTES) return invalid();
-  let xml: string; try { xml = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return invalid(); }
-  const lo = xml.toLowerCase();
-  if (lo.includes("<!doctype") || lo.includes("<!entity")) return invalid();
-  if (!lo.includes("<nmaprun")) return invalid();
-  const stack: string[] = []; let seenOpen = false, seenClose = false;
-  const hosts: HostCtx[] = []; let curHost: HostCtx | null = null, curPort: PortCtx | null = null, totalPorts = 0,
-  pos = 0;
-  while (pos < xml.length) {
-    const lt = xml.indexOf("<", pos);
-    if (lt === -1) {
-      const tail = xml.slice(pos);
-      if (decodeEntities(tail) === null) return invalid();
-      if (/\S/.test(tail) && stack.length === 0) return invalid();
+  if (bytes.length > MAX_BYTES) { return invalidResult(); }
+  let xml: string;
+  try {
+    xml = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return invalidResult();
+  }
+  const lowerCased = xml.toLowerCase();
+  if (lowerCased.includes("<!doctype") || lowerCased.includes("<!entity")) { return invalidResult(); }
+  if (!lowerCased.includes("<nmaprun")) { return invalidResult(); }
+  const elementStack: string[] = [];
+  let seenOpenNmapRun = false;
+  let seenCloseNmapRun = false;
+  const hosts: HostContext[] = [];
+  let currentHost: HostContext | null = null;
+  let currentPort: PortContext | null = null;
+  let totalPorts = 0;
+  let position = 0;
+  while (position < xml.length) {
+    const tagStart = xml.indexOf("<", position);
+    if (tagStart === -1) {
+      const tail = xml.slice(position);
+      if (decodeEntities(tail) === null) { return invalidResult(); }
+      if (/\S/.test(tail) && elementStack.length === 0) { return invalidResult(); }
       break;
     }
-    if (lt > pos) {
-      const between = xml.slice(pos, lt);
-      if (decodeEntities(between) === null) return invalid();
-      if (/\S/.test(between) && stack.length === 0) return invalid();
+    if (tagStart > position) {
+      const between = xml.slice(position, tagStart);
+      if (decodeEntities(between) === null) { return invalidResult(); }
+      if (/\S/.test(between) && elementStack.length === 0) { return invalidResult(); }
     }
-    if (xml.startsWith("<!--", lt)) { const e = xml.indexOf("-->", lt + 4); if (e === -1) return invalid();
-  pos = e + 3; continue; }
-    if (xml.startsWith("<![CDATA[", lt)) { const e = xml.indexOf("]]>", lt + 9); if (e === -1) return invalid();
-  pos = e + 3; continue; }
-    if (xml.startsWith("<?", lt)) { const e = xml.indexOf("?>", lt + 2); if (e === -1) return invalid(); pos = e + 2;
-  continue; }
-    if (xml.startsWith("<!", lt)) return invalid();
-    const gt = findTagEnd(xml, lt + 1); if (gt === -1) return invalid();
-    const raw = xml.slice(lt + 1, gt); const trimmed = raw.trim(); if (!trimmed) return invalid();
-    let closing = false, inner = trimmed;
-    if (inner.startsWith("/")) { closing = true; inner = inner.slice(1).trim(); }
-    let selfClose = false;
-    if (!closing && inner.endsWith("/")) { selfClose = true; inner = inner.slice(0, -1).trim(); }
-    let p = 0; while (p < inner.length && /\s/.test(inner[p] ?? "")) p += 1;
-    const ns = p; while (p < inner.length && /[A-Za-z0-9_.\-:]/.test(inner[p] ?? "")) p += 1;
-    const name = inner.slice(ns, p);
-    if (!name || name.length > 64 || !/^[A-Za-z_][A-Za-z0-9_.\-:]*$/.test(name)) return invalid();
-    const attrs = new Map<string, string>();
-    if (!closing) {
-      while (p < inner.length) {
-        while (p < inner.length && /\s/.test(inner[p] ?? "")) p += 1;
-        if (p >= inner.length) break;
-        const aS = p; while (p < inner.length && /[A-Za-z0-9_:\-.]/.test(inner[p] ?? "")) p += 1;
-        const aN = inner.slice(aS, p); if (!aN || aN.length > 64) return invalid();
-        while (p < inner.length && /\s/.test(inner[p] ?? "")) p += 1;
-        if (inner[p] !== "=") return invalid(); p += 1;
-        while (p < inner.length && /\s/.test(inner[p] ?? "")) p += 1;
-        const q = inner[p]; if (q !== '"' && q !== "'") return invalid(); p += 1;
-        const vE = inner.indexOf(q, p); if (vE === -1) return invalid();
-        const rv = inner.slice(p, vE); p = vE + 1;
-        const dec = decodeEntities(rv); if (dec === null || dec.length > MAX_ATTR ||
-  dec.includes("\0")) return invalid();
-        if ((aN === "name" || aN === "product" || aN === "version") && dec.length > MAX_SVC) return invalid();
-        if (aN === "addr" && dec.length > 45) return invalid();
-        if (attrs.has(aN)) return invalid(); attrs.set(aN, dec);
+    if (xml.startsWith("<!--", tagStart)) {
+      const commentEnd = xml.indexOf("-->", tagStart + 4);
+      if (commentEnd === -1) { return invalidResult(); }
+      position = commentEnd + 3;
+      continue;
+    }
+    if (xml.startsWith("<![CDATA[", tagStart)) {
+      const cdataEnd = xml.indexOf("]]>", tagStart + 9);
+      if (cdataEnd === -1) { return invalidResult(); }
+      position = cdataEnd + 3;
+      continue;
+    }
+    if (xml.startsWith("<?", tagStart)) {
+      const piEnd = xml.indexOf("?>", tagStart + 2);
+      if (piEnd === -1) { return invalidResult(); }
+      position = piEnd + 2;
+      continue;
+    }
+    if (xml.startsWith("<!", tagStart)) { return invalidResult(); }
+    const tagEnd = findTagEnd(xml, tagStart + 1);
+    if (tagEnd === -1) { return invalidResult(); }
+    const rawTag = xml.slice(tagStart + 1, tagEnd);
+    const trimmedTag = rawTag.trim();
+    if (!trimmedTag) { return invalidResult(); }
+    let isClosing = false;
+    let inner = trimmedTag;
+    if (inner.startsWith("/")) { isClosing = true; inner = inner.slice(1).trim(); }
+    let isSelfClosing = false;
+    if (!isClosing && inner.endsWith("/")) { isSelfClosing = true; inner = inner.slice(0, -1).trim(); }
+    let index = 0;
+    while (index < inner.length && /\s/.test(inner[index] ?? "")) index += 1;
+    const nameStart = index;
+    while (index < inner.length && /[A-Za-z0-9_.\-:]/.test(inner[index] ?? "")) index += 1;
+    const tagName = inner.slice(nameStart, index);
+    if (!tagName || tagName.length > 64 || !/^[A-Za-z_][A-Za-z0-9_.\-:]*$/.test(tagName)) { return invalidResult(); }
+    const attributes = new Map<string, string>();
+    if (!isClosing) {
+      while (index < inner.length) {
+        while (index < inner.length && /\s/.test(inner[index] ?? "")) index += 1;
+        if (index >= inner.length) break;
+        const attributeStart = index;
+        while (index < inner.length && /[A-Za-z0-9_:\-.]/.test(inner[index] ?? "")) index += 1;
+        const attributeName = inner.slice(attributeStart, index);
+        if (!attributeName || attributeName.length > 64) { return invalidResult(); }
+        while (index < inner.length && /\s/.test(inner[index] ?? "")) index += 1;
+        if (inner[index] !== "=") { return invalidResult(); }
+        index += 1;
+        while (index < inner.length && /\s/.test(inner[index] ?? "")) index += 1;
+        const quote = inner[index];
+        if (quote !== '"' && quote !== "'") { return invalidResult(); }
+        index += 1;
+        const valueEnd = inner.indexOf(quote, index);
+        if (valueEnd === -1) { return invalidResult(); }
+        const rawValue = inner.slice(index, valueEnd);
+        index = valueEnd + 1;
+        const decodedValue = decodeEntities(rawValue);
+        if (decodedValue === null || decodedValue.length > MAX_ATTRIBUTE_VALUE_LENGTH) { return invalidResult(); }
+        if (decodedValue.includes("\0")) { return invalidResult(); }
+        if ((attributeName === "name" || attributeName === "product"
+          || attributeName === "version") && decodedValue.length > MAX_SERVICE_FIELD_LENGTH) { return invalidResult(); }
+        if (attributeName === "addr" && decodedValue.length > 45) { return invalidResult(); }
+        if (attributes.has(attributeName)) { return invalidResult(); }
+        attributes.set(attributeName, decodedValue);
       }
-    } else { while (p < inner.length && /\s/.test(inner[p] ?? "")) p += 1; if (p !== inner.length) return invalid(); }
-    if (closing) {
-      const top = stack[stack.length - 1]; if (!top || top !== name) return invalid(); stack.pop();
-      if (name === "nmaprun") seenClose = true;
-      if (name === "host") { curHost = null; curPort = null; }
-      if (name === "port") curPort = null;
-      pos = gt + 1; continue;
+    } else {
+      while (index < inner.length && /\s/.test(inner[index] ?? "")) index += 1;
+      if (index !== inner.length) { return invalidResult(); }
     }
-    if (name === "nmaprun") {
-      if (seenOpen || stack.length !== 0) return invalid(); seenOpen = true;
-      if (selfClose) seenClose = true; else { if (stack.length >= MAX_DEPTH) return invalid(); stack.push(name); }
-      pos = gt + 1; continue;
+    if (isClosing) {
+      const top = elementStack[elementStack.length - 1];
+      if (!top || top !== tagName) { return invalidResult(); }
+      elementStack.pop();
+      if (tagName === "nmaprun") seenCloseNmapRun = true;
+      if (tagName === "host") { currentHost = null; currentPort = null; }
+      if (tagName === "port") currentPort = null;
+      position = tagEnd + 1;
+      continue;
     }
-    if (stack.length === 0 || stack[0] !== "nmaprun") return invalid();
-    const parent = stack[stack.length - 1] ?? null, grand = stack[stack.length - 2] ?? null;
-    if (name === "host") {
-      if (parent !== "nmaprun") return invalid(); if (hosts.length >= MAX_HOSTS) return invalid();
-      const h: HostCtx = { address: null, hostname: null, ports: [] }; hosts.push(h);
-      if (!selfClose) { if (stack.length >= MAX_DEPTH) return invalid(); curHost = h; curPort = null; stack.push(name);
+    if (tagName === "nmaprun") {
+      if (seenOpenNmapRun || elementStack.length !== 0) { return invalidResult(); }
+      seenOpenNmapRun = true;
+      if (isSelfClosing) seenCloseNmapRun = true;
+      else {
+        if (elementStack.length >= MAX_ELEMENT_DEPTH) { return invalidResult(); }
+        elementStack.push(tagName);
+      }
+      position = tagEnd + 1;
+      continue;
+    }
+    if (elementStack.length === 0 || elementStack[0] !== "nmaprun") { return invalidResult(); }
+    const parent = elementStack[elementStack.length - 1] ?? null;
+    const grandParent = elementStack[elementStack.length - 2] ?? null;
+    if (tagName === "host") {
+      if (parent !== "nmaprun" || hosts.length >= MAX_HOSTS) { return invalidResult(); }
+      const host: HostContext = { address: null, hostname: null, ports: [] };
+      hosts.push(host);
+      if (!isSelfClosing) {
+        if (elementStack.length >= MAX_ELEMENT_DEPTH) { return invalidResult(); }
+        currentHost = host;
+        currentPort = null;
+        elementStack.push(tagName);
+      }
+      position = tagEnd + 1;
+      continue;
+    }
+    if (tagName === "hostnames" || tagName === "ports") {
+      if (parent !== "host") { return invalidResult(); }
+      if (!isSelfClosing) {
+        if (elementStack.length >= MAX_ELEMENT_DEPTH) { return invalidResult(); }
+        elementStack.push(tagName);
+      }
+      position = tagEnd + 1;
+      continue;
+    }
+    if (tagName === "address") {
+      if (parent !== "host" || currentHost === null) { return invalidResult(); }
+      const address = attributes.get("addr");
+      const addressType = attributes.get("addrtype");
+      if (address && (addressType === "ipv4" || addressType === "ipv6") && currentHost.address === null) {
+        currentHost.address = address;
+      }
+      if (!isSelfClosing) {
+        if (elementStack.length >= MAX_ELEMENT_DEPTH) { return invalidResult(); }
+        elementStack.push(tagName);
+      }
+      position = tagEnd + 1;
+      continue;
+    }
+    if (tagName === "hostname") {
+      if (parent !== "hostnames" || grandParent !== "host" || currentHost === null) { return invalidResult(); }
+      if (currentHost.hostname === null) {
+        const hostname = attributes.get("name");
+        if (hostname && hostname.length >= 1 && hostname.length <= 253) {
+          currentHost.hostname = hostname;
+        }
+      }
+      if (!isSelfClosing) {
+        if (elementStack.length >= MAX_ELEMENT_DEPTH) { return invalidResult(); }
+        elementStack.push(tagName);
+      }
+      position = tagEnd + 1;
+      continue;
+    }
+    if (tagName === "port") {
+      if (parent !== "ports" || grandParent !== "host" || currentHost === null) { return invalidResult(); }
+      if (totalPorts >= MAX_SERVICES) { return invalidResult(); }
+      const protocol = attributes.get("protocol") ?? null;
+      const portId = attributes.get("portid");
+      let portNumber: number | null = null;
+      if (portId && /^[0-9]{1,5}$/.test(portId)) {
+        const numericPort = Number(portId);
+        if (numericPort >= 1 && numericPort <= 65535) portNumber = numericPort;
+      }
+      const portContext: PortContext = { protocol, port: portNumber, state: null,
+        serviceName: null, product: null, version: null };
+      currentHost.ports.push(portContext);
+      totalPorts += 1;
+      if (!isSelfClosing) {
+        if (elementStack.length >= MAX_ELEMENT_DEPTH) { return invalidResult(); }
+        currentPort = portContext;
+        elementStack.push(tagName);
+      } else currentPort = null;
+      position = tagEnd + 1;
+      continue;
+    }
+    if (tagName === "state") {
+      if (parent !== "port" || currentPort === null) { return invalidResult(); }
+      const state = attributes.get("state");
+      if (state) currentPort.state = state;
+      if (!isSelfClosing) {
+        if (elementStack.length >= MAX_ELEMENT_DEPTH) { return invalidResult(); }
+        elementStack.push(tagName);
+      }
+      position = tagEnd + 1;
+      continue;
+    }
+    if (tagName === "service") {
+      if (parent !== "port" || currentPort === null) { return invalidResult(); }
+      const serviceName = attributes.get("name") ?? null;
+      const product = attributes.get("product") ?? null;
+      const version = attributes.get("version") ?? null;
+      if (serviceName) currentPort.serviceName = serviceName;
+      if (product) currentPort.product = product;
+      if (version) currentPort.version = version;
+      if (!isSelfClosing) {
+        if (elementStack.length >= MAX_ELEMENT_DEPTH) { return invalidResult(); }
+        elementStack.push(tagName);
+      }
+      position = tagEnd + 1;
+      continue;
+    }
+    if (!isSelfClosing) {
+      if (elementStack.length >= MAX_ELEMENT_DEPTH) { return invalidResult(); }
+      elementStack.push(tagName);
+    }
+    position = tagEnd + 1;
   }
-      pos = gt + 1; continue;
-    }
-    if (name === "hostnames" || name === "ports") {
-      if (parent !== "host") return invalid();
-      if (!selfClose) { if (stack.length >= MAX_DEPTH) return invalid(); stack.push(name); }
-      pos = gt + 1; continue;
-    }
-    if (name === "address") {
-      if (parent !== "host" || curHost === null) return invalid();
-      const a = attrs.get("addr"), t = attrs.get("addrtype");
-      if (a && (t === "ipv4" || t === "ipv6") && curHost.address === null) curHost.address = a;
-      if (!selfClose) { if (stack.length >= MAX_DEPTH) return invalid(); stack.push(name); }
-      pos = gt + 1; continue;
-    }
-    if (name === "hostname") {
-      if (parent !== "hostnames" || grand !== "host" || curHost === null) return invalid();
-      if (curHost.hostname === null) { const hn = attrs.get("name"); if (hn && hn.length >= 1 &&
-  hn.length <= 253) curHost.hostname = hn; }
-      if (!selfClose) { if (stack.length >= MAX_DEPTH) return invalid(); stack.push(name); }
-      pos = gt + 1; continue;
-    }
-    if (name === "port") {
-      if (parent !== "ports" || grand !== "host" || curHost === null) return invalid();
-      if (totalPorts >= MAX_SERVICES) return invalid();
-      const pr = attrs.get("protocol") ?? null, ps = attrs.get("portid"); let pn: number | null = null;
-      if (ps && /^[0-9]{1,5}$/.test(ps)) { const n = Number(ps); if (n >= 1 && n <= 65535) pn = n; }
-      const c: PortCtx = { protocol: pr, port: pn, state: null, serviceName: null, product: null, version: null };
-      curHost.ports.push(c); totalPorts += 1;
-      if (!selfClose) { if (stack.length >= MAX_DEPTH) return invalid(); curPort = c; stack.push(name); }
-  else curPort = null;
-      pos = gt + 1; continue;
-    }
-    if (name === "state") {
-      if (parent !== "port" || curPort === null) return invalid();
-      const s = attrs.get("state"); if (s) curPort.state = s;
-      if (!selfClose) { if (stack.length >= MAX_DEPTH) return invalid(); stack.push(name); }
-      pos = gt + 1; continue;
-    }
-    if (name === "service") {
-      if (parent !== "port" || curPort === null) return invalid();
-      const sn = attrs.get("name") ?? null, pr = attrs.get("product") ?? null, ve = attrs.get("version") ?? null;
-      if (sn) curPort.serviceName = sn; if (pr) curPort.product = pr; if (ve) curPort.version = ve;
-      if (!selfClose) { if (stack.length >= MAX_DEPTH) return invalid(); stack.push(name); }
-      pos = gt + 1; continue;
-    }
-    if (!selfClose) { if (stack.length >= MAX_DEPTH) return invalid(); stack.push(name); }
-    pos = gt + 1;
-  }
-  if (!seenOpen || !seenClose || stack.length !== 0) return invalid();
+  if (!seenOpenNmapRun || !seenCloseNmapRun || elementStack.length !== 0) { return invalidResult(); }
   const services: ParsedNmapService[] = [];
-  for (const h of hosts) {
-    if (!h.address) continue;
-    const n = normalizeTarget(h.address);
-    if (!n.ok || n.target.kind !== "ip") continue;
-    const addr = n.target.address;
-    for (const p of h.ports) {
-      if (p.protocol !== "tcp" || p.port === null || p.state !== "open") continue;
-      if (services.length >= MAX_SERVICES) return invalid();
-      services.push({ address: addr, port: p.port, protocol: "tcp", hostname: h.hostname, serviceName: p.serviceName,
-  product: p.product, version: p.version });
+  for (const host of hosts) {
+    if (!host.address) continue;
+    const normalized = normalizeTarget(host.address);
+    if (!normalized.ok || normalized.target.kind !== "ip") continue;
+    const address = normalized.target.address;
+    for (const port of host.ports) {
+      if (port.protocol !== "tcp" || port.port === null || port.state !== "open") continue;
+      if (services.length >= MAX_SERVICES) { return invalidResult(); }
+      services.push({ address, port: port.port, protocol: "tcp",
+        hostname: host.hostname, serviceName: port.serviceName, product: port.product, version: port.version });
     }
   }
   return { ok: true, services };
