@@ -21,6 +21,7 @@ import {
   capabilityErrorCopy,
   formatCanonicalTarget,
   latestActionSnapshot,
+  parseDeclaredPorts,
   parsePlannedTargets,
   warningReasonCodes,
   warningReasonSummary,
@@ -94,7 +95,9 @@ function PlannerBody({
   const { focusRunsToken } = useEngagementWorkspace();
   const targetsRef = useRef<HTMLTextAreaElement>(null);
   const [rawTargets, setRawTargets] = useState("");
+  const [rawDeclaredPorts, setRawDeclaredPorts] = useState("");
   const [fieldError, setFieldError] = useState<string | undefined>(undefined);
+  const [portsFieldError, setPortsFieldError] = useState<string | undefined>(undefined);
   const [plannedTargets, setPlannedTargets] = useState<string[]>([]);
   const [result, setResult] = useState<PersistedAction | undefined>(undefined);
   const [outcome, setOutcome] = useState<"queued" | "cancelled" | undefined>(undefined);
@@ -124,11 +127,12 @@ function PlannerBody({
     setOutcome(undefined);
     setQueuedBy(undefined);
     const parsed = parsePlannedTargets(rawTargets);
-    if (!parsed.ok) {
-      setFieldError(parsed.message);
-      return;
-    }
-    setFieldError(undefined);
+    const parsedPorts = parseDeclaredPorts(rawDeclaredPorts);
+    if (!parsed.ok) setFieldError(parsed.message);
+    else setFieldError(undefined);
+    if (!parsedPorts.ok) setPortsFieldError(parsedPorts.message);
+    else setPortsFieldError(undefined);
+    if (!parsed.ok || !parsedPorts.ok) return;
     setPlannedTargets(parsed.targets);
     createAction.mutate(
       {
@@ -136,6 +140,7 @@ function PlannerBody({
         expectedEngagementRevision,
         expectedActiveScopeRevisionId,
         targets: parsed.targets,
+        declaredPorts: parsedPorts.declaredPorts,
       },
       {
         onSuccess: (action) => {
@@ -189,6 +194,29 @@ function PlannerBody({
           {fieldError && (
             <span className="text-destructive" role="alert">
               {fieldError}
+            </span>
+          )}
+        </label>
+        <label className="grid gap-1 text-[11px] text-muted-foreground" htmlFor={`${formId}-ports`}>
+          <span>TCP ports <span className="font-normal opacity-70">Optional</span></span>
+          <input
+            id={`${formId}-ports`}
+            name="declaredPorts"
+            value={rawDeclaredPorts}
+            placeholder="22,80,443"
+            autoComplete="off"
+            spellCheck={false}
+            disabled={archived || createAction.isPending}
+            aria-invalid={portsFieldError !== undefined}
+            className={cn(
+              "h-9 w-full rounded-md border bg-transparent px-2.5 font-mono text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              portsFieldError !== undefined ? "border-destructive" : "border-input",
+            )}
+            onChange={(event) => setRawDeclaredPorts(event.target.value)}
+          />
+          {portsFieldError && (
+            <span className="text-destructive" role="alert">
+              {portsFieldError}
             </span>
           )}
         </label>

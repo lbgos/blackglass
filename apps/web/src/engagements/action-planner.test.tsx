@@ -252,6 +252,7 @@ describe("action planner", () => {
           expectedEngagementRevision: 1,
           expectedActiveScopeRevisionId: null,
           targets: ["192.0.2.10"],
+          declaredPorts: null,
         });
         return response(queued, 201);
       }
@@ -564,5 +565,44 @@ describe("action planner", () => {
     ).toBeTruthy();
     await waitFor(() => expect(screen.getByText("rev 5")).toBeTruthy());
     expect(screen.queryByRole("dialog", { name: "Action needs a warning" })).toBeNull();
+  });
+
+  it("normalizes unsorted duplicate TCP ports into sorted unique array", async () => {
+    const queued = persistedAction("queued");
+    stubFetch((url, init) => {
+      if (url.endsWith("/actions") && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toMatchObject({ declaredPorts: [22, 80, 443] });
+        return response(queued, 201);
+      }
+      return readResponse(url, { ...activeEngagement, revision: 1, activeScopeRevisionId: null }, null) ?? response({ code: "invalid_request" }, 400);
+    });
+
+    await renderPlanner({ ...activeEngagement, revision: 1, activeScopeRevisionId: null });
+    const targetsField = await screen.findByLabelText("Targets");
+    const portsField = await screen.findByLabelText(/TCP ports/i);
+    expect(portsField.getAttribute("placeholder")).toBe("22,80,443");
+    fireEvent.change(targetsField, { target: { value: "192.0.2.10" } });
+    fireEvent.change(portsField, { target: { value: "443,80,80,22" } });
+    fireEvent.submit(screen.getByRole("button", { name: "Plan action" }).closest("form")!);
+    expect(await screen.findByText(/Action queued/)).toBeTruthy();
+  });
+
+  it("rejects malformed TCP ports without posting", async () => {
+    const fetchMock = stubFetch((url, init) => {
+      if (init?.method === "POST") return response({ code: "invalid_request" }, 400);
+      return readResponse(url, activeEngagement, emptyRevision) ?? response({ code: "invalid_request" }, 400);
+    });
+
+    await renderPlanner();
+    const portsField = await screen.findByLabelText(/TCP ports/i);
+    const form = portsField.closest("form")!;
+    fireEvent.change(await screen.findByLabelText("Targets"), { target: { value: "192.0.2.10" } });
+
+    for (const value of ["80,,443", "0", "65536", "80a", "80, 443,", "-1"]) {
+      fireEvent.change(portsField, { target: { value } });
+      fireEvent.submit(form);
+      expect(await screen.findByText("Enter comma-separated ports 1-65535, for example 22,80,443.")).toBeTruthy();
+    }
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
   });
 });

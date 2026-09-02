@@ -27,6 +27,7 @@ export async function createActionRequest(
     expectedEngagementRevision: number;
     expectedActiveScopeRevisionId: string | null;
     targets: readonly string[];
+    declaredPorts: readonly number[] | null;
   },
   idempotencyKey: string,
   signal?: AbortSignal,
@@ -150,11 +151,13 @@ export function useCreateActionMutation() {
       expectedEngagementRevision: number;
       expectedActiveScopeRevisionId: string | null;
       targets: readonly string[];
+      declaredPorts: readonly number[] | null;
     }) => {
       const body = CreateActionRequestSchema.parse({
         expectedEngagementRevision: input.expectedEngagementRevision,
         expectedActiveScopeRevisionId: input.expectedActiveScopeRevisionId,
         targets: input.targets,
+        declaredPorts: input.declaredPorts,
       });
       const intent = requestFingerprint({
         engagementId: input.engagementId,
@@ -167,6 +170,7 @@ export function useCreateActionMutation() {
         expectedEngagementRevision: input.expectedEngagementRevision,
         expectedActiveScopeRevisionId: input.expectedActiveScopeRevisionId,
         targets: input.targets,
+        declaredPorts: input.declaredPorts,
       });
       keys.current.reset(
         requestFingerprint({

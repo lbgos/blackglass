@@ -11,6 +11,30 @@ import { createDraftScopeRule, SCOPE_TARGET_FIELD_ERROR } from "./scope-rules.js
 
 export const EMPTY_TARGETS_ERROR = "Enter at least one target.";
 export const DUPLICATE_TARGETS_ERROR = "Duplicate targets are not allowed.";
+export const DECLARED_PORTS_FIELD_ERROR =
+  "Enter comma-separated ports 1-65535, for example 22,80,443.";
+
+export type ParsedDeclaredPorts =
+  | { ok: true; declaredPorts: number[] | null }
+  | { ok: false; message: string };
+
+export function parseDeclaredPorts(raw: string): ParsedDeclaredPorts {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return { ok: true, declaredPorts: null };
+  const parts = trimmed.split(",");
+  const unique = new Set<number>();
+  for (const part of parts) {
+    const token = part.trim();
+    if (token.length === 0) return { ok: false, message: DECLARED_PORTS_FIELD_ERROR };
+    if (!/^\d+$/.test(token)) return { ok: false, message: DECLARED_PORTS_FIELD_ERROR };
+    const value = Number(token);
+    if (!Number.isInteger(value) || value < 1 || value > 65_535)
+      return { ok: false, message: DECLARED_PORTS_FIELD_ERROR };
+    unique.add(value);
+  }
+  const ports = [...unique].sort((a, b) => a - b);
+  return { ok: true, declaredPorts: ports };
+}
 
 export type ParsedPlannedTargets =
   | { ok: true; targets: string[] }
