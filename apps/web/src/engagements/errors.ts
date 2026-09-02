@@ -7,6 +7,7 @@ import {
 
 export const ENGAGEMENTS_QUERY_ERROR_MESSAGE = "The engagement list request failed.";
 export const ENGAGEMENT_DETAIL_QUERY_ERROR_MESSAGE = "The engagement request failed.";
+export const ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE = "The services request failed.";
 export const ENGAGEMENT_MUTATION_ERROR_MESSAGE = "The engagement request failed.";
 
 export const ENGAGEMENT_MUTATION_ERROR_COPY = {
@@ -49,6 +50,13 @@ export class EngagementDetailQueryError extends Error {
   constructor() {
     super(ENGAGEMENT_DETAIL_QUERY_ERROR_MESSAGE);
     this.name = "EngagementDetailQueryError";
+  }
+}
+
+export class EngagementServicesQueryError extends Error {
+  constructor() {
+    super(ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE);
+    this.name = "EngagementServicesQueryError";
   }
 }
 
