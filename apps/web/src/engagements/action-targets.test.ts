@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildAddScopeAndRunRules,
+  DECLARED_PORTS_FIELD_ERROR,
   DUPLICATE_TARGETS_ERROR,
   EMPTY_TARGETS_ERROR,
   formatCanonicalTarget,
   latestActionSnapshot,
+  parseDeclaredPorts,
   parsePlannedTargets,
   warningReasonCopy,
 } from "./action-targets.js";
@@ -133,5 +135,17 @@ describe("buildAddScopeAndRunRules", () => {
       target: ipv4Target,
     };
     expect(buildAddScopeAndRunRules([existing], pausedAction(), ["192.0.2.10"])).toEqual([existing]);
+  });
+});
+
+describe("parseDeclaredPorts", () => {
+  it("covers blank, normalization, empty segments, malformed tokens and bounds", () => {
+    expect(parseDeclaredPorts("")).toEqual({ ok: true, declaredPorts: null });
+    expect(parseDeclaredPorts("   ")).toEqual({ ok: true, declaredPorts: null });
+    expect(parseDeclaredPorts("443,80,80,22")).toEqual({ ok: true, declaredPorts: [22, 80, 443] });
+    expect(parseDeclaredPorts(" 443 , 22,80 ")).toEqual({ ok: true, declaredPorts: [22, 80, 443] });
+    for (const input of ["80,,443", "80, 443,", ",80", "80a", "0", "65536", "-1", "80.5", "80-443"]) {
+      expect(parseDeclaredPorts(input)).toEqual({ ok: false, message: DECLARED_PORTS_FIELD_ERROR });
+    }
   });
 });

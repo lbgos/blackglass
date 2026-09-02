@@ -97,6 +97,7 @@ describe("action mutations", () => {
           expectedEngagementRevision: 1,
           expectedActiveScopeRevisionId: null,
           targets: ["192.0.2.10"],
+          declaredPorts: [22, 80, 443],
         },
         "action-key-000000000001",
       ),
@@ -114,7 +115,7 @@ describe("action mutations", () => {
           expectedEngagementRevision: 1,
           expectedActiveScopeRevisionId: null,
           targets: ["192.0.2.10"],
-          declaredPorts: null,
+          declaredPorts: [22, 80, 443],
         }),
       }),
     );
@@ -265,6 +266,7 @@ describe("action mutations", () => {
       expectedEngagementRevision: 1,
       expectedActiveScopeRevisionId: null,
       targets: ["192.0.2.10"],
+      declaredPorts: null,
     });
     await waitFor(() => expect(result.current.isError).toBe(true));
     result.current.mutate({
@@ -272,6 +274,7 @@ describe("action mutations", () => {
       expectedEngagementRevision: 1,
       expectedActiveScopeRevisionId: null,
       targets: ["192.0.2.10"],
+      declaredPorts: null,
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
