@@ -373,4 +373,33 @@ describe("engagement workspace", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Workspace" })).toBeTruthy();
     expect(screen.getByTestId("workspace-notice").textContent).toBe("");
   });
+
+  it("keeps hook order stable when the engagement list resolves from pending", async () => {
+    let resolveEngagements: (value: Response) => void = () => undefined;
+    const pendingEngagements = new Promise<Response>((resolve) => {
+      resolveEngagements = resolve;
+    });
+    stubFetch((url, init) => {
+      if (url.includes("/system/status")) return response(readyStatus);
+      if (url === "/api/v1/engagements" && isReadRequest(init)) return pendingEngagements;
+      if (url.startsWith("/api/v1/engagements/") && isReadRequest(init)) {
+        return response({ engagement: activeEngagement, activeScopeRevision: null });
+      }
+      return response([]);
+    });
+
+    const hookError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await renderWorkspace();
+
+    expect(screen.getAllByRole("status", { name: "Loading engagements" }).length).toBeGreaterThan(0);
+
+    resolveEngagements(response([activeEngagement]));
+    expect((await screen.findAllByText("Target lab")).length).toBeGreaterThan(0);
+
+    const messages = hookError.mock.calls.flat().map((entry) => String(entry)).join("\n");
+    expect(messages).not.toMatch(/Rendered fewer hooks/i);
+    expect(messages).not.toMatch(/Rendered more hooks/i);
+    expect(messages).not.toMatch(/order of Hooks/i);
+    hookError.mockRestore();
+  });
 });
