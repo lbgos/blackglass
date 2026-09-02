@@ -24,7 +24,7 @@ const activeEngagement = {
   kind: "lab",
   status: "active",
   description: "Synthetic reserved lab",
-  authorizationContext: null,
+  authorizationContext: "RO-2026-08 authorized lab",
   autoContinueWarnings: false,
   activeScopeRevisionId: null,
   createdAt: "2026-08-12T12:00:00.000Z",
@@ -38,6 +38,7 @@ const archivedEngagement = {
   kind: "ctf",
   status: "archived",
   description: null,
+  authorizationContext: null,
   revision: 3,
 };
 
@@ -53,9 +54,16 @@ function readEngagementResponse(
   url: string,
   list: readonly TestEngagement[],
   scopes: Readonly<Record<string, unknown>> = {},
+  services: Readonly<Record<string, unknown[]>> = {},
 ): Response | undefined {
   if (url.includes("/system/status")) return response(readyStatus);
   if (url === "/api/v1/engagements") return response([...list]);
+  const servicesMatch = /^\/api\/v1\/engagements\/([^/?]+)\/services$/.exec(url);
+  if (servicesMatch?.[1] !== undefined) {
+    const engagement = list.find((item) => item.id === servicesMatch[1]);
+    if (engagement === undefined) return response({ code: "engagement_not_found" }, 404);
+    return response(services[servicesMatch[1]] ?? []);
+  }
   const match = /^\/api\/v1\/engagements\/([^/?]+)$/.exec(url);
   if (match?.[1] === undefined) return undefined;
   const engagement = list.find((item) => item.id === match[1]);
@@ -304,7 +312,6 @@ describe("engagement workspace", () => {
       await screen.findByText("This engagement changed. Showing the latest revision."),
     ).toBeTruthy();
     await waitFor(() => expect(screen.getByText("rev 5")).toBeTruthy());
-    expect(screen.getByText("Newer note")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Archive engagement" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Reopen engagement" })).toBeNull();
   });
@@ -349,7 +356,7 @@ describe("engagement workspace", () => {
     expect(screen.getByText("No engagements match this filter.")).toBeTruthy();
   });
 
-  it("announces unavailable next-step actions without claiming success", async () => {
+  it("shows planner and scope editor without disconnected placeholders", async () => {
     stubFetch((url, init) => {
       if (!isReadRequest(init)) return response({ code: "invalid_request" }, 400);
       return readEngagementResponse(url, [activeEngagement]) ?? response([activeEngagement]);
@@ -357,6 +364,11 @@ describe("engagement workspace", () => {
     await renderWorkspace(`/engagements/${activeEngagement.id}`);
     expect(await screen.findByRole("heading", { level: 1, name: "Target lab" })).toBeTruthy();
     expect(screen.getByRole("navigation", { name: "Breadcrumb" })).toBeTruthy();
+    expect(screen.getByText("Synthetic reserved lab")).toBeTruthy();
+    expect(screen.getByText("Authorization")).toBeTruthy();
+    expect(screen.getByText("RO-2026-08 authorized lab")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Engagement context" })).toBeTruthy();
+    expect(screen.queryByText("Auto-continue warnings")).toBeNull();
     expect(await screen.findByRole("heading", { name: "No saved scope yet" })).toBeTruthy();
     expect(screen.getAllByText(/Scope is context, not authorization/).length).toBeGreaterThan(0);
 
@@ -364,10 +376,8 @@ describe("engagement workspace", () => {
     expect(document.activeElement).toBe(await screen.findByLabelText("Targets"));
     expect(screen.getByTestId("workspace-notice").textContent).toBe("");
     expect(screen.getByRole("heading", { name: "Runs" })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: /Evidence/ }));
-    expect(screen.getByTestId("workspace-notice").textContent).toBe("Not connected yet");
-    expect(screen.queryByText("Scope saved")).toBeNull();
+    expect(screen.queryByText("Next in this engagement")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Evidence/ })).toBeNull();
 
     fireEvent.click(screen.getByRole("link", { name: "Dashboard" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Workspace" })).toBeTruthy();

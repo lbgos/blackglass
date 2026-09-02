@@ -12,6 +12,7 @@ import Fastify, {
 import type {
   EngagementRepository,
   EvidenceGrantRepository,
+  NmapServiceRepository,
   OperatorCommandRepository,
   RunRepository,
   RunnerRepository,
@@ -28,6 +29,7 @@ import { registerEngagementRoutes } from "./engagement-routes.js";
 import { registerRunnerAuthHook, stripAuthorizationHeader } from "./runner-http.js";
 import { registerRunnerEnrollmentRoutes } from "./runner-enrollment-routes.js";
 import { registerRunnerControlRoutes } from "./runner-routes.js";
+import { registerNmapServiceRoutes } from "./nmap-service-routes.js";
 import { registerRunnerEvidenceGrantRoutes } from "./runner-evidence-grant-routes.js";
 import { registerRunnerEvidenceUploadRoutes } from "./runner-evidence-upload-routes.js";
 
@@ -70,6 +72,7 @@ interface BuildAppOptions {
   // Operator artifact downloads are registered only when a verified managed
   // store is available; without it the route does not exist.
   evidenceStore?: Pick<EvidenceStore, "verifiedDownload">;
+  nmapServiceRepository?: Pick<NmapServiceRepository, "listForEngagement">;
   logger?: FastifyServerOptions["logger"];
   now?: () => Date;
 }
@@ -84,6 +87,7 @@ export function buildApp({
   evidencePublication,
   storageGate,
   evidenceStore,
+  nmapServiceRepository,
   logger = false,
   now,
 }: BuildAppOptions): FastifyInstance {
@@ -180,6 +184,9 @@ export function buildApp({
       repository: evidenceGrantRepository,
       store: evidenceStore,
     });
+  }
+  if (nmapServiceRepository !== undefined) {
+    registerNmapServiceRoutes(app, { repository: nmapServiceRepository });
   }
 
   app.get("/health", async (_request, reply) => {

@@ -3,14 +3,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAppQueryClient } from "../query-client.js";
 import {
   ENGAGEMENT_DETAIL_QUERY_ERROR_MESSAGE,
+  ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE,
   ENGAGEMENTS_QUERY_ERROR_MESSAGE,
   EngagementDetailQueryError,
+  EngagementServicesQueryError,
   EngagementsQueryError,
 } from "./errors.js";
 import {
   ENGAGEMENTS_QUERY_KEY,
   engagementDetailQueryKey,
   engagementDetailQueryOptions,
+  engagementServicesQueryKey,
+  engagementServicesQueryOptions,
   engagementsQueryOptions,
   partitionEngagements,
 } from "./query.js";
@@ -174,6 +178,90 @@ describe("engagementDetailQueryOptions", () => {
     } finally {
       retryClient.clear();
     }
+  });
+});
+
+describe("engagementServicesQueryOptions", () => {
+  const service = {
+    address: "192.0.2.10",
+    port: 22,
+    protocol: "tcp" as const,
+    hostname: null,
+    serviceName: "ssh" as const,
+    product: "OpenSSH",
+    version: "9.6",
+    source: "nmap" as const,
+    parserVersion: "nmap-xml-v1",
+    runId: "run-1",
+    artifactId: "artifact-1",
+    artifactDigest: `sha256:${"a".repeat(64)}`,
+    observedAt: "2026-08-13T10:00:00.000Z",
+  };
+
+  it("uses a stable key that includes engagementId, an abort signal, and the shared services contract", async () => {
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      return Promise.resolve(response([service]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createAppQueryClient();
+
+    await expect(client.fetchQuery(engagementServicesQueryOptions(engagement.id))).resolves.toEqual([
+      service,
+    ]);
+    expect(engagementServicesQueryOptions(engagement.id).queryKey).toEqual(
+      engagementServicesQueryKey(engagement.id),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/engagements/${engagement.id}/services`,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    client.clear();
+  });
+
+  it("rejects extra fields and hides network details", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response([{ ...service, secret: "/private/path" }]))),
+    );
+    const client = createAppQueryClient();
+    await expect(client.fetchQuery(engagementServicesQueryOptions(engagement.id))).rejects.toMatchObject({
+      name: "EngagementServicesQueryError",
+      message: ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE,
+    });
+    expect(ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE).not.toContain("secret");
+    client.clear();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("GET /api?token=secret failed at /private/path"))),
+    );
+    const retryClient = createAppQueryClient();
+    try {
+      await retryClient.fetchQuery(engagementServicesQueryOptions(engagement.id));
+      throw new Error("Expected the engagement services query to fail.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(EngagementServicesQueryError);
+      expect((error as Error).message).toBe(ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE);
+      expect((error as Error).message).not.toContain("secret");
+    } finally {
+      retryClient.clear();
+    }
+  });
+
+  it("does not read or expose bodies for unsupported HTTP statuses", async () => {
+    const readBody = vi.fn(() => Promise.resolve({ token: "body-secret" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve({ json: readBody, ok: false, status: 500 } as unknown as Response)),
+    );
+    const client = createAppQueryClient();
+    await expect(client.fetchQuery(engagementServicesQueryOptions(engagement.id))).rejects.toMatchObject({
+      name: "EngagementServicesQueryError",
+      message: ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE,
+    });
+    expect(readBody).not.toHaveBeenCalled();
+    client.clear();
   });
 });
 

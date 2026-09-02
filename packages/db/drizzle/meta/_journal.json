@@ -50,6 +50,13 @@
       "when": 1787482150740,
       "tag": "0006_evidence_publication",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1788207587792,
+      "tag": "0007_nmap_service_projection",
+      "breakpoints": true
     }
   ]
 }

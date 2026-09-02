@@ -1,12 +1,13 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, rm, readdir, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, rm, readdir, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeAll, afterAll, describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 
 import { BoundedCollector, FRAME_LIMIT } from "./bounded-output.js";
 import { controlledEnv, buildFakeActionArgv, spawnFakeAction } from "./fake-action.js";
-import { createRunDirectory, runSupervised, verifyExecutable } from "./process.js";
+import { createRunDirectory, readNmapXmlSecurely, resolveNmapXmlPath, runSupervised, verifyExecutable } from "./process.js";
 import { createRedactor } from "./redaction.js";
 import {
   generateIdempotencyKey,
@@ -14,11 +15,7 @@ import {
   loadOutboxEntry,
   removeOutboxAtomically,
 } from "./outbox.js";
-import {
-  type ActionSnapshot,
-  AcquireRunnerLeaseResponseSchema,
-  commandJsonV1RunnerAppendStartedDigest,
-} from "@blackglass/contracts";
+import { type ActionSnapshot, AcquireRunnerLeaseResponseSchema, commandJsonV1RunnerAppendStartedDigest, EVIDENCE_QUOTA_DEFAULTS } from "@blackglass/contracts";
 import { createRunnerLoop, prepareNmapExecution, runOnce, RunnerShutdownError } from "./runner.js";
 
 function fixtureActionSnapshot(actionId = "act-1"): ActionSnapshot {
@@ -930,6 +927,10 @@ describe("runner loop shutdown", () => {
       lease: { runId: "run-1", leaseId: "lease-1", runnerId: "runner-1", sessionId: "sess-1", fence: "1", expiresAt: new Date(Date.now() + 30000).toISOString(), latestHeartbeatSequence: 0, latestEventSequence: 0, orchestrationProfile: "d2-v1", protocol: "runner-control-v1" },
       actionSnapshot: fixtureActionSnapshot("act-1"),
     };
+    let nmapGrant: Record<string, unknown> | null = null;
+    let nmapPut: Buffer | null = null;
+    const order: string[] = [];
+    let finalCompleteBody: Record<string, unknown> | null = null;
     globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
       const method = init?.method ?? "GET";
@@ -938,25 +939,64 @@ describe("runner loop shutdown", () => {
       if (u.includes("/events") && !u.includes("/artifacts")) return new Response(JSON.stringify({ disposition: "accepted_event", event: { eventId: 1, runId: "run-1", sequence: 1, type: "started", fence: "1", payloadJson: "{}", digest: "sha256:" + "a".repeat(64), createdAt: new Date().toISOString() } }), { status: 200, headers: { "content-type": "application/json" } });
       if (u.includes("/heartbeat")) return new Response(JSON.stringify({ leaseExpiresAt: new Date(Date.now() + 30000).toISOString(), heartbeatSequence: 2 }), { status: 200, headers: { "content-type": "application/json" } });
       if (u.includes("/artifacts/grants")) {
-        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-        const slot = String(body.artifactSlot ?? "stdout");
-        return new Response(JSON.stringify({ artifactId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`, uploadId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`, runId: "run-1", leaseId: "lease-1", sessionId: "sess-1", fence: "1", eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: body.declaredSizeBytes, declaredDigest: body.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201, headers: { "content-type": "application/json" } });
+        const b = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const s = String(b.artifactSlot ?? "stdout");
+        if (s === "nmap-xml") { nmapGrant = b; order.push("nmap"); }
+        const isN = s === "nmap-xml";
+        const isE = s === "stderr";
+        const aId = isN ? "00000000-0000-4000-8000-000000000003" : isE ? "00000000-0000-4000-8000-000000000002" : "00000000-0000-4000-8000-000000000001";
+        const uId = isN ? "00000000-0000-4000-8000-000000000013" : isE ? "00000000-0000-4000-8000-000000000012" : "00000000-0000-4000-8000-000000000011";
+        const k = isN ? "tool_raw" : s;
+        const fn = isN ? "nmap.xml" : `${s}.log`;
+        const ct = isN ? "application/xml" : "text/plain; charset=utf-8";
+        const g = { artifactId: aId, uploadId: uId, runId: "run-1", leaseId: "lease-1", sessionId: "sess-1", fence: "1",
+          eventSequence: 1, artifactSlot: s, kind: k, declaredSizeBytes: b.declaredSizeBytes,
+          declaredDigest: b.declaredDigest, originalFileName: fn, declaredContentType: ct, createdAt: new Date().toISOString() };
+        return new Response(JSON.stringify(g), { status: 201, headers: { "content-type": "application/json" } });
       }
-      if (u.includes("/uploads/") && method === "PUT") return new Response(null, { status: 204 });
+      if (u.includes("/uploads/") && method === "PUT") {
+        const uploadId = u.split("/uploads/")[1]?.split("/")[0] ?? "";
+        if (uploadId === "00000000-0000-4000-8000-000000000013") {
+          nmapPut = Buffer.from(init?.body as unknown as Buffer);
+        }
+        return new Response(null, { status: 204 });
+      }
       if (u.includes("/uploads/") && u.includes("/complete") && method === "POST") {
         const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
         const uploadId = u.split("/uploads/")[1]?.split("/")[0] ?? "";
-        const artifactId = uploadId === "00000000-0000-4000-8000-000000000012" ? "00000000-0000-4000-8000-000000000002" : "00000000-0000-4000-8000-000000000001";
+
+        let artifactId = "00000000-0000-4000-8000-000000000001";
+        if (uploadId === "00000000-0000-4000-8000-000000000012") artifactId = "00000000-0000-4000-8000-000000000002";
+        else if (uploadId === "00000000-0000-4000-8000-000000000013") artifactId = "00000000-0000-4000-8000-000000000003";
         return new Response(JSON.stringify({ disposition: "published", artifactId, sizeBytes: body.sizeBytes, digest: body.digest, completeness: body.completeness }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (u.includes("/complete") && !u.includes("/artifacts")) {
         if (fetchShouldThrow) throw new Error("network failure");
-        return new Response(JSON.stringify({ disposition: "accepted_completion", event: { eventId: 2, runId: "run-1", sequence: 2, type: "failed", fence: "1", payloadJson: "{}", digest: "sha256:" + "b".repeat(64), createdAt: new Date().toISOString() } }), { status: 200, headers: { "content-type": "application/json" } });
+        finalCompleteBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        order.push("final");
+        return new Response(JSON.stringify({ disposition: "accepted_completion",
+          event: { eventId: 2, runId: "run-1", sequence: 2,
+            type: String(finalCompleteBody.terminalKind ?? "succeeded"), fence: "1", payloadJson: "{}",
+            digest: "sha256:" + "b".repeat(64), createdAt: new Date().toISOString() } }),
+          { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400, headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
 
     await runOnce({ dataDir: dataDir2, runnerId: "runner-1", secret: "a".repeat(43), apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dataDir2, "runs") });
+    const expectedXml = Buffer.from("<nmaprun></nmaprun>\n");
+    const expectedDigest = `sha256:${createHash("sha256").update(expectedXml).digest("hex")}`;
+    expect(nmapGrant).toMatchObject({
+      artifactSlot: "nmap-xml",
+      kind: "tool_raw",
+      originalFileName: "nmap.xml",
+      declaredContentType: "application/xml",
+      declaredSizeBytes: expectedXml.length,
+      declaredDigest: expectedDigest,
+    });
+    expect(nmapPut).toEqual(expectedXml);
+    expect(order.indexOf("nmap")).toBeLessThan(order.indexOf("final"));
+    expect(finalCompleteBody).toMatchObject({ terminalKind: "succeeded", reason: null });
     const outboxFiles = await readdir(path.join(dataDir2, "outbox")).catch(() => []);
     expect(outboxFiles.length).toBe(0);
 
@@ -1125,3 +1165,67 @@ describe("prepareNmapExecution", () => {
     await rm(p, { force: true }).catch(() => {});
   });
 });
+
+describe("readNmapXmlSecurely", () => {
+  it("accepts exact nonempty bytes", async () => {
+    const runRoot = path.join(tmpdir(), `ok-${Date.now()}`);
+    await createRunDirectory(runRoot, "run-ok-1", "1");
+    const expected = Buffer.from("<nmaprun><host>ok</host></nmaprun>");
+    await writeFile(resolveNmapXmlPath(runRoot, "run-ok-1", "1"), expected);
+    expect((await readNmapXmlSecurely({ runRoot, runId: "run-ok-1", fence: "1" })).equals(expected)).toBe(true);
+    await rm(runRoot, { recursive: true, force: true });
+  });
+  it("rejects empty, symlink, hardlink, oversized and parent escape with fixed error", async () => {
+    const limit = EVIDENCE_QUOTA_DEFAULTS.perArtifactBytes;
+    const cases: Array<{ name: string; setup: (runRoot: string, runId: string, fence: string) => Promise<string | void> }> = [
+      { name: "empty", setup: async (runRoot, runId, fence) => { await writeFile(resolveNmapXmlPath(runRoot, runId, fence), Buffer.alloc(0)); } },
+      { name: "symlink", setup: async (runRoot, runId, fence) => {
+        const outside = `${runRoot}-outside`;
+        await writeFile(outside, Buffer.from("evil"));
+        await symlink(outside, resolveNmapXmlPath(runRoot, runId, fence));
+        return outside;
+      } },
+      { name: "hardlink", setup: async (runRoot, runId, fence) => {
+        await writeFile(resolveNmapXmlPath(runRoot, runId, fence), Buffer.from("xml"));
+        await link(resolveNmapXmlPath(runRoot, runId, fence), `${resolveNmapXmlPath(runRoot, runId, fence)}.hl`);
+      } },
+      { name: "oversized", setup: async (runRoot, runId, fence) => {
+        await writeFile(resolveNmapXmlPath(runRoot, runId, fence), Buffer.from("x"));
+        await truncate(resolveNmapXmlPath(runRoot, runId, fence), limit + 1);
+      } },
+      { name: "parent-escape", setup: async (runRoot, runId, fence) => {
+        const runDir = path.join(runRoot, `run-${runId}-f${fence}`);
+        await mkdir(`${runRoot}-outside`, { recursive: true });
+        await writeFile(path.join(`${runRoot}-outside`, "nmap.xml"), Buffer.from("evil"));
+        await rm(runDir, { recursive: true, force: true });
+        await symlink(`${runRoot}-outside`, runDir);
+        return `${runRoot}-outside`;
+      } },
+    ];
+    async function expectFixed(runRoot: string, runId: string, fence: string, xmlPath: string): Promise<void> {
+      let thrown: unknown;
+      try {
+        await readNmapXmlSecurely({ runRoot, runId, fence });
+      } catch (error: unknown) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toBe("nmap_xml_unavailable");
+      const message = String(thrown);
+      expect(message).not.toContain(runRoot);
+      expect(message).not.toContain(xmlPath);
+      expect(message).not.toContain("evil");
+    }
+    for (const testCase of cases) {
+      const runRoot = path.join(tmpdir(), `x-${testCase.name}-${Date.now()}`);
+      await createRunDirectory(runRoot, "run-1", "1");
+      const attackerPath = await testCase.setup(runRoot, "run-1", "1") as string | undefined;
+      const xmlPath = resolveNmapXmlPath(runRoot, "run-1", "1");
+      await expectFixed(runRoot, "run-1", "1", xmlPath);
+      await rm(runRoot, { recursive: true, force: true }).catch(() => {});
+      if (typeof attackerPath === "string") await rm(attackerPath, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+

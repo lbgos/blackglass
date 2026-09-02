@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { EvidenceDigestSchema, OpaqueArtifactIdSchema } from "./evidence.js";
+import { EngagementSchema } from "./engagement.js";
 import { ScopePortRangeSchema, type ScopePortRange } from "./saved-scope.js";
 
 /**
@@ -50,3 +52,33 @@ export type NmapCapabilityError = z.infer<typeof NmapCapabilityErrorSchema>;
 
 // Re-export canonical type for consumers that need port-range shape without redefining it.
 export type { ScopePortRange as NmapPortRange };
+export const NMAP_PARSER_VERSION = "nmap-xml-v1" as const;
+export const NMAP_MAX_XML_BYTES = 16 * 1024 * 1024;
+export const NMAP_MAX_HOSTS = 2048;
+export const NMAP_MAX_SERVICES = 8192;
+export const NmapParserVersionSchema = z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9._-]*$/);
+const BoundedString = (min: number, max: number) => z.string().min(min).max(max);
+const BoundedNullableString = (max: number) => z.string().min(1).max(max).nullable();
+export const NmapServiceObservationSchema = z.strictObject({
+  address: BoundedString(1, 45),
+  port: z.number().int().min(1).max(65_535),
+  protocol: z.literal("tcp"),
+  hostname: BoundedNullableString(253),
+  serviceName: BoundedNullableString(64),
+  product: BoundedNullableString(64),
+  version: BoundedNullableString(64),
+});
+export const NmapProjectedServiceSchema = NmapServiceObservationSchema.extend({
+  source: z.literal("nmap"),
+  parserVersion: NmapParserVersionSchema,
+  runId: z.string().min(1).max(255),
+  artifactId: OpaqueArtifactIdSchema,
+  artifactDigest: EvidenceDigestSchema,
+  observedAt: z.iso.datetime({ offset: true }),
+});
+export const EngagementServicesParamsSchema = z.strictObject({ engagementId: EngagementSchema.shape.id });
+export const EngagementServicesResponseSchema = z.array(NmapProjectedServiceSchema);
+export const NmapParseErrorCodeSchema = z.literal("nmap_xml_invalid");
+export type NmapServiceObservation = z.infer<typeof NmapServiceObservationSchema>;
+export type NmapProjectedService = z.infer<typeof NmapProjectedServiceSchema>;
+export type EngagementServicesParams = z.infer<typeof EngagementServicesParamsSchema>;

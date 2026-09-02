@@ -19,6 +19,12 @@ import type { StorageQuiesceGate } from "./backup-lock.js";
 // an exclusive backup snapshot pauses finalization with
 // storage_backup_quiesced instead of interleaving with the snapshot.
 
+type PublicationHookResult =
+  | { ok: true }
+  | { ok: false; code: "storage_busy" | "invalid_persisted_data" };
+
+type PublicationHook = (artifactId: string) => Promise<PublicationHookResult>;
+
 export interface EvidencePublicationServiceOptions {
   repository: EvidenceGrantRepository;
   store: EvidenceStore;
@@ -26,6 +32,7 @@ export interface EvidencePublicationServiceOptions {
   // Optional so existing deployments and focused tests without a lockfile
   // keep working; production wiring always provides one.
   quiesceGate?: StorageQuiesceGate;
+  onPublicationCommitted?: PublicationHook;
 }
 
 export type PutOutcome =
@@ -87,12 +94,25 @@ export class EvidencePublicationService {
   private readonly store: EvidenceStore;
   private readonly now: () => Date;
   private readonly quiesceGate: StorageQuiesceGate | undefined;
+  private readonly onCommitted: PublicationHook | undefined;
 
   constructor(options: EvidencePublicationServiceOptions) {
     this.repository = options.repository;
     this.store = options.store;
     this.now = options.now ?? (() => new Date());
     this.quiesceGate = options.quiesceGate;
+    this.onCommitted = options.onPublicationCommitted;
+  }
+  private async invokeCommitHook(artifactId: string): Promise<PublicationHookResult> {
+    if (this.onCommitted === undefined) {
+      return { ok: true };
+    }
+
+    try {
+      return await this.onCommitted(artifactId);
+    } catch {
+      return { ok: false, code: "invalid_persisted_data" };
+    }
   }
 
   // Streams the PUT body into the exclusive staging descriptor bounded by the
@@ -230,6 +250,8 @@ export class EvidencePublicationService {
         request.sizeBytes === grant.acceptedBytes &&
         request.digest === grant.streamedDigest
       ) {
+        const hook = await this.invokeCommitHook(grant.artifactId);
+        if (!hook.ok) return { ok: false, kind: "error", code: hook.code };
         return replayResult(grant.artifactId, grant.acceptedBytes, grant.streamedDigest, request.completeness ?? "complete");
       }
       return { ok: false, kind: "error", code: "artifact_identity_conflict" };
@@ -272,7 +294,7 @@ export class EvidencePublicationService {
       artifactSlot: grant.artifactSlot,
     });
     if (identityRow !== undefined) {
-      return this.resolveIdentityRow(identityRow.artifactId, identityRow.sizeBytes, identityRow.digest, uploadId, request);
+      return await this.resolveIdentityRow(identityRow.artifactId, identityRow.sizeBytes, identityRow.digest, uploadId, request);
     }
 
     const published = this.store.publish({
@@ -284,6 +306,8 @@ export class EvidencePublicationService {
       case "published": {
         const recorded = this.recordPublication(grant, request);
         if (!recorded.ok) return recorded;
+        const hook = await this.invokeCommitHook(grant.artifactId);
+        if (!hook.ok) return { ok: false, kind: "error", code: hook.code };
         return publishedResult(grant.artifactId, request.sizeBytes, request.digest, request.completeness ?? "complete");
       }
       case "destination_exists":
@@ -319,13 +343,17 @@ export class EvidencePublicationService {
         const recorded = this.recordPublication(grant, request);
         if (!recorded.ok) return recorded;
         if (recorded.outcome.status === "identity_exists") {
-          return this.resolveIdentityRow(
+          return await this.resolveIdentityRow(
             recorded.outcome.artifact.artifactId,
             recorded.outcome.artifact.sizeBytes,
             recorded.outcome.artifact.digest,
             grant.uploadId,
             request,
           );
+        }
+        {
+          const hook = await this.invokeCommitHook(grant.artifactId);
+          if (!hook.ok) return { ok: false, kind: "error", code: hook.code };
         }
         return {
           ok: true,
@@ -348,14 +376,16 @@ export class EvidencePublicationService {
     return { ok: false, kind: "error", code: "artifact_already_published" };
   }
 
-  private resolveIdentityRow(
+  private async resolveIdentityRow(
     artifactId: string,
     sizeBytes: number,
     digest: string,
     _uploadId: string,
     request: CompleteEvidenceUploadRequest,
-  ): CompleteOutcome {
+  ): Promise<CompleteOutcome> {
     if (sizeBytes === request.sizeBytes && digest === request.digest) {
+      const hook = await this.invokeCommitHook(artifactId);
+      if (!hook.ok) return { ok: false, kind: "error", code: hook.code };
       return {
         ok: true,
         disposition: "stored_artifact_replayed",

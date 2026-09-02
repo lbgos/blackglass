@@ -58,19 +58,20 @@ interface LeaseIdentity {
 async function publishSingleArtifact(input: {
   config: RunnerConfig;
   lease: LeaseIdentity;
-  slot: "stdout" | "stderr";
-  kind: "stdout" | "stderr";
+  slot: "stdout" | "stderr" | "nmap-xml";
+  kind: "stdout" | "stderr" | "tool_raw";
   buffer: Buffer;
   truncated: boolean;
   isCancelled: boolean;
+  completenessOverride?: "complete" | "partial" | "truncated";
 }): Promise<void> {
-  const { config, lease, slot, kind, buffer, truncated, isCancelled } = input;
+  const { config, lease, slot, kind, buffer, truncated, isCancelled, completenessOverride } = input;
   const digestHex = sha256Hex(buffer);
   const declaredDigest = `sha256:${digestHex}`;
   const declaredSizeBytes = buffer.length;
-  const originalFileName = slot === "stdout" ? "stdout.log" : "stderr.log";
-  const declaredContentType = "text/plain; charset=utf-8";
-  const completeness = completenessFor(truncated, isCancelled);
+  const originalFileName = slot === "nmap-xml" ? "nmap.xml" : slot === "stdout" ? "stdout.log" : "stderr.log";
+  const declaredContentType = slot === "nmap-xml" ? "application/xml" : "text/plain; charset=utf-8";
+  const completeness = completenessOverride ?? completenessFor(truncated, isCancelled);
 
   const grantBody = {
     runId: lease.runId,
@@ -276,10 +277,9 @@ export async function publishEvidenceArtifacts(
   config: RunnerConfig,
   lease: LeaseIdentity,
   result: ProcessResult,
-  options: { isCancelled: boolean },
+  options: { isCancelled: boolean; nmapXml?: Buffer; nmapExitCode?: number | null },
 ): Promise<void> {
   const isCancelled = options.isCancelled;
-  // Stdout then stderr sequentially. Preserve first slot if second fails.
   await publishSingleArtifact({
     config,
     lease,
@@ -298,4 +298,28 @@ export async function publishEvidenceArtifacts(
     truncated: result.stderrMeta.truncated,
     isCancelled,
   });
+  if (options.nmapXml !== undefined) {
+    let nmapCompleteness: "complete" | "partial" = "complete";
+
+    if (isCancelled) {
+      nmapCompleteness = "partial";
+    } else if (
+      options.nmapExitCode !== undefined &&
+      options.nmapExitCode !== null &&
+      options.nmapExitCode !== 0
+    ) {
+      nmapCompleteness = "partial";
+    }
+
+    await publishSingleArtifact({
+      config,
+      lease,
+      slot: "nmap-xml",
+      kind: "tool_raw",
+      buffer: options.nmapXml,
+      truncated: false,
+      isCancelled,
+      completenessOverride: nmapCompleteness,
+    });
+  }
 }

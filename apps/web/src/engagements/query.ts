@@ -1,17 +1,27 @@
 import {
   EngagementDetailResponseSchema,
   EngagementListResponseSchema,
+  EngagementServicesResponseSchema,
   type Engagement,
   type EngagementWithActiveScope,
+  type NmapProjectedService,
 } from "@blackglass/contracts";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 
-import { EngagementDetailQueryError, EngagementsQueryError } from "./errors.js";
+import {
+  EngagementDetailQueryError,
+  EngagementServicesQueryError,
+  EngagementsQueryError,
+} from "./errors.js";
 
 export const ENGAGEMENTS_QUERY_KEY = ["engagements"] as const;
 
 export function engagementDetailQueryKey(engagementId: string) {
   return [...ENGAGEMENTS_QUERY_KEY, engagementId] as const;
+}
+
+export function engagementServicesQueryKey(engagementId: string) {
+  return [...ENGAGEMENTS_QUERY_KEY, engagementId, "services"] as const;
 }
 
 export async function fetchEngagements(signal?: AbortSignal): Promise<Engagement[]> {
@@ -50,6 +60,27 @@ export async function fetchEngagementDetail(
   }
 }
 
+export async function fetchEngagementServices(
+  engagementId: string,
+  signal?: AbortSignal,
+): Promise<NmapProjectedService[]> {
+  try {
+    const response = await fetch(
+      `/api/v1/engagements/${engagementId}/services`,
+      signal ? { signal } : undefined,
+    );
+    if (response.status !== 200) throw new EngagementServicesQueryError();
+
+    const payload: unknown = await response.json();
+    const result = EngagementServicesResponseSchema.safeParse(payload);
+    if (!result.success) throw new EngagementServicesQueryError();
+    return result.data;
+  } catch (error) {
+    if (error instanceof EngagementServicesQueryError) throw error;
+    throw new EngagementServicesQueryError();
+  }
+}
+
 export const engagementsQueryOptions = queryOptions({
   queryKey: ENGAGEMENTS_QUERY_KEY,
   queryFn: ({ signal }) => fetchEngagements(signal),
@@ -62,12 +93,23 @@ export function engagementDetailQueryOptions(engagementId: string) {
   });
 }
 
+export function engagementServicesQueryOptions(engagementId: string) {
+  return queryOptions({
+    queryKey: engagementServicesQueryKey(engagementId),
+    queryFn: ({ signal }) => fetchEngagementServices(engagementId, signal),
+  });
+}
+
 export function useEngagementsQuery() {
   return useQuery(engagementsQueryOptions);
 }
 
 export function useEngagementDetailQuery(engagementId: string) {
   return useQuery(engagementDetailQueryOptions(engagementId));
+}
+
+export function useEngagementServicesQuery(engagementId: string) {
+  return useQuery(engagementServicesQueryOptions(engagementId));
 }
 
 export function partitionEngagements(engagements: readonly Engagement[]) {
