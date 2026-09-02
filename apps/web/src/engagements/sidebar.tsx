@@ -25,7 +25,7 @@ import { engagementMatchesFilter, useEngagementWorkspace } from "./workspace-con
 
 export function EngagementSidebarList({ onNavigate }: { onNavigate: () => void }) {
   const engagements = useEngagementsQuery();
-  const { openCreate } = useEngagementWorkspace();
+  const { engagementFilter, openCreate } = useEngagementWorkspace();
   const selectedId = useSelectedEngagementId();
   const interceptNavigation = useEngagementLinkNavigation(onNavigate);
   const hasData = engagements.data !== undefined;
@@ -56,7 +56,6 @@ export function EngagementSidebarList({ onNavigate }: { onNavigate: () => void }
   }
 
   const records = engagements.data ?? [];
-  const { engagementFilter } = useEngagementWorkspace();
   const filtered = records.filter((engagement) =>
     engagementMatchesFilter(
       engagement.name,
