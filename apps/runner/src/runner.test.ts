@@ -950,7 +950,7 @@ describe("runner loop shutdown", () => {
         const fn = isN ? "nmap.xml" : `${s}.log`;
         const ct = isN ? "application/xml" : "text/plain; charset=utf-8";
         const g = { artifactId: aId, uploadId: uId, runId: "run-1", leaseId: "lease-1", sessionId: "sess-1", fence: "1",
-          eventSequence: 1, artifactSlot: s, kind: k, declaredSizeBytes: b.declaredSizeBytes,
+          eventSequence: b.eventSequence, artifactSlot: s, kind: k, declaredSizeBytes: b.declaredSizeBytes,
           declaredDigest: b.declaredDigest, originalFileName: fn, declaredContentType: ct, createdAt: new Date().toISOString() };
         return new Response(JSON.stringify(g), { status: 201, headers: { "content-type": "application/json" } });
       }
@@ -989,6 +989,7 @@ describe("runner loop shutdown", () => {
     expect(nmapGrant).toMatchObject({
       artifactSlot: "nmap-xml",
       kind: "tool_raw",
+      eventSequence: 2,
       originalFileName: "nmap.xml",
       declaredContentType: "application/xml",
       declaredSizeBytes: expectedXml.length,

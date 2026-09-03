@@ -325,14 +325,16 @@ export async function runOnce(
 
   const lease = acquired.lease;
 
+  let nextSequence = 2;
   try {
     throwIfAborted(signal);
-    await appendStarted(config, lease, 1);
+    const started = await appendStarted(config, lease, 1);
+    nextSequence = started.event.sequence + 1;
     throwIfAborted(signal);
   } catch (e) {
     if (e instanceof RunnerShutdownError) {
       try {
-        await completeRun(config, lease, 2, "failed", "runner_lost");
+        await completeRun(config, lease, nextSequence, "failed", "runner_lost");
       } catch {}
       throw e;
     }
@@ -408,20 +410,20 @@ export async function runOnce(
 
   if (isAuthorityLost()) {
     cleanup();
-    await completeRun(config, lease, 2, "failed", "runner_lost").catch(() => {});
+    await completeRun(config, lease, nextSequence, "failed", "runner_lost").catch(() => {});
     if (signal?.aborted) throw new RunnerShutdownError();
     return true;
   }
 
   if (!prepared.ok) {
     cleanup();
-    await completeRun(config, lease, 2, "failed", prepared.reason).catch(() => {});
+    await completeRun(config, lease, nextSequence, "failed", prepared.reason).catch(() => {});
     return true;
   }
 
   if (executableUnavailable) {
     cleanup();
-    await completeRun(config, lease, 2, "failed", "nmap_unavailable").catch(() => {});
+    await completeRun(config, lease, nextSequence, "failed", "nmap_unavailable").catch(() => {});
     return true;
   }
 
@@ -471,11 +473,11 @@ export async function runOnce(
   } catch {
     fullCleanup();
     if (isAuthorityLost()) {
-      await completeRun(config, lease, 2, "failed", "runner_lost").catch(() => {});
+      await completeRun(config, lease, nextSequence, "failed", "runner_lost").catch(() => {});
       if (signal?.aborted) throw new RunnerShutdownError();
       return true;
     }
-    await completeRun(config, lease, 2, "failed", "nmap_unavailable").catch(() => {});
+    await completeRun(config, lease, nextSequence, "failed", "nmap_unavailable").catch(() => {});
     return true;
   }
   fullCleanup();
@@ -494,13 +496,13 @@ export async function runOnce(
       } catch {}
       try {
         if (xml !== undefined) {
-          await publishEvidenceArtifacts(config, lease, result, { isCancelled: true, nmapXml: xml, nmapExitCode: result.exitCode });
+          await publishEvidenceArtifacts(config, lease, result, { isCancelled: true, eventSequence: nextSequence, nmapXml: xml, nmapExitCode: result.exitCode });
         } else {
-          await publishEvidenceArtifacts(config, lease, result, { isCancelled: true, nmapExitCode: result.exitCode });
+          await publishEvidenceArtifacts(config, lease, result, { isCancelled: true, eventSequence: nextSequence, nmapExitCode: result.exitCode });
         }
       } catch {}
     }
-    await completeRun(config, lease, 2, "failed", "runner_lost").catch(() => {});
+    await completeRun(config, lease, nextSequence, "failed", "runner_lost").catch(() => {});
     if (signal?.aborted) throw new RunnerShutdownError();
     return true;
   }
@@ -517,20 +519,20 @@ export async function runOnce(
     const isSuccess = result.exitCode === 0;
     if (isSuccess && !xmlOk) {
       try {
-        await publishEvidenceArtifacts(config, lease, result, { isCancelled: false });
+        await publishEvidenceArtifacts(config, lease, result, { isCancelled: false, eventSequence: nextSequence });
       } catch {}
-      await completeRun(config, lease, 2, "failed", "evidence_publication_failed").catch(() => {});
+      await completeRun(config, lease, nextSequence, "failed", "evidence_publication_failed").catch(() => {});
       throw new EvidencePublicationError("evidence_publication_failed");
     }
     try {
       if (xmlOk && xml !== undefined) {
-        await publishEvidenceArtifacts(config, lease, result, { isCancelled: false, nmapXml: xml, nmapExitCode: result.exitCode });
+        await publishEvidenceArtifacts(config, lease, result, { isCancelled: false, eventSequence: nextSequence, nmapXml: xml, nmapExitCode: result.exitCode });
       } else {
-        await publishEvidenceArtifacts(config, lease, result, { isCancelled: false, nmapExitCode: result.exitCode });
+        await publishEvidenceArtifacts(config, lease, result, { isCancelled: false, eventSequence: nextSequence, nmapExitCode: result.exitCode });
       }
     } catch (e) {
       try {
-        await completeRun(config, lease, 2, "failed", "evidence_publication_failed");
+        await completeRun(config, lease, nextSequence, "failed", "evidence_publication_failed");
       } catch {}
       if (e instanceof EvidencePublicationError) throw e;
       throw new EvidencePublicationError("evidence_publication_failed");
@@ -539,7 +541,7 @@ export async function runOnce(
 
   const terminalKind = result !== null && result.exitCode === 0 ? "succeeded" : "failed";
   const reason: string | null = terminalKind === "succeeded" ? null : "process_failed";
-  await completeRun(config, lease, 2, terminalKind, reason);
+  await completeRun(config, lease, nextSequence, terminalKind, reason);
   return true;
 }
 

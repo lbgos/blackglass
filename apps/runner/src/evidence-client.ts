@@ -58,6 +58,7 @@ interface LeaseIdentity {
 async function publishSingleArtifact(input: {
   config: RunnerConfig;
   lease: LeaseIdentity;
+  eventSequence: number;
   slot: "stdout" | "stderr" | "nmap-xml";
   kind: "stdout" | "stderr" | "tool_raw";
   buffer: Buffer;
@@ -65,7 +66,7 @@ async function publishSingleArtifact(input: {
   isCancelled: boolean;
   completenessOverride?: "complete" | "partial" | "truncated";
 }): Promise<void> {
-  const { config, lease, slot, kind, buffer, truncated, isCancelled, completenessOverride } = input;
+  const { config, lease, eventSequence, slot, kind, buffer, truncated, isCancelled, completenessOverride } = input;
   const digestHex = sha256Hex(buffer);
   const declaredDigest = `sha256:${digestHex}`;
   const declaredSizeBytes = buffer.length;
@@ -78,7 +79,7 @@ async function publishSingleArtifact(input: {
     leaseId: lease.leaseId,
     sessionId: lease.sessionId,
     fence: lease.fence,
-    eventSequence: 1,
+    eventSequence,
     artifactSlot: slot,
     kind,
     declaredSizeBytes,
@@ -270,19 +271,21 @@ async function publishSingleArtifact(input: {
 /**
  * Publish ProcessResult stdout then stderr after child settles and before completeRun.
  * Completeness: truncated if stream metadata truncated, else partial on cancellation, else complete. Truncated wins.
- * Grant uses lease identity, eventSequence 1, durable outbox, PUT raw Buffer, POST strict complete.
+ * Grant uses lease identity, live eventSequence, durable outbox, PUT raw Buffer, POST strict complete.
  * Preserve first slot if second fails: stdout is not rolled back when stderr fails.
  */
 export async function publishEvidenceArtifacts(
   config: RunnerConfig,
   lease: LeaseIdentity,
   result: ProcessResult,
-  options: { isCancelled: boolean; nmapXml?: Buffer; nmapExitCode?: number | null },
+  options: { isCancelled: boolean; eventSequence: number; nmapXml?: Buffer; nmapExitCode?: number | null },
 ): Promise<void> {
   const isCancelled = options.isCancelled;
+  const eventSequence = options.eventSequence;
   await publishSingleArtifact({
     config,
     lease,
+    eventSequence,
     slot: "stdout",
     kind: "stdout",
     buffer: result.stdout,
@@ -292,6 +295,7 @@ export async function publishEvidenceArtifacts(
   await publishSingleArtifact({
     config,
     lease,
+    eventSequence,
     slot: "stderr",
     kind: "stderr",
     buffer: result.stderr,
@@ -314,6 +318,7 @@ export async function publishEvidenceArtifacts(
     await publishSingleArtifact({
       config,
       lease,
+      eventSequence,
       slot: "nmap-xml",
       kind: "tool_raw",
       buffer: options.nmapXml,

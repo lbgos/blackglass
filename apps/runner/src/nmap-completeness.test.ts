@@ -21,7 +21,7 @@ async function captureCompleteness(exitCode: number | null, isCancelled: boolean
         const slot = body.artifactSlot;
         const aid = slot === "nmap-xml" ? "00000000-0000-4000-8000-000000000003" : slot === "stderr" ? "00000000-0000-4000-8000-000000000002" : "00000000-0000-4000-8000-000000000001";
         const uid = slot === "nmap-xml" ? "00000000-0000-4000-8000-000000000013" : slot === "stderr" ? "00000000-0000-4000-8000-000000000012" : "00000000-0000-4000-8000-000000000011";
-        const grant = { artifactId: aid, uploadId: uid, runId: "run-1", leaseId: "lease-1", sessionId: "sess-1", fence: "1", eventSequence: 1, artifactSlot: slot, kind: body.kind, declaredSizeBytes: body.declaredSizeBytes, declaredDigest: body.declaredDigest, originalFileName: slot === "nmap-xml" ? "nmap.xml" : `${slot}.log`, declaredContentType: slot === "nmap-xml" ? "application/xml" : "text/plain; charset=utf-8", createdAt: new Date().toISOString() };
+        const grant = { artifactId: aid, uploadId: uid, runId: "run-1", leaseId: "lease-1", sessionId: "sess-1", fence: "1", eventSequence: body.eventSequence, artifactSlot: slot, kind: body.kind, declaredSizeBytes: body.declaredSizeBytes, declaredDigest: body.declaredDigest, originalFileName: slot === "nmap-xml" ? "nmap.xml" : `${slot}.log`, declaredContentType: slot === "nmap-xml" ? "application/xml" : "text/plain; charset=utf-8", createdAt: new Date().toISOString() };
         return new Response(JSON.stringify(grant), { status: 201, headers: { "content-type": "application/json" } });
       }
       if (u.includes("/uploads/") && init?.method === "PUT") return new Response(null, { status: 204 });
@@ -34,7 +34,7 @@ async function captureCompleteness(exitCode: number | null, isCancelled: boolean
       return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
     }) as unknown as typeof fetch;
     const xml = Buffer.from("<nmaprun></nmaprun>");
-    await publishEvidenceArtifacts(config, lease as unknown as { runId: string; leaseId: string; sessionId: string; fence: string }, result, { isCancelled, nmapXml: xml, nmapExitCode: exitCode });
+    await publishEvidenceArtifacts(config, lease as unknown as { runId: string; leaseId: string; sessionId: string; fence: string }, result, { isCancelled, eventSequence: 2, nmapXml: xml, nmapExitCode: exitCode });
     const found = completes.find((c) => c.uploadId === "00000000-0000-4000-8000-000000000013");
     return found?.completeness as string;
   } finally { globalThis.fetch = origFetch; }
