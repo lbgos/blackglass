@@ -34,7 +34,7 @@ import {
   warningReasonSummary,
 } from "./action-targets.js";
 import { engagementMutationMessage, isRevisionConflict } from "./errors.js";
-import { engagementServicesQueryKey, useEngagementDetailQuery } from "./query.js";
+import { engagementHttpProbesQueryKey, engagementServicesQueryKey, useEngagementDetailQuery } from "./query.js";
 import { useEngagementWorkspace } from "./workspace-context.js";
 
 export function ActionPlanner({
@@ -145,6 +145,7 @@ function PlannerBody({
     if (hasInvalidatedServicesRef.current === trackedActionId) return;
     hasInvalidatedServicesRef.current = trackedActionId;
     void queryClient.invalidateQueries({ queryKey: engagementServicesQueryKey(engagementId) });
+    void queryClient.invalidateQueries({ queryKey: engagementHttpProbesQueryKey(engagementId) });
   }, [engagementId, polledActionQuery.data, queryClient, trackedActionId]);
 
   useEffect(() => {

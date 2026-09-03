@@ -98,6 +98,7 @@ function readResponse(
 ): Response | undefined {
   if (url.includes("/system/status")) return response(readyStatus);
   if (url === "/api/v1/engagements") return response([engagement]);
+  if (url.includes("/services") || url.includes("/http-probes")) return response([]);
   if (url === `/api/v1/engagements/${engagement.id}`) {
     return response({
       engagement: {
@@ -613,7 +614,7 @@ describe("action planner", () => {
     const fetchMock = stubFetch((url, init) => {
       if (url.endsWith("/actions") && init?.method === "POST") return response(queued, 201);
       if (url.includes(`/actions/${ACTION_ID}`) && (init?.method === undefined || init?.method === "GET")) return response(succeeded);
-      if (url.includes("/services")) return response([]);
+      if (url.includes("/services") || url.includes("/http-probes")) return response([]);
       return readResponse(url, noScope, null) ?? response({ code: "invalid_request" }, 400);
     });
     const { queryClient } = await renderPlanner(noScope);
@@ -643,7 +644,7 @@ describe("action planner", () => {
         }
         return response(succeeded);
       }
-      if (url.includes("/services")) return response([]);
+      if (url.includes("/services") || url.includes("/http-probes")) return response([]);
       return readResponse(url, noScope, null) ?? response({ code: "invalid_request" }, 400);
     });
     const { queryClient } = await renderPlanner(noScope);

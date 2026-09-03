@@ -1,15 +1,18 @@
 import {
   EngagementDetailResponseSchema,
+  EngagementHttpProbesResponseSchema,
   EngagementListResponseSchema,
   EngagementServicesResponseSchema,
   type Engagement,
   type EngagementWithActiveScope,
+  type HttpProbeProjected,
   type NmapProjectedService,
 } from "@blackglass/contracts";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 
 import {
   EngagementDetailQueryError,
+  EngagementHttpProbesQueryError,
   EngagementServicesQueryError,
   EngagementsQueryError,
 } from "./errors.js";
@@ -110,6 +113,42 @@ export function useEngagementDetailQuery(engagementId: string) {
 
 export function useEngagementServicesQuery(engagementId: string) {
   return useQuery(engagementServicesQueryOptions(engagementId));
+}
+
+export function engagementHttpProbesQueryKey(engagementId: string) {
+  return [...ENGAGEMENTS_QUERY_KEY, engagementId, "http-probes"] as const;
+}
+
+export async function fetchEngagementHttpProbes(
+  engagementId: string,
+  signal?: AbortSignal,
+): Promise<HttpProbeProjected[]> {
+  try {
+    const response = await fetch(
+      `/api/v1/engagements/${engagementId}/http-probes`,
+      signal ? { signal } : undefined,
+    );
+    if (response.status !== 200) throw new EngagementHttpProbesQueryError();
+
+    const payload: unknown = await response.json();
+    const result = EngagementHttpProbesResponseSchema.safeParse(payload);
+    if (!result.success) throw new EngagementHttpProbesQueryError();
+    return result.data;
+  } catch (error) {
+    if (error instanceof EngagementHttpProbesQueryError) throw error;
+    throw new EngagementHttpProbesQueryError();
+  }
+}
+
+export function engagementHttpProbesQueryOptions(engagementId: string) {
+  return queryOptions({
+    queryKey: engagementHttpProbesQueryKey(engagementId),
+    queryFn: ({ signal }) => fetchEngagementHttpProbes(engagementId, signal),
+  });
+}
+
+export function useEngagementHttpProbesQuery(engagementId: string) {
+  return useQuery(engagementHttpProbesQueryOptions(engagementId));
 }
 
 export function partitionEngagements(engagements: readonly Engagement[]) {

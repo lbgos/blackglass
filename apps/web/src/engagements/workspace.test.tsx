@@ -64,6 +64,12 @@ function readEngagementResponse(
     if (engagement === undefined) return response({ code: "engagement_not_found" }, 404);
     return response(services[servicesMatch[1]] ?? []);
   }
+  const probesMatch = /^\/api\/v1\/engagements\/([^/?]+)\/http-probes$/.exec(url);
+  if (probesMatch?.[1] !== undefined) {
+    const engagement = list.find((item) => item.id === probesMatch[1]);
+    if (engagement === undefined) return response({ code: "engagement_not_found" }, 404);
+    return response([]);
+  }
   const match = /^\/api\/v1\/engagements\/([^/?]+)$/.exec(url);
   if (match?.[1] === undefined) return undefined;
   const engagement = list.find((item) => item.id === match[1]);

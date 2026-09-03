@@ -3,9 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAppQueryClient } from "../query-client.js";
 import {
   ENGAGEMENT_DETAIL_QUERY_ERROR_MESSAGE,
+  ENGAGEMENT_HTTP_PROBES_QUERY_ERROR_MESSAGE,
   ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE,
   ENGAGEMENTS_QUERY_ERROR_MESSAGE,
   EngagementDetailQueryError,
+  EngagementHttpProbesQueryError,
   EngagementServicesQueryError,
   EngagementsQueryError,
 } from "./errors.js";
@@ -13,6 +15,8 @@ import {
   ENGAGEMENTS_QUERY_KEY,
   engagementDetailQueryKey,
   engagementDetailQueryOptions,
+  engagementHttpProbesQueryKey,
+  engagementHttpProbesQueryOptions,
   engagementServicesQueryKey,
   engagementServicesQueryOptions,
   engagementsQueryOptions,
@@ -262,6 +266,73 @@ describe("engagementServicesQueryOptions", () => {
     });
     expect(readBody).not.toHaveBeenCalled();
     client.clear();
+  });
+});
+
+describe("engagementHttpProbesQueryOptions", () => {
+  const probe = {
+    source: "http-probe" as const,
+    parserVersion: "http-probe-raw-v1",
+    url: "http://127.0.0.1:8080/",
+    fetchedAt: "2026-09-03T00:00:00.000Z",
+    finalUrl: "http://127.0.0.1:8080/",
+    status: 200,
+    title: "Lab",
+    selectedHeaders: { contentType: "text/html", server: null, poweredBy: null },
+    hops: [{ url: "http://127.0.0.1:8080/", status: 200, location: null }],
+    error: null,
+    runId: "run-1",
+    artifactId: "artifact-1",
+    artifactDigest: `sha256:${"a".repeat(64)}`,
+    observedAt: "2026-09-03T00:00:00.000Z",
+  };
+
+  it("uses a stable key that includes engagementId and the shared probe contract", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(response([probe])));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createAppQueryClient();
+
+    await expect(client.fetchQuery(engagementHttpProbesQueryOptions(engagement.id))).resolves.toEqual([
+      probe,
+    ]);
+    expect(engagementHttpProbesQueryOptions(engagement.id).queryKey).toEqual(
+      engagementHttpProbesQueryKey(engagement.id),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/engagements/${engagement.id}/http-probes`,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    client.clear();
+  });
+
+  it("rejects extra fields and hides network details", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response([{ ...probe, secret: "/private/path" }]))),
+    );
+    const client = createAppQueryClient();
+    await expect(client.fetchQuery(engagementHttpProbesQueryOptions(engagement.id))).rejects.toMatchObject({
+      name: "EngagementHttpProbesQueryError",
+      message: ENGAGEMENT_HTTP_PROBES_QUERY_ERROR_MESSAGE,
+    });
+    expect(ENGAGEMENT_HTTP_PROBES_QUERY_ERROR_MESSAGE).not.toContain("secret");
+    client.clear();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("GET /api?token=secret failed at /private/path"))),
+    );
+    const retryClient = createAppQueryClient();
+    try {
+      await retryClient.fetchQuery(engagementHttpProbesQueryOptions(engagement.id));
+      throw new Error("Expected the engagement probes query to fail.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(EngagementHttpProbesQueryError);
+      expect((error as Error).message).toBe(ENGAGEMENT_HTTP_PROBES_QUERY_ERROR_MESSAGE);
+      expect((error as Error).message).not.toContain("secret");
+    } finally {
+      retryClient.clear();
+    }
   });
 });
 
