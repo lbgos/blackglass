@@ -130,9 +130,6 @@ function EngagementIndex({ engagements }: { engagements: readonly Engagement[] }
     <div>
       <header className="mb-5">
         <h1 className="m-0 text-[26px] leading-none font-semibold tracking-[-0.04em]">Engagements</h1>
-        <p className="mt-2 mb-0 max-w-xl text-[13px] leading-5 text-muted-foreground">
-          Active and archived engagements from the local control plane.
-        </p>
       </header>
       {active.length > 0 && (
         <section className="grid gap-1" aria-label="Active engagements">

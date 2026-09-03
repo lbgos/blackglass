@@ -21,7 +21,7 @@ interface SidebarRowProps extends SidebarRowState {
   href: string;
   itemId: string;
   onNavigate?: () => void;
-  status: string;
+  status?: string;
   title: string;
 }
 
@@ -104,9 +104,11 @@ export function SidebarCardRow({
       >
         <span className="flex items-center gap-2 text-[11px] font-medium text-sidebar-muted-foreground">
           <span className="min-w-0 flex-1 truncate">{context}</span>
-          <span className="shrink-0 normal-case" aria-label={`Status: ${status}`}>
-            {status}
-          </span>
+          {status ? (
+  <span className="shrink-0 normal-case" aria-label={`Status: ${status}`}>
+              {status}
+            </span>
+) : null}
         </span>
         <span
           className={cn(
@@ -171,12 +173,14 @@ export function SidebarCompactRow({
             >
               {title}
             </span>
-            <span
-              className="shrink-0 text-[11px] text-sidebar-muted-foreground"
-              aria-label={`Status: ${status}`}
-            >
-              {status}
-            </span>
+            {status ? (
+  <span
+                className="shrink-0 text-[11px] text-sidebar-muted-foreground"
+                aria-label={`Status: ${status}`}
+              >
+                {status}
+              </span>
+) : null}
           </span>
           <span className="flex min-w-0 gap-2 text-[11px] text-sidebar-muted-foreground">
             <span className="truncate">{context}</span>

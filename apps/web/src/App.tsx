@@ -382,7 +382,7 @@ export function DashboardPage() {
           <section className="mt-4 rounded-[10px] border border-border bg-card px-4 py-4">
             <h2 className="m-0 text-[13px] font-semibold">Current engagement</h2>
             <p className="mt-2 mb-3 text-[13px] text-muted-foreground">
-              Continue from the selected engagement. Targets and runs are not connected yet.
+              Continue from the selected engagement.
             </p>
             <Link
               to="/engagements/$engagementId"

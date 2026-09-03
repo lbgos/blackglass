@@ -179,4 +179,25 @@ describe("sidebar row surfaces", () => {
       true,
     );
   });
+
+  it("omits the status affordance when no status is provided", () => {
+    const { container } = render(
+      <div>
+        <SidebarCardRow
+          context="fixture.lab"
+          href="#plain"
+          itemId="plain"
+          metadata="4 services"
+          title="Plain row"
+        />
+        <SidebarCompactRow
+          context="fixture.lab"
+          href="#plain-compact"
+          itemId="plain-compact"
+          title="Plain compact"
+        />
+      </div>,
+    );
+    expect(container.querySelector('[aria-label^="Status:"]')).toBeNull();
+  });
 });
