@@ -32,6 +32,10 @@ function formatPrimaryIdentity(service: NmapProjectedService): string {
   return "unknown";
 }
 
+function artifactContentUrl(engagementId: string, artifactId: string): string {
+  return `/api/v1/engagements/${encodeURIComponent(engagementId)}/artifacts/${encodeURIComponent(artifactId)}/content`;
+}
+
 function sortServices(services: readonly NmapProjectedService[]): NmapProjectedService[] {
   return [...services].sort((left, right) => {
     const address = left.address.localeCompare(right.address, "en", { numeric: true });
@@ -117,7 +121,11 @@ export function EngagementServicesSection({ engagementId }: { engagementId: stri
             <span>Observed</span>
           </div>
           {sorted.map((service) => (
-            <ServiceRow key={`${service.address}:${service.port}:${service.artifactId}`} service={service} />
+            <ServiceRow
+              key={`${service.address}:${service.port}:${service.artifactId}`}
+              service={service}
+              engagementId={engagementId}
+            />
           ))}
         </div>
       </section>
@@ -165,11 +173,12 @@ function ServicesLoadingState() {
   );
 }
 
-function ServiceRow({ service }: { service: NmapProjectedService }) {
+function ServiceRow({ engagementId, service }: { engagementId: string; service: NmapProjectedService }) {
   const observedLabel = formatEngagementTimestamp(service.observedAt);
   const primary = formatPrimaryIdentity(service);
   const secondary =
     service.serviceName !== null && service.serviceName !== primary ? service.serviceName : null;
+  const evidenceUrl = artifactContentUrl(engagementId, service.artifactId);
 
   return (
     <div className="border-b border-border last:border-b-0">
@@ -193,8 +202,17 @@ function ServiceRow({ service }: { service: NmapProjectedService }) {
             </div>
           ) : null}
         </div>
-        <div className="truncate font-mono text-[11px] text-muted-foreground" title={observedLabel}>
-          {observedLabel}
+        <div className="min-w-0">
+          <div className="truncate font-mono text-[11px] text-muted-foreground" title={observedLabel}>
+            {observedLabel}
+          </div>
+          <a
+            className="mt-1 inline-block max-w-full truncate text-[11px] font-medium underline underline-offset-2"
+            href={evidenceUrl}
+            download={`nmap-${service.artifactId}.xml`}
+          >
+            XML
+          </a>
         </div>
       </div>
       <details className="group mx-3 mb-3 rounded-md border border-border">
