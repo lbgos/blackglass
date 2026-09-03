@@ -41,28 +41,26 @@ The primary agent keeps the owner context, defines bounded work, coordinates age
 Use this loop for substantial changes:
 
 1. The primary agent writes a Ready issue or equivalent bounded assignment.
-2. GPT-5.6 Luna Max workers challenge the specification in read-only mode. Run independent acceptance, architecture, and test passes in parallel when useful.
-3. One persistent GPT-5.6 Sol High implementer owns the substantial code change in its assigned worktree.
+2. Review workers challenge the specification in read-only mode. Run independent acceptance, architecture, and test passes in parallel when useful.
+3. One persistent implementer owns the substantial code change in its assigned worktree.
 4. Run focused checks, then the repository baseline.
-5. Luna Max workers independently review the frozen diff and tests in read-only mode. Split correctness, test gaps, security, accessibility, or maintainability into separate passes when useful.
+5. Review workers independently review the frozen diff and tests in read-only mode. Split correctness, test gaps, security, accessibility, or maintainability into separate passes when useful.
 6. The primary agent verifies every finding against source and behavior. Model output is not accepted as evidence by itself.
-7. Skip the fix phase when no valid findings remain. The primary agent handles small fixes. Return substantial fixes to the same Sol implementer instead of spawning a new one.
+7. Skip the fix phase when no valid findings remain. The primary agent handles small fixes. Return substantial fixes to the same implementer instead of spawning a new one.
 8. Re-run affected checks and any required independent review.
 9. The owner reviews the result and performs the squash merge.
 
 Keep one writer per worktree. Multiple implementation agents may run concurrently only for independently mergeable assignments with separate branches, worktrees, data, ports, and non-overlapping ownership. Prefer parallel agents for read-only specification review, exploration, test analysis, and diff review. Early foundational changes that share workspace configuration, contracts, or lockfiles run sequentially.
 
-Reuse the same Sol implementer for implementation and substantial follow-up work within a PR. Continue with it across tightly related PRs while its context remains accurate. Do not spend a fresh implementation agent on a small correction that the primary agent can safely make and verify.
+Reuse the same implementer for implementation and substantial follow-up work within a PR. Continue with it across tightly related PRs while its context remains accurate. Do not spend a fresh implementation agent on a small correction that the primary agent can safely make and verify.
 
-Luna may draft candidate tests or fixtures in an isolated disposable worktree, but nothing is accepted without primary-agent review and execution. When Luna is unavailable as a direct subagent, invoke it programmatically from the assigned worktree:
+A review worker may draft candidate tests or fixtures in an isolated disposable worktree, but nothing is accepted without primary-agent review and execution. When review workers are unavailable as direct subagents, invoke one programmatically from the assigned worktree in read-only mode:
 
 ```bash
-codex exec \
-  -C <worktree> \
-  -m gpt-5.6-luna \
-  -c 'model_reasoning_effort="max"' \
-  --sandbox read-only \
-  --ephemeral \
+<agent-cli> run \
+  --worktree <worktree> \
+  --model <review-model> \
+  --read-only \
   '<bounded review packet>'
 ```
 
