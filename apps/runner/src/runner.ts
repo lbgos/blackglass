@@ -16,7 +16,8 @@ import {
 import { buildNmapArgv } from "@blackglass/domain";
 
 import { resolveRunnerConfig, type RunnerConfig } from "./config.js";
-import { EvidencePublicationError, publishEvidenceArtifacts } from "./evidence-client.js";
+import { EvidencePublicationError, publishEvidenceArtifacts, publishHttpProbeArtifacts } from "./evidence-client.js";
+import { probeOneUrl, probeUrlsFromSnapshot } from "./http-probe.js";
 import { getOrCreateOutboxEntry, removeOutboxAtomically } from "./outbox.js";
 import { readNmapXmlSecurely, resolveNmapXmlPath, runSupervisedCommand, verifyExecutable } from "./process.js";
 
@@ -412,6 +413,52 @@ export async function runOnce(
     cleanup();
     await completeRun(config, lease, nextSequence, "failed", "runner_lost").catch(() => {});
     if (signal?.aborted) throw new RunnerShutdownError();
+    return true;
+  }
+
+  const probeUrls = probeUrlsFromSnapshot(acquired.actionSnapshot);
+  if (probeUrls !== null) {
+    const rawArtifacts: Buffer[] = [];
+    let probeFailed = false;
+    for (const url of probeUrls) {
+      if (signal?.aborted || shutdownAfterStarted) break;
+      try {
+        const probed = await probeOneUrl(url);
+        rawArtifacts.push(probed.rawBytes);
+      } catch {
+        probeFailed = true;
+        break;
+      }
+    }
+    cleanup();
+    if (signal?.aborted || shutdownAfterStarted || hbFailed) {
+      await completeRun(config, lease, nextSequence, "failed", "runner_lost").catch(() => {});
+      if (signal?.aborted) throw new RunnerShutdownError();
+      return true;
+    }
+    if (probeFailed || rawArtifacts.length !== probeUrls.length) {
+      await completeRun(config, lease, nextSequence, "failed", "evidence_publication_failed").catch(() => {});
+      throw new EvidencePublicationError("evidence_publication_failed");
+    }
+    try {
+      const stdout = Buffer.from(
+        `probed ${String(rawArtifacts.length)} url(s) with http-probe-raw-v1`,
+        "utf8",
+      );
+      await publishHttpProbeArtifacts(config, lease, {
+        stdout,
+        rawArtifacts,
+        isCancelled: false,
+        eventSequence: nextSequence,
+      });
+    } catch (e) {
+      try {
+        await completeRun(config, lease, nextSequence, "failed", "evidence_publication_failed");
+      } catch {}
+      if (e instanceof EvidencePublicationError) throw e;
+      throw new EvidencePublicationError("evidence_publication_failed");
+    }
+    await completeRun(config, lease, nextSequence, "succeeded", null);
     return true;
   }
 

@@ -12,6 +12,7 @@ import Fastify, {
 import type {
   EngagementRepository,
   EvidenceGrantRepository,
+  HttpProbeRepository,
   NmapServiceRepository,
   OperatorCommandRepository,
   RunRepository,
@@ -33,6 +34,7 @@ import { registerRunnerControlRoutes } from "./runner-routes.js";
 import { registerNmapServiceRoutes } from "./nmap-service-routes.js";
 import { registerRunnerEvidenceGrantRoutes } from "./runner-evidence-grant-routes.js";
 import { registerRunnerEvidenceUploadRoutes } from "./runner-evidence-upload-routes.js";
+import { registerHttpProbeRoutes } from "./http-probe-routes.js";
 
 interface BuildAppOptions {
   getDevelopmentStorageReadiness: () => Readiness | Promise<Readiness>;
@@ -76,6 +78,7 @@ interface BuildAppOptions {
   // store is available; without it the route does not exist.
   evidenceStore?: Pick<EvidenceStore, "verifiedDownload">;
   nmapServiceRepository?: Pick<NmapServiceRepository, "listForEngagement">;
+  httpProbeRepository?: Pick<HttpProbeRepository, "listForEngagement">;
   logger?: FastifyServerOptions["logger"];
   now?: () => Date;
 }
@@ -91,6 +94,7 @@ export function buildApp({
   storageGate,
   evidenceStore,
   nmapServiceRepository,
+  httpProbeRepository,
   logger = false,
   now,
 }: BuildAppOptions): FastifyInstance {
@@ -191,6 +195,9 @@ export function buildApp({
   }
   if (nmapServiceRepository !== undefined) {
     registerNmapServiceRoutes(app, { repository: nmapServiceRepository });
+  }
+  if (httpProbeRepository !== undefined) {
+    registerHttpProbeRoutes(app, { repository: httpProbeRepository });
   }
 
   app.get("/health", async (_request, reply) => {

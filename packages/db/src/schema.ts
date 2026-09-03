@@ -1079,6 +1079,67 @@ export const nmapServices = sqliteTable(
   ],
 );
 
+export const httpProbeResults = sqliteTable(
+  "http_probe_results",
+  {
+    artifactId: text("artifact_id").notNull(),
+    parserVersion: text("parser_version").notNull(),
+    url: text("url").notNull(),
+    finalUrl: text("final_url").notNull(),
+    status: integer("status"),
+    title: text("title"),
+    contentType: text("content_type"),
+    server: text("server"),
+    poweredBy: text("powered_by"),
+    hopsJson: text("hops_json").notNull(),
+    probeError: text("probe_error"),
+    observedAt: text("observed_at").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.artifactId, table.parserVersion, table.url],
+    }),
+    foreignKey({
+      columns: [table.artifactId],
+      foreignColumns: [evidenceArtifacts.artifactId],
+      name: "http_probe_result_artifact_fk",
+    }).onDelete("restrict"),
+    check(
+      "http_probe_result_artifact_id",
+      sql`length(${table.artifactId}) between 1 and 127
+        and substr(${table.artifactId},1,1) glob '[a-z0-9]'
+        and ${table.artifactId} not glob '*[^a-z0-9-]*'`,
+    ),
+    check(
+      "http_probe_result_parser_version",
+      sql`length(${table.parserVersion}) between 1 and 64
+        and ${table.parserVersion} not glob '*[^a-z0-9._-]*'
+        and substr(${table.parserVersion}, 1, 1) glob '[a-z0-9]'`,
+    ),
+    check(
+      "http_probe_result_url",
+      sql`length(${table.url}) between 1 and 2048`,
+    ),
+    check(
+      "http_probe_result_final_url",
+      sql`length(${table.finalUrl}) between 1 and 2048`,
+    ),
+    check(
+      "http_probe_result_status",
+      sql`${table.status} is null or (${table.status} between 100 and 599)`,
+    ),
+    check(
+      "http_probe_result_title",
+      sql`${table.title} is null or length(${table.title}) between 1 and 256`,
+    ),
+    check(
+      "http_probe_result_hops_json",
+      sql`json_valid(${table.hopsJson}) and length(cast(${table.hopsJson} as blob)) <= 65536`,
+    ),
+    check("http_probe_result_observed_at", sql`length(${table.observedAt}) >= 20`),
+  ],
+);
+
 export type RunRow = typeof runs.$inferSelect;
 export type RunLeaseRow = typeof runLeases.$inferSelect;
 export type RunEventRow = typeof runEvents.$inferSelect;
@@ -1089,3 +1150,4 @@ export type RunnerSessionRow = typeof runnerSessions.$inferSelect;
 export type EvidenceGrantRow = typeof evidenceGrants.$inferSelect;
 export type EvidenceArtifactRow = typeof evidenceArtifacts.$inferSelect;
 export type NmapServiceRow = typeof nmapServices.$inferSelect;
+export type HttpProbeResultRow = typeof httpProbeResults.$inferSelect;

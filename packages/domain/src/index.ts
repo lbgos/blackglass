@@ -32,3 +32,11 @@ export {
 } from "./saved-scope.js";
 export { buildNmapArgv } from "./nmap-argv.js";
 export { parseNmapXml, type ParsedNmapService, type ParseNmapXmlResult } from "./nmap-xml.js";
+export {
+  buildProbeRawBytes,
+  isHttpProbeSnapshot,
+  parseProbeRawBytes,
+  parseProbeTitle,
+  probeUrlsForSnapshot,
+  selectProbeHeaders,
+} from "./http-probe.js";

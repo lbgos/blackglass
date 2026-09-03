@@ -59,7 +59,7 @@ async function publishSingleArtifact(input: {
   config: RunnerConfig;
   lease: LeaseIdentity;
   eventSequence: number;
-  slot: "stdout" | "stderr" | "nmap-xml";
+  slot: "stdout" | "stderr" | "nmap-xml" | (string & {});
   kind: "stdout" | "stderr" | "tool_raw";
   buffer: Buffer;
   truncated: boolean;
@@ -70,8 +70,20 @@ async function publishSingleArtifact(input: {
   const digestHex = sha256Hex(buffer);
   const declaredDigest = `sha256:${digestHex}`;
   const declaredSizeBytes = buffer.length;
-  const originalFileName = slot === "nmap-xml" ? "nmap.xml" : slot === "stdout" ? "stdout.log" : "stderr.log";
-  const declaredContentType = slot === "nmap-xml" ? "application/xml" : "text/plain; charset=utf-8";
+  const originalFileName =
+    slot === "nmap-xml"
+      ? "nmap.xml"
+      : slot === "stdout"
+        ? "stdout.log"
+        : slot === "stderr"
+          ? "stderr.log"
+          : "http-probe.json";
+  const declaredContentType =
+    slot === "nmap-xml"
+      ? "application/xml"
+      : slot === "stdout" || slot === "stderr"
+        ? "text/plain; charset=utf-8"
+        : "application/json";
   const completeness = completenessOverride ?? completenessFor(truncated, isCancelled);
 
   const grantBody = {
@@ -265,6 +277,55 @@ async function publishSingleArtifact(input: {
     if (mismatch) {
       throw new EvidencePublicationError("evidence_publication_failed");
     }
+  }
+}
+
+/**
+ * Publish one http-probe-raw tool_raw artifact per probed URL plus a small
+ * stdout log and empty stderr, reusing the lease grant/upload machinery.
+ * Slots are http-probe-raw, http-probe-raw-2, ... so the durable identity
+ * (runId, fence, eventSequence, slot) stays unique per URL. The caller
+ * passes the live eventSequence threaded from the started event.
+ */
+export async function publishHttpProbeArtifacts(
+  config: RunnerConfig,
+  lease: LeaseIdentity,
+  input: { stdout: Buffer; rawArtifacts: Buffer[]; isCancelled: boolean; eventSequence: number },
+): Promise<void> {
+  const completeness = input.isCancelled ? "partial" : "complete";
+  await publishSingleArtifact({
+    config,
+    lease,
+    slot: "stdout",
+    kind: "stdout",
+    buffer: input.stdout,
+    truncated: false,
+    isCancelled: input.isCancelled,
+    eventSequence: input.eventSequence,
+  });
+  await publishSingleArtifact({
+    config,
+    lease,
+    slot: "stderr",
+    kind: "stderr",
+    buffer: Buffer.alloc(0),
+    truncated: false,
+    isCancelled: input.isCancelled,
+    eventSequence: input.eventSequence,
+  });
+  for (const [index, raw] of input.rawArtifacts.entries()) {
+    const slot = index === 0 ? "http-probe-raw" : `http-probe-raw-${index + 1}`;
+    await publishSingleArtifact({
+      config,
+      lease,
+      slot,
+      kind: "tool_raw",
+      buffer: raw,
+      truncated: false,
+      isCancelled: input.isCancelled,
+      eventSequence: input.eventSequence,
+      completenessOverride: completeness,
+    });
   }
 }
 

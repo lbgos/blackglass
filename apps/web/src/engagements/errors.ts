@@ -8,6 +8,7 @@ import {
 export const ENGAGEMENTS_QUERY_ERROR_MESSAGE = "The engagement list request failed.";
 export const ENGAGEMENT_DETAIL_QUERY_ERROR_MESSAGE = "The engagement request failed.";
 export const ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE = "The services request failed.";
+export const ENGAGEMENT_HTTP_PROBES_QUERY_ERROR_MESSAGE = "The probe results request failed.";
 export const ENGAGEMENT_MUTATION_ERROR_MESSAGE = "The engagement request failed.";
 
 export const ENGAGEMENT_MUTATION_ERROR_COPY = {
@@ -57,6 +58,13 @@ export class EngagementServicesQueryError extends Error {
   constructor() {
     super(ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE);
     this.name = "EngagementServicesQueryError";
+  }
+}
+
+export class EngagementHttpProbesQueryError extends Error {
+  constructor() {
+    super(ENGAGEMENT_HTTP_PROBES_QUERY_ERROR_MESSAGE);
+    this.name = "EngagementHttpProbesQueryError";
   }
 }
 

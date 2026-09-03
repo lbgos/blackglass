@@ -18,6 +18,7 @@ import { partitionEngagements, useEngagementDetailQuery, useEngagementsQuery } f
 import { ActionPlanner } from "./action-planner.js";
 import { EngagementNotesSection } from "./notes.js";
 import { SavedScopeEditor } from "./scope-editor.js";
+import { EngagementHttpProbesSection } from "./http-probe-surface.js";
 import { EngagementServicesSection } from "./service-surface.js";
 import { useEngagementWorkspace } from "./workspace-context.js";
 
@@ -237,6 +238,10 @@ function EngagementDetail({ engagement }: { engagement: Engagement }) {
 
       <div className="mt-5">
         <EngagementServicesSection engagementId={displayed.id} />
+      </div>
+
+      <div className="mt-5">
+        <EngagementHttpProbesSection engagementId={displayed.id} />
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">

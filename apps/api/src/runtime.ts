@@ -1,6 +1,7 @@
 import {
   EngagementRepository,
   EvidenceGrantRepository,
+  HttpProbeRepository,
   NmapServiceRepository,
   OperatorCommandRepository,
   RunRepository,
@@ -19,6 +20,7 @@ import {
 import { BackupLock } from "./evidence/backup-lock.js";
 import { EvidencePublicationService } from "./evidence/evidence-publication.js";
 import { EvidenceStore } from "./evidence/evidence-store.js";
+import { HttpProbeProjectionService } from "./evidence/http-probe-projection.js";
 import { NmapProjectionService } from "./evidence/nmap-projection.js";
 
 interface RuntimeDependencies {
@@ -44,6 +46,7 @@ export async function buildStorageBackedApp(
     const runnerRepository = new RunnerRepository(database.db);
     const evidenceGrantRepository = new EvidenceGrantRepository(database.db);
     const nmapServiceRepository = new NmapServiceRepository(database.db);
+    const httpProbeRepository = new HttpProbeRepository(database.db);
 
     // Evidence publication is fail-closed: without a loadable native binding
     // or valid managed evidence roots, the upload routes are not registered.
@@ -60,12 +63,18 @@ export async function buildStorageBackedApp(
           throw new Error("backup lockfile could not be established");
         }
         backupLock = lockResult.lock;
-        const projection = new NmapProjectionService(storeResult.store, nmapServiceRepository);
+        const nmapProjection = new NmapProjectionService(storeResult.store, nmapServiceRepository);
+        const httpProbeProjection = new HttpProbeProjectionService(storeResult.store, httpProbeRepository);
         evidencePublication = new EvidencePublicationService({
           repository: evidenceGrantRepository,
           store: storeResult.store,
           quiesceGate: backupLock,
-          onPublicationCommitted: (artifactId) => projection.projectForArtifact(artifactId),
+          onPublicationCommitted: async (artifactId) => {
+            const nmap = await nmapProjection.projectForArtifact(artifactId);
+            if (!nmap.ok) return nmap;
+            if (nmap.skipped !== true) return nmap;
+            return httpProbeProjection.projectForArtifact(artifactId);
+          },
         });
         evidenceStore = storeResult.store;
       }
@@ -83,6 +92,7 @@ export async function buildStorageBackedApp(
       ...(evidenceStore === undefined ? {} : { evidenceStore }),
       ...(backupLock === undefined ? {} : { storageGate: backupLock }),
       nmapServiceRepository,
+      httpProbeRepository,
       async getDevelopmentStorageReadiness() {
         await checkDevelopmentStorage(dataDirectory);
         return "ready" as const;
