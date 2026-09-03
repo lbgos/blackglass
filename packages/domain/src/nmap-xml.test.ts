@@ -53,6 +53,30 @@ describe("parseNmapXml", () => {
   it("rejects DTD and ENTITY", () => {
     expect(parseNmapXml(b(`<!DOCTYPE nmaprun [<!ENTITY x "y">]><nmaprun></nmaprun>`)).ok).toBe(false);
   });
+  it("accepts benign nmap DOCTYPE without an internal subset", () => {
+    const withDoctype = b(
+      `<?xml version="1.0"?><!DOCTYPE nmaprun><nmaprun><host><address addr="192.0.2.10" addrtype="ipv4"/><hostnames><hostname name="host.test"/></hostnames><ports><port protocol="tcp" portid="80"><state state="open"/><service name="http" product="nginx" version="1.18"/></port></ports></host></nmaprun>`,
+    );
+    const r = parseNmapXml(withDoctype);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.services).toHaveLength(1);
+      expect(r.services[0]).toMatchObject({ address: "192.0.2.10", port: 80 });
+    }
+  });
+  it("accepts mixed-case benign nmap DOCTYPE", () => {
+    expect(parseNmapXml(b(`<!DoCtYpE nmaprun><nmaprun></nmaprun>`)).ok).toBe(true);
+  });
+  it("rejects ENTITY and internal subset doctypes", () => {
+    expect(parseNmapXml(b(`<!DOCTYPE nmaprun [<!ENTITY x "y">]><nmaprun></nmaprun>`)).ok).toBe(false);
+    expect(parseNmapXml(b(`<!doctype nmaprun [<!entity x "y">]><nmaprun></nmaprun>`)).ok).toBe(false);
+    expect(parseNmapXml(b(`<!DOCTYPE nmaprun [ ]><nmaprun></nmaprun>`)).ok).toBe(false);
+  });
+  it("rejects external SYSTEM and PUBLIC doctypes", () => {
+    expect(parseNmapXml(b(`<!DOCTYPE nmaprun SYSTEM "https://example.test/nmap.dtd"><nmaprun></nmaprun>`)).ok).toBe(false);
+    expect(parseNmapXml(b(`<!DOCTYPE nmaprun PUBLIC "-//Test//EN" "https://example.test/nmap.dtd"><nmaprun></nmaprun>`)).ok).toBe(false);
+    expect(parseNmapXml(b(`<!doctype nmaprun system "https://example.test/nmap.dtd"><nmaprun></nmaprun>`)).ok).toBe(false);
+  });
   it("rejects invalid UTF-8 and oversize", () => {
     expect(parseNmapXml(new Uint8Array([0xff, 0xfe])).ok).toBe(false);
     const big = new Uint8Array(NMAP_MAX_XML_BYTES + 1);

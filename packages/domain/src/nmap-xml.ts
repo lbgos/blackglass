@@ -143,8 +143,42 @@ export function parseNmapXml(bytes: Uint8Array): ParseNmapXmlResult {
 
   const lowerCased = xml.toLowerCase();
 
-  if (lowerCased.includes("<!doctype") || lowerCased.includes("<!entity")) {
+  if (lowerCased.includes("<!entity")) {
     return invalidResult();
+  }
+
+  // Allow only a benign real-nmap DOCTYPE such as `<!DOCTYPE nmaprun>`.
+  // Anything with an internal subset or external reference stays rejected.
+  let doctypeSearchFrom = 0;
+  let doctypeCount = 0;
+  while (true) {
+    const doctypeStart = lowerCased.indexOf("<!doctype", doctypeSearchFrom);
+    if (doctypeStart === -1) {
+      break;
+    }
+    doctypeCount += 1;
+    if (doctypeCount > 1) {
+      return invalidResult();
+    }
+    const doctypeEnd = findTagEnd(xml, doctypeStart + 1);
+    if (doctypeEnd === -1) {
+      return invalidResult();
+    }
+    const declaration = xml.slice(doctypeStart, doctypeEnd + 1);
+    const declarationLower = declaration.toLowerCase();
+    if (
+      declarationLower.includes("[") ||
+      declarationLower.includes("]") ||
+      declarationLower.includes("entity") ||
+      declarationLower.includes("system") ||
+      declarationLower.includes("public")
+    ) {
+      return invalidResult();
+    }
+    if (!/^<!doctype\s+nmaprun\s*>$/i.test(declaration)) {
+      return invalidResult();
+    }
+    doctypeSearchFrom = doctypeEnd + 1;
   }
 
   if (!lowerCased.includes("<nmaprun")) {
@@ -213,6 +247,27 @@ export function parseNmapXml(bytes: Uint8Array): ParseNmapXmlResult {
     }
 
     if (xml.startsWith("<!", tagStart)) {
+      const tagHead = xml.slice(tagStart, tagStart + 9).toLowerCase();
+      if (tagHead.startsWith("<!doctype") && !seenOpenNmapRun) {
+        const doctypeEnd = findTagEnd(xml, tagStart + 1);
+        if (doctypeEnd === -1) {
+          return invalidResult();
+        }
+        const declaration = xml.slice(tagStart, doctypeEnd + 1);
+        const declarationLower = declaration.toLowerCase();
+        if (
+          declarationLower.includes("[") ||
+          declarationLower.includes("]") ||
+          declarationLower.includes("entity") ||
+          declarationLower.includes("system") ||
+          declarationLower.includes("public") ||
+          !/^<!doctype\s+nmaprun\s*>$/i.test(declaration)
+        ) {
+          return invalidResult();
+        }
+        position = doctypeEnd + 1;
+        continue;
+      }
       return invalidResult();
     }
 
