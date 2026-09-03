@@ -14,13 +14,17 @@ When I work a box, tool output lives in terminal tabs, notes in one file, screen
 
 **Evidence.** Raw tool output is stored immutable and content-addressed before anything reads or formats it. You can always go back to what the tool actually said.
 
-**Findings.** Turn a run into a finding with your own notes attached.
+**Findings.** Next slice, not built yet: turn a run into a finding with your own notes attached.
 
-**Advisor.** Point it at any OpenAI-compatible endpoint, local by default, and the model reads your evidence and suggests what to look at next. Optional.
+**Advisor.** Deferred until the advisor gate (D6): point it at any OpenAI-compatible endpoint, local by default, and the model reads your evidence and suggests what to look at next. Optional.
 
 ## Status
 
-In active development. Working today: engagements, scope with warnings and continue, the host runner with leases and cancellation, and the workspace UI. Current work is immutable evidence artifacts and the first real tool slice: run Nmap against a target and see services and evidence in the UI. The full plan lives in [docs/development/V0.1_PLAN.md](./docs/development/V0.1_PLAN.md).
+In active development. The program goal is a workbench that can operate a real CTF box end to end.
+
+Working today: engagements with archive and reopen, targets with saved scope and one-click continue, and the Nmap loop with lifecycle polling, XML evidence publication, and projected services with evidence download links.
+
+Honest placeholders: the console Advisor, Activity, and Raw output tabs are deferred surfaces, settings controls show shipped defaults until the settings store lands, and plugins wait on the D5 protocol gate. The next slices in order are engagement notes, HTTP probing, findings capture, raw run output viewing, and engagement deadlines. The full plan lives in [docs/development/V0.1_PLAN.md](./docs/development/V0.1_PLAN.md).
 
 ## Quick start
 
@@ -38,7 +42,7 @@ pnpm check      # format, lint, typecheck, test, build
 - React 19, Vite, TanStack Router and Query, Tailwind CSS v4
 - Fastify, Zod, REST, Server-Sent Events
 - SQLite in WAL mode through Drizzle
-- plugins over a versioned NDJSON protocol, adapters in TS, Python, Go, or Rust
+- plugin protocol over versioned NDJSON is planned and gated on D5; no plugin SDK ships yet
 
 ## Layout
 
@@ -50,7 +54,6 @@ packages/contracts  shared Zod, API, and event contracts
 packages/domain     pure rules and state transitions
 packages/db         Drizzle schema and migrations
 packages/ui         Blackglass-owned UI primitives
-plugins/*           first-party tool adapters (planned)
 docs/               plans, contracts, and status
 ```
 
