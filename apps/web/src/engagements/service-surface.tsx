@@ -61,7 +61,7 @@ export function EngagementServicesSection({ engagementId }: { engagementId: stri
   const stats = deriveServiceStats(services);
   const sorted = sortServices(services);
   const latestLabel =
-    stats.latestObservedAt !== undefined ? formatEngagementTimestamp(stats.latestObservedAt) : "—";
+    stats.latestObservedAt !== undefined ? formatEngagementTimestamp(stats.latestObservedAt) : "-";
 
   const statBar = (
     <section aria-label="Engagement totals" className="overflow-hidden rounded-[10px] border border-border bg-card">
@@ -179,7 +179,7 @@ function ServiceRow({ service }: { service: NmapProjectedService }) {
             {service.address}
           </div>
           <div className="truncate font-mono text-[11px] text-muted-foreground" title={service.hostname ?? undefined}>
-            {service.hostname ?? "—"}
+            {service.hostname ?? "-"}
           </div>
         </div>
         <div className="font-mono text-[13px] font-medium">{`${service.port}/${service.protocol}`}</div>
