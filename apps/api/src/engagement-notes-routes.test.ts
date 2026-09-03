@@ -132,4 +132,24 @@ describe("engagement notes routes", () => {
       ).statusCode,
     ).toBe(400);
   });
+
+  it("rejects notes writes to archived engagements", async () => {
+    const { app, repository } = await createRepositoryBackedApp();
+    const created = repository.createEngagement({
+      name: "Notes lab",
+      kind: "lab",
+      autoContinueWarnings: false,
+    });
+    if (!created.ok) throw new Error(`Fixture failed: ${created.error.code}`);
+    const archived = repository.archive(created.value.id, created.value.revision);
+    if (!archived.ok) throw new Error(`Fixture failed: ${archived.error.code}`);
+
+    const response = await app.inject({
+      method: "PUT",
+      url: `/api/v1/engagements/${created.value.id}/notes`,
+      payload: { markdown: "# notes" },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ code: "engagement_archived" });
+  });
 });

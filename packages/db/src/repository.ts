@@ -638,6 +638,9 @@ class TransactionRepository implements EngagementWriteTransaction {
     if (!parsed.success) return failed({ code: "invalid_repository_input" });
     const current = this.currentEngagement(engagementId);
     if (!current.ok) return current;
+    if (current.value.status === "archived") {
+      return failed({ code: "engagement_archived" });
+    }
     const updatedAt = this.clock().toISOString();
     this.client
       .insert(engagementNotes)

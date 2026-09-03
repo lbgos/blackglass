@@ -47,7 +47,7 @@ describe("engagement notes contracts", () => {
   });
 
   it("enforces the byte limit for multibyte markdown", () => {
-    const over = "😀".repeat(16_385);
+    const over = "あ".repeat(21_846);
     expect(new TextEncoder().encode(over).length).toBeGreaterThan(
       ENGAGEMENT_NOTES_MAX_BYTES,
     );

@@ -49,6 +49,9 @@ export function registerEngagementNotesRoutes(app: FastifyInstance, repository: 
     }
     if (!result.ok) {
       if (result.error.code === "engagement_not_found") return sendError(reply, 404, result.error.code);
+      if (result.error.code === "engagement_archived") {
+        return reply.code(409).type("application/json").send({ code: "engagement_archived" });
+      }
       if (result.error.code === "storage_busy") return sendError(reply, 503, result.error.code);
       return sendError(reply, 400, "invalid_request");
     }
