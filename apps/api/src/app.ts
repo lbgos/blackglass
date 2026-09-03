@@ -28,6 +28,7 @@ import type { EvidenceStore } from "./evidence/evidence-store.js";
 import { registerEngagementMutationRoutes } from "./engagement-mutation-routes.js";
 import { registerEngagementNotesRoutes } from "./engagement-notes-routes.js";
 import { registerEngagementRoutes } from "./engagement-routes.js";
+import { registerFindingRoutes } from "./finding-routes.js";
 import { registerRunnerAuthHook, stripAuthorizationHeader } from "./runner-http.js";
 import { registerRunnerEnrollmentRoutes } from "./runner-enrollment-routes.js";
 import { registerRunnerControlRoutes } from "./runner-routes.js";
@@ -48,7 +49,16 @@ interface BuildAppOptions {
     | "getEngagementNotes"
     | "putEngagementNotes"
   > &
-    Partial<Pick<EngagementRepository, "withWriteTx">>;
+    Partial<
+      Pick<
+        EngagementRepository,
+        | "createFinding"
+        | "listFindings"
+        | "resolveFinding"
+        | "reopenFinding"
+        | "withWriteTx"
+      >
+    >;
   operatorCommandRepository?: Pick<
     OperatorCommandRepository,
     "executeOperatorCommand"
@@ -139,6 +149,19 @@ export function buildApp({
   registerRunnerAuthHook(app, runnerRepository);
   registerEngagementRoutes(app, engagementRepository);
   registerEngagementNotesRoutes(app, engagementRepository);
+  if (
+    engagementRepository.createFinding !== undefined &&
+    engagementRepository.listFindings !== undefined &&
+    engagementRepository.resolveFinding !== undefined &&
+    engagementRepository.reopenFinding !== undefined
+  ) {
+    registerFindingRoutes(app, {
+      createFinding: engagementRepository.createFinding.bind(engagementRepository),
+      listFindings: engagementRepository.listFindings.bind(engagementRepository),
+      resolveFinding: engagementRepository.resolveFinding.bind(engagementRepository),
+      reopenFinding: engagementRepository.reopenFinding.bind(engagementRepository),
+    });
+  }
   registerActionRoutes(app, engagementRepository);
   if (operatorCommandRepository !== undefined) {
     registerEngagementMutationRoutes(app, operatorCommandRepository);

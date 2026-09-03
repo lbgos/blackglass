@@ -1,15 +1,19 @@
 import {
   ActionMutationErrorSchema,
   EngagementMutationErrorSchema,
+  FindingMutationErrorSchema,
   type ActionMutationError,
   type EngagementMutationError,
+  type FindingMutationError,
 } from "@blackglass/contracts";
 
 export const ENGAGEMENTS_QUERY_ERROR_MESSAGE = "The engagement list request failed.";
 export const ENGAGEMENT_DETAIL_QUERY_ERROR_MESSAGE = "The engagement request failed.";
 export const ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE = "The services request failed.";
 export const ENGAGEMENT_HTTP_PROBES_QUERY_ERROR_MESSAGE = "The probe results request failed.";
+export const FINDINGS_QUERY_ERROR_MESSAGE = "The findings request failed.";
 export const ENGAGEMENT_MUTATION_ERROR_MESSAGE = "The engagement request failed.";
+export const FINDING_MUTATION_ERROR_MESSAGE = "The findings request failed.";
 
 export const ENGAGEMENT_MUTATION_ERROR_COPY = {
   invalid_request: "The request was not accepted. Check the fields and try again.",
@@ -22,6 +26,19 @@ export const ENGAGEMENT_MUTATION_ERROR_COPY = {
   storage_busy: "Storage is busy. Try again.",
   request_failed: ENGAGEMENT_MUTATION_ERROR_MESSAGE,
 } as const;
+
+export const FINDING_MUTATION_ERROR_COPY = {
+  invalid_request: "The request was not accepted. Check the fields and try again.",
+  engagement_not_found: "That engagement is no longer available.",
+  finding_not_found: "That finding is no longer available.",
+  engagement_archived: "This engagement is archived.",
+  invalid_finding_transition: "That finding action is not valid now.",
+  invalid_persisted_data: "The server returned data this client cannot use.",
+  storage_busy: "Storage is busy. Try again.",
+  request_failed: FINDING_MUTATION_ERROR_MESSAGE,
+} as const;
+
+export type FindingMutationErrorCode = keyof typeof FINDING_MUTATION_ERROR_COPY;
 
 export const ACTION_MUTATION_ERROR_COPY = {
   action_not_found: "That action is no longer available.",
@@ -139,4 +156,38 @@ export function mutationErrorFromActionContract(
 export function engagementMutationMessage(error: unknown): string {
   if (error instanceof EngagementMutationClientError) return error.message;
   return ENGAGEMENT_MUTATION_ERROR_MESSAGE;
+}
+
+export class FindingMutationClientError extends Error {
+  readonly code: FindingMutationErrorCode;
+
+  constructor(code: FindingMutationErrorCode) {
+    super(FINDING_MUTATION_ERROR_COPY[code]);
+    this.name = "FindingMutationClientError";
+    this.code = code;
+  }
+}
+
+export function parseFindingMutationError(payload: unknown): FindingMutationClientError {
+  const parsed = FindingMutationErrorSchema.safeParse(payload);
+  if (parsed.success) return findingErrorFromContract(parsed.data);
+  return new FindingMutationClientError("request_failed");
+}
+
+export function findingErrorFromContract(
+  error: FindingMutationError,
+): FindingMutationClientError {
+  return new FindingMutationClientError(error.code);
+}
+
+export function findingMutationMessage(error: unknown): string {
+  if (error instanceof FindingMutationClientError) return error.message;
+  return FINDING_MUTATION_ERROR_MESSAGE;
+}
+
+export class FindingsQueryError extends Error {
+  constructor() {
+    super(FINDINGS_QUERY_ERROR_MESSAGE);
+    this.name = "FindingsQueryError";
+  }
 }

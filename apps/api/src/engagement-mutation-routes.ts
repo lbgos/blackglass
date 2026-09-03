@@ -68,7 +68,9 @@ function mutationError(
     case "storage_busy":
       return { status: 503, body: { code: error.code } };
     case "invalid_persisted_data":
-      return { status: 500, body: { code: error.code } };
+    case "finding_not_found":
+    case "invalid_finding_transition":
+      return { status: 500, body: { code: "invalid_persisted_data" } };
   }
 }
 

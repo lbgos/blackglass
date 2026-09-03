@@ -1140,6 +1140,56 @@ export const httpProbeResults = sqliteTable(
   ],
 );
 
+export const findings = sqliteTable(
+  "findings",
+  {
+    id: text("id").primaryKey(),
+    contractVersion: integer("contract_version").notNull(),
+    engagementId: text("engagement_id")
+      .notNull()
+      .references(() => engagements.id, { onDelete: "restrict" }),
+    title: text("title").notNull(),
+    severity: text("severity", {
+      enum: ["info", "low", "medium", "high", "critical"],
+    }).notNull(),
+    status: text("status", { enum: ["open", "resolved"] }).notNull(),
+    body: text("body").notNull(),
+    evidenceArtifactIdsJson: text("evidence_artifact_ids_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check("finding_contract_version", sql`${table.contractVersion} = 1`),
+    check(
+      "finding_title_length",
+      sql`length(${table.title}) between 1 and 120 and ${table.title} = trim(${table.title})`,
+    ),
+    check(
+      "finding_severity",
+      sql`${table.severity} in ('info', 'low', 'medium', 'high', 'critical')`,
+    ),
+    check(
+      "finding_status",
+      sql`${table.status} in ('open', 'resolved')`,
+    ),
+    check(
+      "finding_body_bytes",
+      sql`length(cast(${table.body} as blob)) <= 65536`,
+    ),
+    check(
+      "finding_evidence_json",
+      sql`json_valid(${table.evidenceArtifactIdsJson}) and length(cast(${table.evidenceArtifactIdsJson} as blob)) <= 8192`,
+    ),
+    check("finding_created_at", sql`length(${table.createdAt}) >= 20`),
+    check("finding_updated_at", sql`length(${table.updatedAt}) >= 20`),
+    index("finding_engagement_created_idx").on(
+      table.engagementId,
+      table.createdAt,
+      table.id,
+    ),
+  ],
+);
+
 export type RunRow = typeof runs.$inferSelect;
 export type RunLeaseRow = typeof runLeases.$inferSelect;
 export type RunEventRow = typeof runEvents.$inferSelect;
@@ -1151,3 +1201,4 @@ export type EvidenceGrantRow = typeof evidenceGrants.$inferSelect;
 export type EvidenceArtifactRow = typeof evidenceArtifacts.$inferSelect;
 export type NmapServiceRow = typeof nmapServices.$inferSelect;
 export type HttpProbeResultRow = typeof httpProbeResults.$inferSelect;
+export type FindingRow = typeof findings.$inferSelect;
