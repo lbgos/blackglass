@@ -215,7 +215,6 @@ export function buildApp({
       store: evidenceStore,
     });
   }
-  }
 
   app.get("/health", async (_request, reply) => {
     const health = HealthResponseSchema.parse({ status: "ok" });
