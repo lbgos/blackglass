@@ -60,7 +60,7 @@ describe("evidence publishing grant flow", () => {
         const artifactId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`;
         const uploadId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`;
         grantIds.set(slot, { artifactId, uploadId });
-        return new Response(JSON.stringify({ artifactId, uploadId, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: (b.declaredSizeBytes as number), declaredDigest: b.declaredDigest, originalFileName: b.originalFileName, declaredContentType: b.declaredContentType, createdAt: new Date().toISOString() }), { status: 201, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ artifactId, uploadId, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: (b.eventSequence as number), artifactSlot: slot, kind: slot, declaredSizeBytes: (b.declaredSizeBytes as number), declaredDigest: b.declaredDigest, originalFileName: b.originalFileName, declaredContentType: b.declaredContentType, createdAt: new Date().toISOString() }), { status: 201, headers: { "content-type": "application/json" } });
       }
       if (u.includes("/uploads/") && method === "PUT") {
         return new Response(null, { status: 204 });
@@ -72,7 +72,7 @@ describe("evidence publishing grant flow", () => {
       return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
     }) as unknown as typeof fetch;
 
-    await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false });
+    await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false, eventSequence: 2 });
 
     // 6 requests order
     expect(requests.length).toBe(6);
@@ -92,7 +92,7 @@ describe("evidence publishing grant flow", () => {
     expect(stdoutGrant.declaredDigest).toBe(sha256(stdout));
     expect(stdoutGrant.originalFileName).toBe("stdout.log");
     expect(stdoutGrant.declaredContentType).toBe("text/plain; charset=utf-8");
-    expect(stdoutGrant.eventSequence).toBe(1);
+    expect(stdoutGrant.eventSequence).toBe(2);
     expect(stdoutGrant.kind).toBe("stdout");
     expect(requests[0]?.headers["content-type"]).toContain("application/json");
     expect(requests[0]?.headers["authorization"]).toBe(`Blackglass-Runner runner-1 ${"a".repeat(43)}`);
@@ -141,7 +141,7 @@ describe("evidence publishing grant flow", () => {
         const artifactId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`;
         const uploadId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`;
         grantMapEmpty.set(uploadId, artifactId);
-        return new Response(JSON.stringify({ artifactId, uploadId, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: 0, declaredDigest: emptyDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
+        return new Response(JSON.stringify({ artifactId, uploadId, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: (b.eventSequence as number), artifactSlot: slot, kind: slot, declaredSizeBytes: 0, declaredDigest: emptyDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
       }
       if (u.includes("/uploads/") && method === "PUT") return new Response(null, { status: 204 });
       if (u.includes("/complete")) {
@@ -152,7 +152,7 @@ describe("evidence publishing grant flow", () => {
       }
       return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
     }) as unknown as typeof fetch;
-    await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false });
+    await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false, eventSequence: 2 });
     expect(bodies.length).toBe(2);
     for (const b of bodies) {
       const rec = b as Record<string, unknown>;
@@ -185,7 +185,7 @@ describe("evidence publishing grant flow", () => {
         const artifactId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`;
         const uploadId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`;
         grantMapTrunc.set(uploadId, artifactId);
-        return new Response(JSON.stringify({ artifactId, uploadId, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: (b.declaredSizeBytes as number), declaredDigest: b.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
+        return new Response(JSON.stringify({ artifactId, uploadId, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: (b.eventSequence as number), artifactSlot: slot, kind: slot, declaredSizeBytes: (b.declaredSizeBytes as number), declaredDigest: b.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
       }
       if (u.includes("/uploads/") && method === "PUT") return new Response(null, { status: 204 });
       if (u.includes("/complete")) {
@@ -199,7 +199,7 @@ describe("evidence publishing grant flow", () => {
     }) as unknown as typeof fetch;
 
     // isCancelled true but truncated wins
-    await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: true });
+    await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: true, eventSequence: 2 });
     expect(completes.length).toBe(2);
     expect(completes[0]).toHaveProperty("completeness", "truncated"); // stdout truncated wins over partial
     expect(completes[1]).toHaveProperty("completeness", "partial"); // stderr not truncated, so partial
@@ -213,7 +213,7 @@ describe("evidence publishing grant flow", () => {
       truncated: false,
     } as unknown as import("./process.js").ProcessResult;
     // need new dataDir outbox cleared; reuse same config but outbox already removed, next grants will create new keys
-    await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result2, { isCancelled: false });
+    await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result2, { isCancelled: false, eventSequence: 2 });
     expect(completes[0]).toHaveProperty("completeness", "complete");
     expect(completes[1]).toHaveProperty("completeness", "complete");
   });
@@ -246,7 +246,7 @@ describe("evidence publishing grant flow", () => {
         const artifactId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`;
         const uploadId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`;
         grantMapRetry1.set(uploadId, artifactId);
-        return new Response(JSON.stringify({ artifactId, uploadId, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: (body.declaredSizeBytes as number), declaredDigest: body.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
+        return new Response(JSON.stringify({ artifactId, uploadId, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: (body.eventSequence as number), artifactSlot: slot, kind: slot, declaredSizeBytes: (body.declaredSizeBytes as number), declaredDigest: body.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
       }
       if (u.includes("/uploads/") && (init?.method === "PUT")) return new Response(null, { status: 204 });
       if (u.includes("/complete")) {
@@ -259,7 +259,7 @@ describe("evidence publishing grant flow", () => {
     }) as unknown as typeof fetch;
 
     // First attempt fails at grant transport
-    await expect(publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false })).rejects.toBeInstanceOf(EvidencePublicationError);
+    await expect(publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false, eventSequence: 2 })).rejects.toBeInstanceOf(EvidencePublicationError);
     // Outbox should remain for retry
     const outboxFiles = await readdir(path.join(dataDir, "outbox")).catch(() => []);
     expect(outboxFiles.length).toBe(1);
@@ -282,7 +282,7 @@ describe("evidence publishing grant flow", () => {
         const artifactId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`;
         const uploadId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`;
         grantMapRetry2.set(uploadId, artifactId);
-        return new Response(JSON.stringify({ artifactId, uploadId, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: (body.declaredSizeBytes as number), declaredDigest: body.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
+        return new Response(JSON.stringify({ artifactId, uploadId, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: (body.eventSequence as number), artifactSlot: slot, kind: slot, declaredSizeBytes: (body.declaredSizeBytes as number), declaredDigest: body.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
       }
       if (u.includes("/uploads/") && (init?.method === "PUT")) return new Response(null, { status: 204 });
       if (u.includes("/complete")) {
@@ -294,7 +294,7 @@ describe("evidence publishing grant flow", () => {
       return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
     }) as unknown as typeof fetch;
 
-    await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false });
+    await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false, eventSequence: 2 });
     expect(seenKeys[0]).toBe(firstKey);
   });
 
@@ -344,7 +344,7 @@ describe("evidence publishing grant flow", () => {
           // second slot fails with 500
           return new Response(JSON.stringify({ code: "invalid_request" }), { status: 500 });
         }
-        return new Response(JSON.stringify({ artifactId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`, uploadId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`, runId: "run-1", leaseId: "lease-1", sessionId: "sess-1", fence: "1", eventSequence: 1, artifactSlot: slot, kind: slot, declaredSizeBytes: body.declaredSizeBytes, declaredDigest: body.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
+        return new Response(JSON.stringify({ artifactId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`, uploadId: `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`, runId: "run-1", leaseId: "lease-1", sessionId: "sess-1", fence: "1", eventSequence: (body.eventSequence as number), artifactSlot: slot, kind: slot, declaredSizeBytes: body.declaredSizeBytes, declaredDigest: body.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
       }
       if (u.includes("/uploads/") && method === "PUT") {
         // Check if this is for stderr uploadId which we never got because grant failed; but stdout PUT should succeed
@@ -398,7 +398,7 @@ describe("evidence publishing grant flow", () => {
 
     let err: unknown = null;
     try {
-      await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false });
+      await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false, eventSequence: 2 });
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(EvidencePublicationError);
     expect((err as EvidencePublicationError).code).toBe("stale_fence");
@@ -407,6 +407,77 @@ describe("evidence publishing grant flow", () => {
     expect(String((err as Error).message)).not.toContain(stdout.toString());
     expect(String((err as Error).message)).toBe("stale_fence");
     // Outbox retained on stale_fence? Since we retain on non-grant, outbox file should remain
+    const outboxFiles = await readdir(path.join(dataDir, "outbox")).catch(() => []);
+    expect(outboxFiles.length).toBe(1);
+  });
+
+  it("current live sequence is sent on every grant", async () => {
+    const lease = { runId: "run-1", leaseId: "lease-1", sessionId: "sess-1", fence: "1" };
+    const config = { dataDir, runnerId: "runner-1", secret: "a".repeat(43), apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dataDir, "runs"), sessionId: "sess-1", installationFingerprint: "sha256:" + "a".repeat(64), heartbeatIntervalMs: 10000, leaseDurationMs: 30000, executable: process.execPath } as const;
+    const stdout = Buffer.from("seq stdout", "utf8");
+    const stderr = Buffer.from("seq stderr", "utf8");
+    const result = {
+      exitCode: 0, signal: null, stdout, stderr,
+      stdoutMeta: { inputBytesSeen: stdout.length, redactedBytesProduced: stdout.length, bytesRetained: stdout.length, bytesDropped: 0, firstDroppedRedactedOffset: null, truncated: false },
+      stderrMeta: { inputBytesSeen: stderr.length, redactedBytesProduced: stderr.length, bytesRetained: stderr.length, bytesDropped: 0, firstDroppedRedactedOffset: null, truncated: false },
+      truncated: false,
+    } as unknown as import("./process.js").ProcessResult;
+    const grantSequences: unknown[] = [];
+    const grantMap = new Map<string, string>();
+    globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const u = typeof url === "string" ? url : url.toString();
+      const method = init?.method ?? "GET";
+      let body: unknown = init?.body;
+      if (typeof body === "string") try { body = JSON.parse(body); } catch {}
+      if (u.includes("/artifacts/grants")) {
+        const b = body as Record<string, unknown>;
+        grantSequences.push(b.eventSequence);
+        const slot = b.artifactSlot as string;
+        const artifactId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000001" : "000000000002"}`;
+        const uploadId = `00000000-0000-4000-8000-${slot === "stdout" ? "000000000011" : "000000000012"}`;
+        grantMap.set(uploadId, artifactId);
+        return new Response(JSON.stringify({ artifactId, uploadId, runId: lease.runId, leaseId: lease.leaseId, sessionId: lease.sessionId, fence: lease.fence, eventSequence: b.eventSequence, artifactSlot: slot, kind: slot, declaredSizeBytes: (b.declaredSizeBytes as number), declaredDigest: b.declaredDigest, originalFileName: `${slot}.log`, declaredContentType: "text/plain; charset=utf-8", createdAt: new Date().toISOString() }), { status: 201 });
+      }
+      if (u.includes("/uploads/") && method === "PUT") return new Response(null, { status: 204 });
+      if (u.includes("/complete")) {
+        const b = body as Record<string, unknown>;
+        const uploadId = u.split("/uploads/")[1]?.split("/")[0] ?? "";
+        return new Response(JSON.stringify({ disposition: "published", artifactId: grantMap.get(uploadId), sizeBytes: b.sizeBytes, digest: b.digest, completeness: b.completeness }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
+    }) as unknown as typeof fetch;
+    await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false, eventSequence: 2 });
+    expect(grantSequences).toEqual([2, 2]);
+  });
+
+  it("stale sequence surfaces event_sequence_gap and retains outbox", async () => {
+    const lease = { runId: "run-1", leaseId: "lease-1", sessionId: "sess-1", fence: "1" };
+    const config = { dataDir, runnerId: "runner-1", secret: "a".repeat(43), apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dataDir, "runs"), sessionId: "sess-1", installationFingerprint: "sha256:" + "a".repeat(64), heartbeatIntervalMs: 10000, leaseDurationMs: 30000, executable: process.execPath } as const;
+    const stdout = Buffer.from("stale", "utf8");
+    const stderr = Buffer.from("stale2", "utf8");
+    const result = {
+      exitCode: 0, signal: null, stdout, stderr,
+      stdoutMeta: { inputBytesSeen: stdout.length, redactedBytesProduced: stdout.length, bytesRetained: stdout.length, bytesDropped: 0, firstDroppedRedactedOffset: null, truncated: false },
+      stderrMeta: { inputBytesSeen: stderr.length, redactedBytesProduced: stderr.length, bytesRetained: stderr.length, bytesDropped: 0, firstDroppedRedactedOffset: null, truncated: false },
+      truncated: false,
+    } as unknown as import("./process.js").ProcessResult;
+    const seen: unknown[] = [];
+    globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const u = typeof url === "string" ? url : url.toString();
+      if (u.includes("/artifacts/grants")) {
+        const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        seen.push(b.eventSequence);
+        return new Response(JSON.stringify({ code: "event_sequence_gap", expectedSequence: 2 }), { status: 409, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400 });
+    }) as unknown as typeof fetch;
+    let err: unknown = null;
+    try {
+      await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false, eventSequence: 1 });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(EvidencePublicationError);
+    expect((err as EvidencePublicationError).code).toBe("event_sequence_gap");
+    expect(seen).toEqual([1]);
     const outboxFiles = await readdir(path.join(dataDir, "outbox")).catch(() => []);
     expect(outboxFiles.length).toBe(1);
   });
@@ -454,7 +525,7 @@ describe("evidence publishing grant flow", () => {
 
     let err: unknown = null;
     try {
-      await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false });
+      await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false, eventSequence: 2 });
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(EvidencePublicationError);
     expect((err as EvidencePublicationError).code).toBe("evidence_publication_failed");
@@ -521,7 +592,7 @@ describe("evidence publishing grant flow", () => {
 
     let err: unknown = null;
     try {
-      await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false });
+      await publishEvidenceArtifacts(config as unknown as import("./config.js").RunnerConfig, lease, result, { isCancelled: false, eventSequence: 2 });
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(EvidencePublicationError);
     expect((err as EvidencePublicationError).code).toBe("evidence_publication_failed");
