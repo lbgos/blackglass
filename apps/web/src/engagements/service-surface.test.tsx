@@ -120,6 +120,23 @@ describe("EngagementServicesSection", () => {
     expect(screen.getAllByText("artifactDigest").length).toBeGreaterThan(0);
   });
 
+  it("links each service row to its source XML evidence", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(response([serviceA, serviceB]))));
+    renderSurface();
+    const links = await screen.findAllByRole("link", { name: "XML" });
+    expect(links).toHaveLength(2);
+    const hrefs = links.map((link) => link.getAttribute("href")).sort();
+    expect(hrefs).toEqual(
+      [
+        `/api/v1/engagements/${engagementId}/artifacts/artifact-1/content`,
+        `/api/v1/engagements/${engagementId}/artifacts/artifact-2/content`,
+      ].sort(),
+    );
+    for (const link of links) {
+      expect(link.hasAttribute("download")).toBe(true);
+    }
+  });
+
   it("shows recoverable error without cached data", async () => {
     vi.stubGlobal(
       "fetch",
