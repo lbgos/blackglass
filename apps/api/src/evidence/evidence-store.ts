@@ -109,6 +109,20 @@ export type VerifiedDownloadResult =
   | { status: "corrupt"; code: VerifiedDownloadCorruptCode }
   | VerifiedDownloadReady;
 
+export interface VerifiedExcerptReady {
+  readonly status: "ready";
+  readonly totalBytes: number;
+  readonly truncated: boolean;
+  readonly content: Buffer;
+}
+
+export type VerifiedExcerptResult =
+  | { status: "missing" }
+  | { status: "corrupt"; code: VerifiedDownloadCorruptCode }
+  | VerifiedExcerptReady;
+
+export const VERIFIED_EXCERPT_MAX_BYTES = 64 * 1024;
+
 const VERIFIED_DOWNLOAD_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 export const DOWNLOAD_CHUNK_BYTES = 256 * 1024;
 
@@ -630,6 +644,93 @@ export class EvidenceStore {
       digest: hashed.digest,
       stream: verifiedChunks(),
     };
+  }
+
+  // Verified excerpt for console display: same fail-closed verification as a
+  // download, then a single bounded read of at most maxBytes from offset 0.
+  // The response never carries more than maxBytes; truncated is truthful.
+  async verifiedExcerpt(input: {
+    readonly artifactId: string;
+    readonly expectedSizeBytes: number;
+    readonly expectedDigest: string;
+    readonly maxBytes: number;
+  }): Promise<VerifiedExcerptResult> {
+    const { artifactId, expectedSizeBytes, expectedDigest, maxBytes } = input;
+    if (
+      !OPAQUE_EVIDENCE_ID_PATTERN.test(artifactId) ||
+      !Number.isSafeInteger(expectedSizeBytes) ||
+      expectedSizeBytes < 0 ||
+      !VERIFIED_DOWNLOAD_DIGEST_PATTERN.test(expectedDigest) ||
+      !Number.isSafeInteger(maxBytes) ||
+      maxBytes <= 0 ||
+      maxBytes > VERIFIED_EXCERPT_MAX_BYTES
+    ) {
+      return { status: "corrupt", code: "invalid_download_request" };
+    }
+    if (!this.onTreeDirectoryMatches(this.published)) {
+      return { status: "missing" };
+    }
+    const opened = this.binding.openAt(this.published.fd, artifactId, READ_FLAGS, 0);
+    if (!opened.ok) {
+      if (opened.errno === ERRNO.ENOENT) return { status: "missing" };
+      if (opened.errno === ERRNO.ELOOP) {
+        return { status: "corrupt", code: "artifact_symlink_rejected" };
+      }
+      return { status: "corrupt", code: mapOpenErrno(opened.errno) };
+    }
+    const fd = opened.fd;
+    try {
+      const stats = fstatOf(fd);
+      if (stats === undefined) {
+        return { status: "corrupt", code: "evidence_io_error" };
+      }
+      if (!stats.isFile()) {
+        return { status: "corrupt", code: "artifact_not_regular_file" };
+      }
+      if (stats.nlink !== 1) {
+        return { status: "corrupt", code: "artifact_hardlink_rejected" };
+      }
+      if (stats.dev !== this.rootDev) {
+        return { status: "corrupt", code: "cross_filesystem_staging" };
+      }
+      if (stats.uid !== this.uid || (stats.mode & 0o777) !== 0o600) {
+        return { status: "corrupt", code: "evidence_storage_invalid" };
+      }
+      if (stats.size !== expectedSizeBytes) {
+        return { status: "corrupt", code: "size_mismatch" };
+      }
+      let hashed: { sizeBytes: number; digest: string };
+      try {
+        hashed = await hashDescriptor(fd);
+      } catch {
+        return { status: "corrupt", code: "evidence_io_error" };
+      }
+      if (hashed.sizeBytes !== expectedSizeBytes) {
+        return { status: "corrupt", code: "size_mismatch" };
+      }
+      if (hashed.digest !== expectedDigest) {
+        return { status: "corrupt", code: "digest_mismatch" };
+      }
+      const total = hashed.sizeBytes;
+      const wanted = Math.min(total, maxBytes);
+      const content = Buffer.allocUnsafe(wanted);
+      let position = 0;
+      while (position < wanted) {
+        const read = await fdRead(fd, content, position, wanted - position, position);
+        if (read.bytesRead === 0) {
+          return { status: "corrupt", code: "evidence_io_error" };
+        }
+        position += read.bytesRead;
+      }
+      return {
+        status: "ready",
+        totalBytes: total,
+        truncated: total > maxBytes,
+        content: Buffer.from(content),
+      };
+    } finally {
+      closeQuietly(fd);
+    }
   }
 
   // Re-opens the on-tree managed directory through the evidence descriptor

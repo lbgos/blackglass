@@ -15,6 +15,7 @@ import type {
   HttpProbeRepository,
   NmapServiceRepository,
   OperatorCommandRepository,
+  RunOutputRepository,
   RunRepository,
   RunnerRepository,
 } from "@blackglass/db";
@@ -32,6 +33,7 @@ import { registerRunnerAuthHook, stripAuthorizationHeader } from "./runner-http.
 import { registerRunnerEnrollmentRoutes } from "./runner-enrollment-routes.js";
 import { registerRunnerControlRoutes } from "./runner-routes.js";
 import { registerNmapServiceRoutes } from "./nmap-service-routes.js";
+import { registerRunOutputRoutes } from "./run-output-routes.js";
 import { registerRunnerEvidenceGrantRoutes } from "./runner-evidence-grant-routes.js";
 import { registerRunnerEvidenceUploadRoutes } from "./runner-evidence-upload-routes.js";
 import { registerHttpProbeRoutes } from "./http-probe-routes.js";
@@ -76,9 +78,13 @@ interface BuildAppOptions {
   storageGate?: StorageQuiesceGate;
   // Operator artifact downloads are registered only when a verified managed
   // store is available; without it the route does not exist.
-  evidenceStore?: Pick<EvidenceStore, "verifiedDownload">;
+  evidenceStore?: Pick<EvidenceStore, "verifiedDownload" | "verifiedExcerpt">;
   nmapServiceRepository?: Pick<NmapServiceRepository, "listForEngagement">;
   httpProbeRepository?: Pick<HttpProbeRepository, "listForEngagement">;
+  runOutputRepository?: Pick<
+    RunOutputRepository,
+    "latestTerminalRunForEngagement" | "runForEngagement" | "artifactsForRun"
+  >;
   logger?: FastifyServerOptions["logger"];
   now?: () => Date;
 }
@@ -95,6 +101,7 @@ export function buildApp({
   evidenceStore,
   nmapServiceRepository,
   httpProbeRepository,
+  runOutputRepository,
   logger = false,
   now,
 }: BuildAppOptions): FastifyInstance {
@@ -198,6 +205,16 @@ export function buildApp({
   }
   if (httpProbeRepository !== undefined) {
     registerHttpProbeRoutes(app, { repository: httpProbeRepository });
+  }
+  if (
+    evidenceStore !== undefined &&
+    runOutputRepository !== undefined
+  ) {
+    registerRunOutputRoutes(app, {
+      repository: runOutputRepository,
+      store: evidenceStore,
+    });
+  }
   }
 
   app.get("/health", async (_request, reply) => {

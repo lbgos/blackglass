@@ -18,6 +18,7 @@ export {
   type SystemStatusResponse,
 } from "./system-status.js";
 export * from "./evidence.js";
+export * from "./run-output.js";
 export * from "./saved-scope.js";
 export * from "./target-normalization.js";
 export * from "./nmap.js";

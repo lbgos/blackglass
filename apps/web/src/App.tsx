@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { CreateEngagementDialog } from "./engagements/create-dialog.js";
 import { EngagementSidebarList } from "./engagements/sidebar.js";
+import { RawOutputPanel } from "./engagements/run-output.js";
 import {
   EngagementWorkspaceProvider,
   useEngagementWorkspace,
@@ -43,12 +44,7 @@ const consolePanels: readonly ConsolePanel[] = [
   {
     value: "raw-output",
     label: "Raw output",
-    content: (
-      <ConsolePlaceholder
-        title="Raw output"
-        detail="Live tool output will stream here for the current run. Raw output is not available yet."
-      />
-    ),
+    content: <RawOutputPanel />,
   },
 ];
 
