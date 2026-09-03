@@ -31,6 +31,7 @@ export {
   selectExecutionRepresentation,
 } from "./saved-scope.js";
 export { buildNmapArgv } from "./nmap-argv.js";
+export { buildFfufArgv } from "./ffuf-argv.js";
 export { parseNmapXml, type ParsedNmapService, type ParseNmapXmlResult } from "./nmap-xml.js";
 export {
   buildProbeRawBytes,
