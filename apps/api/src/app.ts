@@ -25,6 +25,7 @@ import type { StorageQuiesceGate } from "./evidence/backup-lock.js";
 import type { EvidencePublicationService } from "./evidence/evidence-publication.js";
 import type { EvidenceStore } from "./evidence/evidence-store.js";
 import { registerEngagementMutationRoutes } from "./engagement-mutation-routes.js";
+import { registerEngagementNotesRoutes } from "./engagement-notes-routes.js";
 import { registerEngagementRoutes } from "./engagement-routes.js";
 import { registerRunnerAuthHook, stripAuthorizationHeader } from "./runner-http.js";
 import { registerRunnerEnrollmentRoutes } from "./runner-enrollment-routes.js";
@@ -42,6 +43,8 @@ interface BuildAppOptions {
     | "listScopeRevisions"
     | "getAction"
     | "retryActionContext"
+    | "getEngagementNotes"
+    | "putEngagementNotes"
   > &
     Partial<Pick<EngagementRepository, "withWriteTx">>;
   operatorCommandRepository?: Pick<
@@ -131,6 +134,7 @@ export function buildApp({
 
   registerRunnerAuthHook(app, runnerRepository);
   registerEngagementRoutes(app, engagementRepository);
+  registerEngagementNotesRoutes(app, engagementRepository);
   registerActionRoutes(app, engagementRepository);
   if (operatorCommandRepository !== undefined) {
     registerEngagementMutationRoutes(app, operatorCommandRepository);

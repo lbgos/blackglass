@@ -724,6 +724,8 @@ describe("engagement mutation routes", () => {
           ok: false,
           error: { code: "action_not_found" },
         }),
+        getEngagementNotes: () => ({ ok: false, error: { code: "engagement_not_found" } }),
+        putEngagementNotes: () => ({ ok: false, error: { code: "engagement_not_found" } }),
       },
       operatorCommandRepository: {
         executeOperatorCommand: () => ({
@@ -756,6 +758,8 @@ describe("engagement mutation routes", () => {
           ok: false,
           error: { code: "action_not_found" },
         }),
+        getEngagementNotes: () => ({ ok: false, error: { code: "engagement_not_found" } }),
+        putEngagementNotes: () => ({ ok: false, error: { code: "engagement_not_found" } }),
       },
       operatorCommandRepository: {
         executeOperatorCommand: () => ({

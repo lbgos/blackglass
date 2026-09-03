@@ -5,13 +5,16 @@ import {
   AppendScopeRevisionInputSchema,
   CreateEngagementInputSchema,
   ENGAGEMENT_CONTRACT_VERSION,
+  EngagementNotesSchema,
   EngagementSchema,
   EngagementWithActiveScopeSchema,
   ScopeRevisionSchema,
+  UpdateEngagementNotesRequestSchema,
   type AcceptHeartbeatResult,
   type AppendScopeRevisionInput,
   type CreateEngagementInput,
   type Engagement,
+  type EngagementNotes,
   type EngagementStatus,
   type EngagementWithActiveScope,
   type CanonicalUrlHost,
@@ -61,8 +64,10 @@ import {
 } from "./run.js";
 import {
   engagementActiveScopes,
+  engagementNotes,
   engagements,
   scopeRevisions,
+  type EngagementNotesRow,
   type EngagementRow,
   type ScopeRevisionRow,
 } from "./schema.js";
@@ -125,6 +130,11 @@ export interface EngagementWriteTransaction {
   getEngagement(
     engagementId: string,
   ): RepositoryResult<EngagementWithActiveScope>;
+  getEngagementNotes(engagementId: string): RepositoryResult<EngagementNotes>;
+  putEngagementNotes(
+    engagementId: string,
+    input: unknown,
+  ): RepositoryResult<EngagementNotes>;
   getAction(
     engagementId: string,
     actionId: string,
@@ -316,6 +326,17 @@ function scopeRevisionFromRow(
     return failed({ code: "invalid_persisted_data" });
   }
   return { ok: true, value: parsed.data };
+}
+
+function engagementNotesFromRow(row: EngagementNotesRow): RepositoryResult<EngagementNotes> {
+  const parsed = EngagementNotesSchema.safeParse({
+    engagementId: row.engagementId,
+    markdown: row.markdown,
+    updatedAt: row.updatedAt,
+  });
+  return parsed.success
+    ? { ok: true, value: parsed.data }
+    : failed({ code: "invalid_persisted_data" });
 }
 
 function readEngagementWithActiveScope(
@@ -586,6 +607,57 @@ class TransactionRepository implements EngagementWriteTransaction {
     engagementId: string,
   ): RepositoryResult<EngagementWithActiveScope> {
     return readEngagementWithActiveScope(this.client, engagementId);
+  }
+
+  getEngagementNotes(engagementId: string): RepositoryResult<EngagementNotes> {
+    const current = this.currentEngagement(engagementId);
+    if (!current.ok) return current;
+    const row = this.client
+      .select()
+      .from(engagementNotes)
+      .where(eq(engagementNotes.engagementId, engagementId))
+      .get();
+    if (row === undefined) {
+      return {
+        ok: true,
+        value: {
+          engagementId,
+          markdown: "",
+          updatedAt: current.value.updatedAt,
+        },
+      };
+    }
+    return engagementNotesFromRow(row);
+  }
+
+  putEngagementNotes(
+    engagementId: string,
+    input: unknown,
+  ): RepositoryResult<EngagementNotes> {
+    const parsed = UpdateEngagementNotesRequestSchema.safeParse(input);
+    if (!parsed.success) return failed({ code: "invalid_repository_input" });
+    const current = this.currentEngagement(engagementId);
+    if (!current.ok) return current;
+    const updatedAt = this.clock().toISOString();
+    this.client
+      .insert(engagementNotes)
+      .values({
+        engagementId,
+        markdown: parsed.data.markdown,
+        updatedAt,
+      })
+      .onConflictDoUpdate({
+        target: engagementNotes.engagementId,
+        set: { markdown: parsed.data.markdown, updatedAt },
+      })
+      .run();
+    const stored = this.client
+      .select()
+      .from(engagementNotes)
+      .where(eq(engagementNotes.engagementId, engagementId))
+      .get();
+    if (stored === undefined) return failed({ code: "invalid_persisted_data" });
+    return engagementNotesFromRow(stored);
   }
 
   getAction(
@@ -934,6 +1006,48 @@ export class EngagementRepository {
         code: isStorageBusy(error) ? "storage_busy" : "invalid_persisted_data",
       });
     }
+  }
+
+  getEngagementNotes(engagementId: string): RepositoryResult<EngagementNotes> {
+    try {
+      const engagement = this.db
+        .select()
+        .from(engagements)
+        .where(eq(engagements.id, engagementId))
+        .get();
+      if (engagement === undefined) return failed({ code: "engagement_not_found" });
+      const row = this.db
+        .select()
+        .from(engagementNotes)
+        .where(eq(engagementNotes.engagementId, engagementId))
+        .get();
+      if (row === undefined) {
+        return {
+          ok: true,
+          value: {
+            engagementId,
+            markdown: "",
+            updatedAt: engagement.updatedAt,
+          },
+        };
+      }
+      return engagementNotesFromRow(row);
+    } catch (error) {
+      return failed({
+        code: isStorageBusy(error) ? "storage_busy" : "invalid_persisted_data",
+      });
+    }
+  }
+
+  putEngagementNotes(
+    engagementId: string,
+    input: unknown,
+    transaction?: EngagementWriteTransaction,
+  ): RepositoryResult<EngagementNotes> {
+    return this.runMutation(
+      (repository) => repository.putEngagementNotes(engagementId, input),
+      transaction,
+    );
   }
 
   listEngagements(): RepositoryResult<Engagement[]> {

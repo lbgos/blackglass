@@ -16,6 +16,7 @@ import {
 } from "./format.js";
 import { partitionEngagements, useEngagementDetailQuery, useEngagementsQuery } from "./query.js";
 import { ActionPlanner } from "./action-planner.js";
+import { EngagementNotesSection } from "./notes.js";
 import { SavedScopeEditor } from "./scope-editor.js";
 import { EngagementServicesSection } from "./service-surface.js";
 import { useEngagementWorkspace } from "./workspace-context.js";
@@ -245,6 +246,12 @@ function EngagementDetail({ engagement }: { engagement: Engagement }) {
         <ActionPlanner archived={displayed.status === "archived"} engagementId={displayed.id} />
         <SavedScopeEditor archived={displayed.status === "archived"} engagementId={displayed.id} />
       </div>
+
+      <EngagementNotesSection
+        key={displayed.id}
+        archived={displayed.status === "archived"}
+        engagementId={displayed.id}
+      />
     </article>
   );
 }

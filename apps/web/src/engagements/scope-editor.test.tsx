@@ -117,6 +117,14 @@ function readResponse(
   if (url.includes("/system/status")) return response(readyStatus);
   if (url === "/api/v1/engagements") return response([engagement]);
   if (/^\/api\/v1\/engagements\/[^/]+\/services$/.test(url)) return response([]);
+  const notesMatch = /^\/api\/v1\/engagements\/([^/]+)\/notes$/.exec(url);
+  if (notesMatch?.[1] !== undefined) {
+    return response({
+      engagementId: notesMatch[1],
+      markdown: "",
+      updatedAt: engagement.updatedAt,
+    });
+  }
   if (url === `/api/v1/engagements/${engagement.id}`) {
     return response({
       engagement: {
