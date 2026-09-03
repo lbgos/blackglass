@@ -79,15 +79,17 @@ function ToggleSwitch({
       aria-label={label}
       disabled={disabled || undefined}
       className={cn(
-        "relative h-[18px] w-8 shrink-0 rounded-full p-0 transition-colors duration-100",
+        "flex h-[18px] w-8 shrink-0 items-center rounded-full px-[2px] transition-colors duration-100",
         checked ? "bg-primary" : "bg-foreground/15",
         disabled ? "cursor-default opacity-55" : "cursor-pointer",
       )}
       onClick={onCheckedChange ? () => onCheckedChange(!checked) : undefined}
     >
       <span
-        className="absolute top-0.5 size-3.5 rounded-full bg-white"
-        style={{ left: checked ? "16px" : "2px" }}
+        className={cn(
+          "size-3.5 shrink-0 rounded-full bg-white transition-transform duration-100",
+          checked ? "translate-x-[14px]" : "translate-x-0",
+        )}
       />
     </button>
   );
@@ -206,7 +208,7 @@ function GeneralSection() {
         <ToggleSwitch checked={false} label="Auto-continue engagement warnings" />
       </SetRow>
       <SetRow
-        description="System default follows the host clock. Used in tables, console, and history."
+        description="24-hour UTC clock. Used in tables, console, and history."
         settingId="timestamp-format"
         title="Timestamp format"
       >
@@ -243,17 +245,17 @@ function GeneralSection() {
         />
       </SetRow>
       <SetRow
-        description="Where Blackglass opens after launch. Inbox stays the operational default."
+        description="Where Blackglass opens after launch. Dashboard stays the operational default."
         settingId="landing-view"
         title="Default landing view"
       >
         <SelectField
           label="Default landing view"
           options={[
-            { label: "Inbox", value: "inbox" },
             { label: "Dashboard", value: "dashboard" },
+            { label: "Engagements", value: "engagements" },
           ]}
-          value="inbox"
+          value="dashboard"
         />
       </SetRow>
       <SetRow
@@ -375,7 +377,7 @@ function AppearanceSection() {
         <ThemeOrbs />
       </div>
       <SetRow
-        description="How solid transient menus and dialogs appear. The workspace stays black."
+        description="How solid transient menus and dialogs appear."
         settingId="glass-opacity"
         title="Glass opacity"
       >
@@ -462,7 +464,7 @@ function EngagementsSection() {
         />
       </SetRow>
       <SetRow
-        description="How many reviewed rows the inbox shows before Show more."
+        description="How many rows the list shows before Show more."
         settingId="history-size"
         title="Reviewed history size"
       >
@@ -498,7 +500,7 @@ function PluginsSettingsSection() {
         <ToggleSwitch checked label="Update checks" />
       </SetRow>
       <SetRow
-        description="Whether disabled plugins stay listed in the inbox action set."
+        description="Whether disabled plugins stay listed in the action set."
         settingId="disabled-plugins"
         title="Disabled plugin behavior"
       >
@@ -603,7 +605,7 @@ function AdvisorSection() {
           className="inline-flex min-h-8 items-center rounded-lg px-3 text-[13px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           onClick={toggleAdvisor}
         >
-          {advisorOpen ? "Hide" : "Details"}
+          {advisorOpen ? "Hide details" : "Show details"}
         </button>
       </SetRow>
       {advisorOpen && (
@@ -654,7 +656,7 @@ function EvidenceSection() {
         settingId="evidence-path"
         title="Local storage path"
       >
-        <PathField label="Local storage path" placeholder="/var/lib/blackglass/evidence" />
+        <PathField label="Local storage path" placeholder="Managed by the control plane" />
       </SetRow>
       <SetRow
         description="How long raw evidence remains before an explicit owner deletion."
@@ -733,13 +735,18 @@ function DiagnosticsSection() {
         <HealthStatus detail={storageDetail} label="Evidence storage" tone={storageTone} />
       </SetRow>
       <SetRow description="Re-read local health state. No network beyond the local API." settingId="run-checks" title="Run checks">
-        <button
-          type="button"
-          className="inline-flex min-h-8 items-center justify-center rounded-lg border border-border px-3 text-[13px] text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={() => void systemStatus.refetch()}
-        >
-          {lastChecked ? `Checked ${lastChecked}` : "Run checks"}
-        </button>
+        <span className="flex items-center gap-2">
+          <button
+            type="button"
+            className="inline-flex min-h-8 items-center justify-center rounded-lg border border-border px-3 text-[13px] text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => void systemStatus.refetch()}
+          >
+            Run checks
+          </button>
+          {lastChecked ? (
+            <span className="text-xs text-muted-foreground">Checked {lastChecked}</span>
+          ) : null}
+        </span>
       </SetRow>
     </>
   );

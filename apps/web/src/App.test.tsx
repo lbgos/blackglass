@@ -1386,7 +1386,7 @@ describe("Application routes", () => {
     expect(availableTab.getAttribute("aria-selected")).toBe("true");
     expect(document.activeElement).toBe(availableTab);
     expect(screen.getByRole("tabpanel", { name: "Available" })).toBeTruthy();
-    expect(screen.getByText("No registry connection")).toBeTruthy();
+    expect(screen.getByText(/There are no available plugins/)).toBeTruthy();
 
     fireEvent.keyDown(availableTab, { key: "End" });
     expect(availableTab.getAttribute("aria-selected")).toBe("true");
@@ -1431,13 +1431,13 @@ describe("Application routes", () => {
     const endpointHit = await within(results()).findByRole("option", { selected: true });
     fireEvent.click(endpointHit);
     expect(await screen.findByRole("heading", { level: 1, name: "Advisor" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Hide" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Hide details" })).toBeTruthy();
 
     // A later non-endpoint advisor hit closes the stale disclosure.
     fireEvent.change(search(), { target: { value: "default mode" } });
     const modeHit = await within(results()).findByRole("option", { selected: true });
     fireEvent.click(modeHit);
-    expect(await screen.findByRole("button", { name: "Details" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Show details" })).toBeTruthy();
     expect(screen.queryByLabelText("Model endpoint")).toBeNull();
 
     // Re-entering Settings from elsewhere starts with the disclosure closed and resets to Appearance.
@@ -1446,7 +1446,7 @@ describe("Application routes", () => {
     fireEvent.click(screen.getByRole("link", { name: "Settings" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Appearance" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Advisor" }));
-    expect(await screen.findByRole("button", { name: "Details" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Show details" })).toBeTruthy();
   });
 
   it("opens Advisor details when a Model endpoint search hit is activated", async () => {
@@ -1465,7 +1465,7 @@ describe("Application routes", () => {
     const endpointRow = document.getElementById("setting-advisor-endpoint");
     expect(endpointRow?.textContent).toContain("Model endpoint");
     expect(document.getElementById("setting-advisor-endpoint-base-url")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Hide" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Hide details" })).toBeTruthy();
     expect(screen.getByLabelText("Model endpoint")).toBeTruthy();
   });
 

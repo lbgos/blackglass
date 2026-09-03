@@ -2,7 +2,6 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { useEffect } from "react";
 
 import { engagementMutationMessage, isRevisionConflict } from "./engagements/errors.js";
-import { ENGAGEMENT_KIND_LABELS, ENGAGEMENT_STATUS_LABELS } from "./engagements/format.js";
 import {
   useArchiveEngagementMutation,
   useReopenEngagementMutation,
@@ -124,12 +123,9 @@ function EngagementStageActions({ engagementId }: { engagementId: string }) {
 
   return (
     <div className="flex min-w-0 shrink-0 items-center gap-1">
-      <span className="hidden font-mono text-[11px] text-muted-foreground lg:inline">
-        {ENGAGEMENT_KIND_LABELS[engagement.kind]} · {ENGAGEMENT_STATUS_LABELS[engagement.status]}
-      </span>
       <button
         type="button"
-        className="inline-flex min-h-11 items-center rounded-md px-2 text-[13px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:min-h-8"
+        className="inline-flex h-8 items-center rounded-md px-2 text-[13px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         onClick={() => requestFocusRuns()}
       >
         New run
@@ -137,7 +133,7 @@ function EngagementStageActions({ engagementId }: { engagementId: string }) {
       <button
         type="button"
         disabled={pending}
-        className="inline-flex min-h-11 items-center rounded-md border border-border px-3 text-[13px] font-semibold text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 md:min-h-8"
+        className="inline-flex h-8 items-center rounded-md border border-border px-3 text-[13px] font-semibold text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
         onClick={() => {
           if (isActive) {
             archive.mutate({

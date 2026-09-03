@@ -22,14 +22,16 @@ function GatedSwitch({ entry }: { entry: PluginCatalogEntry }) {
       aria-disabled="true"
       aria-label={`${entry.enabled ? "Disable" : "Enable"} ${entry.name}`}
       className={cn(
-        "relative h-[18px] w-8 shrink-0 cursor-default rounded-full p-0 opacity-55",
+        "flex h-[18px] w-8 shrink-0 cursor-default items-center rounded-full px-[2px] opacity-55",
         entry.enabled ? "bg-primary" : "bg-foreground/15",
       )}
       title={D5_NOTE}
     >
       <span
-        className="absolute top-0.5 size-3.5 rounded-full bg-white"
-        style={{ left: entry.enabled ? "16px" : "2px" }}
+        className={cn(
+          "size-3.5 shrink-0 rounded-full bg-white transition-transform duration-100",
+          entry.enabled ? "translate-x-[14px]" : "translate-x-0",
+        )}
       />
     </button>
   );
@@ -79,10 +81,6 @@ function PluginsPage() {
           <h1 className="mt-0 mb-0 text-[26px] leading-none font-semibold tracking-[-0.04em]">
             Plugins
           </h1>
-          <div className="mt-1.5 flex flex-wrap items-center gap-2.5 text-xs text-muted-foreground">
-            <span>local runner</span>
-            <span>first-party contracts only</span>
-          </div>
         </header>
 
         <div className="mb-4 flex items-center justify-between gap-3">
@@ -127,14 +125,16 @@ function PluginsPage() {
               </button>
             ))}
           </div>
-          <span className="text-xs text-muted-foreground">
-            {tab === "installed"
-              ? `${entries.length} bundled contract${entries.length === 1 ? "" : "s"}`
-              : "No registry connection"}
-          </span>
+          {tab === "installed" ? (
+            <span className="text-xs text-muted-foreground">
+              {`${entries.length} bundled contract${entries.length === 1 ? "" : "s"}`}
+            </span>
+          ) : null}
         </div>
 
-        <p className="mt-0 mb-4 text-xs text-muted-foreground">{D5_NOTE}</p>
+        {tab === "installed" ? (
+          <p className="mt-0 mb-4 text-xs text-muted-foreground">{D5_NOTE}</p>
+        ) : null}
 
         <div
           id="plugins-panel"
@@ -149,8 +149,8 @@ function PluginsPage() {
             </div>
           ) : (
             <p className="max-w-[420px] pt-6 text-[13px] leading-5 text-muted-foreground">
-              No registry is connected in this milestone. Community plugins and local-path installs
-              stay off until the plugin protocol gate resolves.
+              There are no available plugins because install, enable, and disable stay disabled
+              until decision gate D5 defines the plugin protocol.
             </p>
           )}
         </div>

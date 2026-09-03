@@ -12,7 +12,6 @@ import type { MouseEvent } from "react";
 import { engagementMutationMessage, isRevisionConflict } from "./errors.js";
 import {
   ENGAGEMENT_KIND_LABELS,
-  ENGAGEMENT_STATUS_LABELS,
   engagementContext,
   engagementMetadata,
 } from "./format.js";
@@ -218,7 +217,7 @@ function EngagementRow({
         itemId={engagement.id}
         metadata={engagementMetadata(engagement)}
         onNavigate={onNavigate}
-        status={ENGAGEMENT_STATUS_LABELS[engagement.status]}
+        status=""
         title={engagement.name}
       />
       {error && (
