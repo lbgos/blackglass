@@ -217,7 +217,6 @@ function EngagementRow({
         itemId={engagement.id}
         metadata={engagementMetadata(engagement)}
         onNavigate={onNavigate}
-        status=""
         title={engagement.name}
       />
       {error && (
