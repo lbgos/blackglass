@@ -171,6 +171,8 @@ describe("engagement query routes", () => {
           ok: false,
           error: { code: "action_not_found" as const },
         }),
+        getEngagementNotes: () => ({ ok: false, error: { code } }),
+        putEngagementNotes: () => ({ ok: false, error: { code } }),
       },
       getDevelopmentStorageReadiness: () => "ready",
     });
@@ -240,6 +242,8 @@ describe("engagement query routes", () => {
           ok: false,
           error: { code: "action_not_found" as const },
         }),
+        getEngagementNotes: () => ({ ok: true, value: { marker } as never }),
+        putEngagementNotes: () => ({ ok: true, value: { marker } as never }),
       },
       getDevelopmentStorageReadiness: () => "ready",
     });
@@ -268,6 +272,12 @@ describe("engagement query routes", () => {
           throw new Error(marker);
         },
         retryActionContext() {
+          throw new Error(marker);
+        },
+        getEngagementNotes() {
+          throw new Error(marker);
+        },
+        putEngagementNotes() {
           throw new Error(marker);
         },
       },

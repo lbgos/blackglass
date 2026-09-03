@@ -37,6 +37,18 @@ const emptyEngagementRepository = {
       error: { code: "action_not_found" as const },
     };
   },
+  getEngagementNotes() {
+    return {
+      ok: false as const,
+      error: { code: "engagement_not_found" as const },
+    };
+  },
+  putEngagementNotes() {
+    return {
+      ok: false as const,
+      error: { code: "engagement_not_found" as const },
+    };
+  },
 };
 
 function createApp(readiness: "ready" | "not_ready" = "ready") {

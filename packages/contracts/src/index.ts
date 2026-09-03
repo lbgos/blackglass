@@ -6,6 +6,7 @@ export * from "./action-snapshot.js";
 export * from "./command-json-v1-digest.js";
 export * from "./engagement.js";
 export * from "./engagement-api.js";
+export * from "./engagement-notes.js";
 export * from "./operator-command.js";
 export * from "./runner-api.js";
 export * from "./runner-control.js";

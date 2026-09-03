@@ -72,6 +72,7 @@ export {
   actionWarningAcknowledgments,
   actions,
   engagementActiveScopes,
+  engagementNotes,
   engagements,
   evidenceArtifacts,
   evidenceGrants,

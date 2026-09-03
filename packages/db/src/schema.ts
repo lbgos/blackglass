@@ -103,6 +103,24 @@ export const engagementActiveScopes = sqliteTable(
   ],
 );
 
+export const engagementNotes = sqliteTable(
+  "engagement_notes",
+  {
+    engagementId: text("engagement_id")
+      .primaryKey()
+      .references(() => engagements.id, { onDelete: "restrict" }),
+    markdown: text("markdown").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check(
+      "engagement_notes_markdown_bytes",
+      sql`length(cast(${table.markdown} as blob)) <= 65536`,
+    ),
+    check("engagement_notes_updated_at", sql`length(${table.updatedAt}) >= 20`),
+  ],
+);
+
 export const operatorCommandIdempotency = sqliteTable(
   "operator_command_idempotency",
   {
@@ -619,6 +637,7 @@ export const runEvents = sqliteTable(
 );
 
 export type EngagementRow = typeof engagements.$inferSelect;
+export type EngagementNotesRow = typeof engagementNotes.$inferSelect;
 export type ScopeRevisionRow = typeof scopeRevisions.$inferSelect;
 export type OperatorCommandIdempotencyRow =
   typeof operatorCommandIdempotency.$inferSelect;
