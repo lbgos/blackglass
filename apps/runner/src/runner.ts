@@ -12,14 +12,16 @@ import {
   commandJsonV1RunnerAppendStartedDigest,
   commandJsonV1RunnerCompleteDigest,
   type ActionSnapshot,
+  type FfufActionOptions,
 } from "@blackglass/contracts";
-import { buildNmapArgv } from "@blackglass/domain";
+import { buildFfufArgv, buildNmapArgv, ffufOptionsForSnapshot, hasFfufMarker } from "@blackglass/domain";
 
 import { resolveRunnerConfig, type RunnerConfig } from "./config.js";
-import { EvidencePublicationError, publishEvidenceArtifacts, publishHttpProbeArtifacts } from "./evidence-client.js";
+import { EvidencePublicationError, publishEvidenceArtifacts, publishFfufArtifacts, publishHttpProbeArtifacts } from "./evidence-client.js";
+import { FFUF_DEFAULT_EXECUTABLE, runFfufDiscovery } from "./ffuf.js";
 import { probeOneUrl, probeUrlsFromSnapshot } from "./http-probe.js";
 import { getOrCreateOutboxEntry, removeOutboxAtomically } from "./outbox.js";
-import { readNmapXmlSecurely, resolveNmapXmlPath, runSupervisedCommand, verifyExecutable } from "./process.js";
+import { readFfufJsonSecurely, readNmapXmlSecurely, resolveFfufJsonPath, resolveNmapXmlPath, runSupervisedCommand, verifyExecutable, type ProcessResult } from "./process.js";
 
 export type HandshakeResponse = ReturnType<typeof RunnerHandshakeAcceptedResponseSchema.parse>;
 export type AcquiredLease = ReturnType<typeof AcquireRunnerLeaseResponseSchema.parse>;
@@ -99,6 +101,34 @@ export function prepareNmapExecution(params: {
     });
     if (!built.ok) return { ok: false, reason: "invalid_action_snapshot" };
     return { ok: true, argv: built.argv };
+  } catch {
+    return { ok: false, reason: "invalid_action_snapshot" };
+  }
+}
+
+/**
+ * Derive ffuf discovery options plus deterministic argv from a leased
+ * snapshot. The JSON output path is runner-owned host state under the
+ * controlled run directory, never an operator option. Snapshots carrying a
+ * corrupt ffuf marker fail closed here so they are never probed as HTTP.
+ */
+export function prepareFfufExecution(params: {
+  snapshot: ActionSnapshot;
+  runRoot: string;
+  runId: string;
+  fence: string;
+}):
+  | { ok: true; options: FfufActionOptions; argv: readonly string[] }
+  | { ok: false; reason: "not_ffuf_snapshot" | "invalid_action_snapshot" } {
+  try {
+    if (!hasFfufMarker(params.snapshot)) return { ok: false, reason: "not_ffuf_snapshot" };
+    const marker = ffufOptionsForSnapshot(params.snapshot);
+    if (marker === null) return { ok: false, reason: "invalid_action_snapshot" };
+    const outputJsonPath = resolveFfufJsonPath(params.runRoot, params.runId, params.fence);
+    const options: FfufActionOptions = { ...marker, outputJsonPath };
+    const built = buildFfufArgv(options);
+    if (!built.ok) return { ok: false, reason: "invalid_action_snapshot" };
+    return { ok: true, options, argv: built.argv };
   } catch {
     return { ok: false, reason: "invalid_action_snapshot" };
   }
@@ -413,6 +443,139 @@ export async function runOnce(
     cleanup();
     await completeRun(config, lease, nextSequence, "failed", "runner_lost").catch(() => {});
     if (signal?.aborted) throw new RunnerShutdownError();
+    return true;
+  }
+
+  // ffuf discovery runs before the HTTP probe branch: an ffuf origin is also
+  // a URL target, so the ffuf marker must win dispatch. Corrupt markers fail
+  // closed here instead of falling through to a plain probe.
+  const ffuf = prepareFfufExecution({
+    snapshot: acquired.actionSnapshot,
+    runRoot: config.runRoot,
+    runId: lease.runId,
+    fence: lease.fence,
+  });
+  if (ffuf.ok || ffuf.reason === "invalid_action_snapshot") {
+    if (!ffuf.ok) {
+      cleanup();
+      await completeRun(config, lease, nextSequence, "failed", "invalid_ffuf_action_contract").catch(() => {});
+      return true;
+    }
+    try {
+      await verifyExecutable(FFUF_DEFAULT_EXECUTABLE);
+    } catch {
+      cleanup();
+      await completeRun(config, lease, nextSequence, "failed", "ffuf_missing").catch(() => {});
+      return true;
+    }
+    if (isAuthorityLost()) {
+      cleanup();
+      await completeRun(config, lease, nextSequence, "failed", "runner_lost").catch(() => {});
+      if (signal?.aborted) throw new RunnerShutdownError();
+      return true;
+    }
+
+    let captured: ProcessResult | null = null;
+    let cancelSpawn: (() => Promise<void>) | null = null;
+    const ffufSpawn = (request: { executable: string; argv: readonly string[] }) => {
+      const handle = runSupervisedCommand({
+        runId: lease.runId,
+        leaseId: lease.leaseId,
+        fence: lease.fence,
+        runRoot: config.runRoot,
+        executable: request.executable,
+        argv: request.argv,
+        secrets: [config.secret],
+      });
+      cancelSpawn = () => handle.cancel();
+      return handle.then((result) => {
+        captured = result;
+        return { exitCode: result.exitCode };
+      });
+    };
+    const readFfufOutput = async (absolutePath: string): Promise<Buffer> => {
+      if (absolutePath !== ffuf.options.outputJsonPath) throw new Error("ffuf_json_unavailable");
+      return readFfufJsonSecurely({ runRoot: config.runRoot, runId: lease.runId, fence: lease.fence });
+    };
+    let ffufFenceCheck: ReturnType<typeof setInterval> | null = null;
+    ffufFenceCheck = setInterval(() => {
+      const nowMonotonic = globalThis.performance.now();
+      if (nowMonotonic >= authorityDeadlineMonotonic - 7000 || hbFailed || signal?.aborted || shutdownAfterStarted) {
+        void cancelSpawn?.();
+        if (ffufFenceCheck !== null) clearInterval(ffufFenceCheck);
+      }
+    }, 500);
+    if (typeof (ffufFenceCheck as unknown as { unref?: () => void }).unref === "function") {
+      (ffufFenceCheck as unknown as { unref: () => void }).unref?.();
+    }
+
+    let discovery: Awaited<ReturnType<typeof runFfufDiscovery>>;
+    try {
+      discovery = await runFfufDiscovery(
+        {
+          runContext: { runId: lease.runId, leaseId: lease.leaseId, fence: lease.fence, runRoot: config.runRoot },
+          ffufExecutable: FFUF_DEFAULT_EXECUTABLE,
+          spawn: ffufSpawn,
+          readOutputJson: readFfufOutput,
+        },
+        ffuf.options,
+      );
+    } catch {
+      discovery = { ok: false, error: { code: "ffuf_parse_error" } };
+    } finally {
+      if (ffufFenceCheck !== null) clearInterval(ffufFenceCheck);
+    }
+    cleanup();
+
+    const readPartialJson = async (): Promise<Buffer | undefined> => {
+      try {
+        return await readFfufJsonSecurely({ runRoot: config.runRoot, runId: lease.runId, fence: lease.fence });
+      } catch {
+        return undefined;
+      }
+    };
+
+    if (signal?.aborted === true || shutdownAfterStarted || hbFailed) {
+      if (captured !== null) {
+        const partial = await readPartialJson();
+        try {
+          await publishFfufArtifacts(config, lease, captured, {
+            isCancelled: true,
+            eventSequence: nextSequence,
+            ...(partial === undefined ? {} : { ffufJson: partial }),
+            ffufExitCode: discovery.ok ? discovery.exitCode : null,
+          });
+        } catch {}
+      }
+      await completeRun(config, lease, nextSequence, "failed", "runner_lost").catch(() => {});
+      if (signal?.aborted) throw new RunnerShutdownError();
+      return true;
+    }
+
+    if (captured !== null) {
+      const preserved = await readPartialJson();
+      try {
+        await publishFfufArtifacts(config, lease, captured, {
+          isCancelled: false,
+          eventSequence: nextSequence,
+          ...(preserved === undefined ? {} : { ffufJson: preserved }),
+          ffufExitCode: discovery.ok ? discovery.exitCode : null,
+        });
+      } catch (e) {
+        await completeRun(config, lease, nextSequence, "failed", "evidence_publication_failed").catch(() => {});
+        if (e instanceof EvidencePublicationError) throw e;
+        throw new EvidencePublicationError("evidence_publication_failed");
+      }
+    }
+    if (!discovery.ok) {
+      await completeRun(config, lease, nextSequence, "failed", discovery.error.code).catch(() => {});
+      return true;
+    }
+    if (discovery.exitCode === 0) {
+      await completeRun(config, lease, nextSequence, "succeeded", null);
+    } else {
+      await completeRun(config, lease, nextSequence, "failed", "process_failed");
+    }
     return true;
   }
 

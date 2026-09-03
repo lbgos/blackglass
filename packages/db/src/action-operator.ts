@@ -2,6 +2,7 @@ import {
   canonicalizeJson,
   CreateActionRequestSchema,
   DeclaredPortsSchema,
+  FfufDiscoveryOptionsSchema,
   type ActionSnapshot,
   type CanonicalCidrTarget,
   type CanonicalIpTarget,
@@ -38,6 +39,23 @@ export function declaredPortsFromTypedOptions(
     (options as { declaredPorts?: unknown }).declaredPorts,
   );
   return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Informational risk tier for a planned snapshot's typed options.
+ * ffuf discovery is T2: one concise pre-run warning unless the engagement
+ * auto-continues. Nmap (T1) and HTTP probing carry no tier warning.
+ */
+export function riskTierReasonsForTypedOptions(
+  options: unknown,
+): WarningReasonCode[] {
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    return [];
+  }
+  const parsed = FfufDiscoveryOptionsSchema.safeParse(
+    (options as { ffuf?: unknown }).ffuf,
+  );
+  return parsed.success ? ["risk_tier_t2"] : [];
 }
 
 function targetIdentity(target: CanonicalTarget): OperatorResult<string> {

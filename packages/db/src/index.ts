@@ -67,6 +67,7 @@ export {
 } from "./runner.js";
 export { NmapServiceRepository } from "./nmap-service.js";
 export { HttpProbeRepository } from "./http-probe.js";
+export { FfufRepository } from "./ffuf.js";
 export { RunOutputRepository } from "./run-output.js";
 export {
   actionCoveredDestinations,
@@ -78,6 +79,7 @@ export {
   engagements,
   evidenceArtifacts,
   evidenceGrants,
+  ffufResults,
   findings,
   httpProbeResults,
   nmapServices,

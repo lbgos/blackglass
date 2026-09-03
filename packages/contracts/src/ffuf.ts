@@ -1,13 +1,21 @@
 import { z } from "zod";
 
+import { EngagementSchema } from "./engagement.js";
+import { EvidenceDigestSchema, OpaqueArtifactIdSchema } from "./evidence.js";
+
 /**
  * Slice 1 ffuf content-discovery contract.
  * Typed options plus the JSON parser contract. Strict Zod, no passthrough.
- * No API, DB, UI, or settings store in this slice.
+ * Slice 2 wires it into the operator flow: launch validation, snapshot
+ * marker options, the ffuf-json evidence slot, and projected results.
+ * The settings store backend stays out of scope: the wordlist path remains
+ * an explicit operator input validated here.
  */
 
 export const FFUF_PARSER_VERSION = "ffuf-json-v1" as const;
 export const FFUF_MAX_RESULTS = 100_000;
+/** Guard against unbounded JSON reads; ffuf output scales with the wordlist. */
+export const FFUF_MAX_JSON_BYTES = 64 * 1024 * 1024;
 export const FFUF_DEFAULT_MATCH_CODES = [200, 204, 301, 302, 307, 308, 401, 403] as const;
 
 function isHttpOrigin(value: string): boolean {
@@ -90,3 +98,63 @@ export const FfufDiscoveryErrorSchema = z.strictObject({
 });
 
 export type FfufDiscoveryError = z.infer<typeof FfufDiscoveryErrorSchema>;
+
+/**
+ * Slice 2 operator surface.
+ * The JSON output path is trusted host state derived by the runner from its
+ * controlled run directory, so it is never an operator option. Everything
+ * else stays validated here, including the explicit wordlist path.
+ */
+export const FfufDiscoveryOptionsSchema = FfufActionOptionsSchema.omit({
+  outputJsonPath: true,
+});
+
+export type FfufDiscoveryOptions = z.infer<typeof FfufDiscoveryOptionsSchema>;
+
+export const FfufDiscoveryLaunchSchema = z.strictObject({
+  expectedEngagementRevision: z.number().int().positive(),
+  expectedActiveScopeRevisionId: EngagementSchema.shape.id.nullable(),
+  origin: FfufDiscoveryOptionsSchema.shape.origin,
+  wordlistPath: FfufDiscoveryOptionsSchema.shape.wordlistPath,
+  rate: FfufDiscoveryOptionsSchema.shape.rate,
+  threads: FfufDiscoveryOptionsSchema.shape.threads,
+  timeoutSeconds: FfufDiscoveryOptionsSchema.shape.timeoutSeconds,
+  maxTimeSeconds: FfufDiscoveryOptionsSchema.shape.maxTimeSeconds,
+  matchStatusCodes: FfufDiscoveryOptionsSchema.shape.matchStatusCodes,
+});
+
+export type FfufDiscoveryLaunch = z.infer<typeof FfufDiscoveryLaunchSchema>;
+
+/** Raw ffuf -of json output is preserved as tool_raw under this slot. */
+export const FFUF_ARTIFACT_SLOT = "ffuf-json" as const;
+
+export function isFfufArtifactSlot(slot: string): boolean {
+  return slot === FFUF_ARTIFACT_SLOT;
+}
+
+export const FfufParserVersionSchema = z.literal(FFUF_PARSER_VERSION);
+
+export const FfufProjectedSchema = z.strictObject({
+  source: z.literal("ffuf"),
+  parserVersion: FfufParserVersionSchema,
+  url: z.string().min(1).max(2048),
+  status: z.number().int().min(100).max(599),
+  length: z.number().int().min(0),
+  words: z.number().int().min(0),
+  lines: z.number().int().min(0),
+  redirectlocation: z.string().min(1).max(2048).nullable(),
+  fuzz: z.string().min(1).max(2048),
+  runId: z.string().min(1).max(255),
+  artifactId: OpaqueArtifactIdSchema,
+  artifactDigest: EvidenceDigestSchema,
+  observedAt: z.iso.datetime({ offset: true }),
+});
+
+export type FfufProjected = z.infer<typeof FfufProjectedSchema>;
+
+export const EngagementFfufResultsParamsSchema = z.strictObject({
+  engagementId: EngagementSchema.shape.id,
+});
+export const EngagementFfufResultsResponseSchema = z.array(FfufProjectedSchema);
+
+export type EngagementFfufResultsParams = z.infer<typeof EngagementFfufResultsParamsSchema>;

@@ -34,7 +34,7 @@ import {
   warningReasonSummary,
 } from "./action-targets.js";
 import { engagementMutationMessage, isRevisionConflict } from "./errors.js";
-import { engagementHttpProbesQueryKey, engagementServicesQueryKey, useEngagementDetailQuery } from "./query.js";
+import { engagementHttpProbesQueryKey, engagementServicesQueryKey, engagementFfufResultsQueryKey, useEngagementDetailQuery } from "./query.js";
 import { useEngagementWorkspace } from "./workspace-context.js";
 
 export function ActionPlanner({
@@ -146,6 +146,7 @@ function PlannerBody({
     hasInvalidatedServicesRef.current = trackedActionId;
     void queryClient.invalidateQueries({ queryKey: engagementServicesQueryKey(engagementId) });
     void queryClient.invalidateQueries({ queryKey: engagementHttpProbesQueryKey(engagementId) });
+    void queryClient.invalidateQueries({ queryKey: engagementFfufResultsQueryKey(engagementId) });
   }, [engagementId, polledActionQuery.data, queryClient, trackedActionId]);
 
   useEffect(() => {
@@ -326,7 +327,9 @@ function PlannerBody({
   );
 }
 
-function WarningCard({
+// Shared single-warning card: every representable action (nmap, HTTP probe,
+// ffuf discovery) continues, adds scope, or cancels through this one UI.
+export function WarningCard({
   action,
   engagementId,
   expectedEngagementRevision,

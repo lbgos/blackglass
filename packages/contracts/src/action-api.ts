@@ -67,6 +67,7 @@ const ActionRevisionConflictSchema = z.strictObject({
 
 export const ActionMutationErrorSchema = z.union([
   z.strictObject({ code: z.literal("invalid_request") }),
+  z.strictObject({ code: z.literal("invalid_ffuf_action_contract") }),
   z.strictObject({ code: z.literal("engagement_not_found") }),
   z.strictObject({ code: z.literal("action_not_found") }),
   z.strictObject({ code: z.literal("engagement_archived") }),

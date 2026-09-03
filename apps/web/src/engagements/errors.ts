@@ -11,6 +11,7 @@ export const ENGAGEMENTS_QUERY_ERROR_MESSAGE = "The engagement list request fail
 export const ENGAGEMENT_DETAIL_QUERY_ERROR_MESSAGE = "The engagement request failed.";
 export const ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE = "The services request failed.";
 export const ENGAGEMENT_HTTP_PROBES_QUERY_ERROR_MESSAGE = "The probe results request failed.";
+export const ENGAGEMENT_FFUF_RESULTS_QUERY_ERROR_MESSAGE = "The ffuf results request failed.";
 export const FINDINGS_QUERY_ERROR_MESSAGE = "The findings request failed.";
 export const ENGAGEMENT_MUTATION_ERROR_MESSAGE = "The engagement request failed.";
 export const FINDING_MUTATION_ERROR_MESSAGE = "The findings request failed.";
@@ -43,6 +44,7 @@ export type FindingMutationErrorCode = keyof typeof FINDING_MUTATION_ERROR_COPY;
 export const ACTION_MUTATION_ERROR_COPY = {
   action_not_found: "That action is no longer available.",
   invalid_action_transition: "That action is not valid now.",
+  invalid_ffuf_action_contract: "The ffuf options were not accepted. Check the origin, wordlist, and limits.",
   action_already_queued: "That action is already queued.",
   capability_error_not_overridable: "This action cannot run. Continue is not available.",
   snapshot_binding_mismatch: "The action snapshot changed. Showing the latest revision.",
@@ -82,6 +84,13 @@ export class EngagementHttpProbesQueryError extends Error {
   constructor() {
     super(ENGAGEMENT_HTTP_PROBES_QUERY_ERROR_MESSAGE);
     this.name = "EngagementHttpProbesQueryError";
+  }
+}
+
+export class EngagementFfufResultsQueryError extends Error {
+  constructor() {
+    super(ENGAGEMENT_FFUF_RESULTS_QUERY_ERROR_MESSAGE);
+    this.name = "EngagementFfufResultsQueryError";
   }
 }
 

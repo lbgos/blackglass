@@ -17,6 +17,7 @@ import {
 import { partitionEngagements, useEngagementDetailQuery, useEngagementsQuery } from "./query.js";
 import { ActionPlanner } from "./action-planner.js";
 import { EngagementFindingsSection } from "./findings.js";
+import { EngagementFfufSection } from "./ffuf-surface.js";
 import { EngagementNotesSection } from "./notes.js";
 import { SavedScopeEditor } from "./scope-editor.js";
 import { EngagementHttpProbesSection } from "./http-probe-surface.js";
@@ -243,6 +244,10 @@ function EngagementDetail({ engagement }: { engagement: Engagement }) {
 
       <div className="mt-5">
         <EngagementHttpProbesSection engagementId={displayed.id} />
+      </div>
+
+      <div className="mt-5">
+        <EngagementFfufSection archived={displayed.status === "archived"} engagementId={displayed.id} />
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">

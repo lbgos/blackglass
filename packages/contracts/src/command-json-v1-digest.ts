@@ -121,6 +121,18 @@ export const CommandJsonV1CancelActionBodyDigestSchema = z.object({
   expectedRevision: jsonField,
 });
 
+export const CommandJsonV1CreateFfufDiscoveryBodyDigestSchema = z.object({
+  expectedEngagementRevision: jsonField,
+  expectedActiveScopeRevisionId: jsonField,
+  origin: jsonField,
+  wordlistPath: jsonField,
+  rate: jsonField,
+  threads: jsonField,
+  timeoutSeconds: jsonField,
+  maxTimeSeconds: jsonField,
+  matchStatusCodes: jsonField,
+});
+
 export const CommandJsonV1PortRangeDigestSchema = z.object({
   from: jsonField,
   to: jsonField,
@@ -398,6 +410,12 @@ export const commandJsonV1CancelActionDigest = digestProjection({
   path: CommandJsonV1ActionIdPathDigestSchema,
   query: CommandJsonV1EmptyObjectDigestSchema,
   body: objectProjection(CommandJsonV1CancelActionBodyDigestSchema),
+});
+
+export const commandJsonV1CreateFfufDiscoveryDigest = digestProjection({
+  path: CommandJsonV1EngagementIdPathDigestSchema,
+  query: CommandJsonV1EmptyObjectDigestSchema,
+  body: objectProjection(CommandJsonV1CreateFfufDiscoveryBodyDigestSchema),
 });
 
 export const CommandJsonV1StartEnrollmentChallengeBodyDigestSchema = z.object({

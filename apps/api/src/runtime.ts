@@ -1,6 +1,7 @@
 import {
   EngagementRepository,
   EvidenceGrantRepository,
+  FfufRepository,
   HttpProbeRepository,
   NmapServiceRepository,
   OperatorCommandRepository,
@@ -21,6 +22,7 @@ import {
 import { BackupLock } from "./evidence/backup-lock.js";
 import { EvidencePublicationService } from "./evidence/evidence-publication.js";
 import { EvidenceStore } from "./evidence/evidence-store.js";
+import { FfufProjectionService } from "./evidence/ffuf-projection.js";
 import { HttpProbeProjectionService } from "./evidence/http-probe-projection.js";
 import { NmapProjectionService } from "./evidence/nmap-projection.js";
 
@@ -48,6 +50,7 @@ export async function buildStorageBackedApp(
     const evidenceGrantRepository = new EvidenceGrantRepository(database.db);
     const nmapServiceRepository = new NmapServiceRepository(database.db);
     const httpProbeRepository = new HttpProbeRepository(database.db);
+    const ffufRepository = new FfufRepository(database.db);
     const runOutputRepository = new RunOutputRepository(database.db);
 
     // Evidence publication is fail-closed: without a loadable native binding
@@ -67,6 +70,7 @@ export async function buildStorageBackedApp(
         backupLock = lockResult.lock;
         const nmapProjection = new NmapProjectionService(storeResult.store, nmapServiceRepository);
         const httpProbeProjection = new HttpProbeProjectionService(storeResult.store, httpProbeRepository);
+        const ffufProjection = new FfufProjectionService(storeResult.store, ffufRepository);
         evidencePublication = new EvidencePublicationService({
           repository: evidenceGrantRepository,
           store: storeResult.store,
@@ -75,7 +79,10 @@ export async function buildStorageBackedApp(
             const nmap = await nmapProjection.projectForArtifact(artifactId);
             if (!nmap.ok) return nmap;
             if (nmap.skipped !== true) return nmap;
-            return httpProbeProjection.projectForArtifact(artifactId);
+            const probe = await httpProbeProjection.projectForArtifact(artifactId);
+            if (!probe.ok) return probe;
+            if (probe.skipped !== true) return probe;
+            return ffufProjection.projectForArtifact(artifactId);
           },
         });
         evidenceStore = storeResult.store;
@@ -95,6 +102,7 @@ export async function buildStorageBackedApp(
       ...(backupLock === undefined ? {} : { storageGate: backupLock }),
       nmapServiceRepository,
       httpProbeRepository,
+      ffufRepository,
       runOutputRepository,
       async getDevelopmentStorageReadiness() {
         await checkDevelopmentStorage(dataDirectory);

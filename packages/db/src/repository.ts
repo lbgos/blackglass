@@ -11,6 +11,7 @@ import {
   EngagementWithActiveScopeSchema,
   FINDING_CONTRACT_VERSION,
   FindingSchema,
+  FfufDiscoveryLaunchSchema,
   ScopeRevisionSchema,
   UpdateEngagementNotesRequestSchema,
   type AcceptHeartbeatResult,
@@ -52,6 +53,7 @@ import {
   derivePlanningWarningState,
   normalizeOperatorTargets,
   parseCreateActionRequest,
+  riskTierReasonsForTypedOptions,
 } from "./action-operator.js";
 import {
   acquireRunLease,
@@ -164,6 +166,10 @@ export interface EngagementWriteTransaction {
     input: unknown,
   ): RepositoryResult<PersistedAction, ActionRepositoryError>;
   planOperatorAction(
+    engagementId: string,
+    input: unknown,
+  ): RepositoryResult<PersistedAction, ActionRepositoryError>;
+  planFfufDiscoveryAction(
     engagementId: string,
     input: unknown,
   ): RepositoryResult<PersistedAction, ActionRepositoryError>;
@@ -875,6 +881,89 @@ class TransactionRepository implements EngagementWriteTransaction {
     });
   }
 
+  planFfufDiscoveryAction(
+    engagementId: string,
+    input: unknown,
+  ): RepositoryResult<PersistedAction, ActionRepositoryError> {
+    const parsed = FfufDiscoveryLaunchSchema.safeParse(input);
+    if (!parsed.success) return failed({ code: "invalid_repository_input" });
+    const detail = this.getEngagement(engagementId);
+    if (!detail.ok) return detail;
+    const engagement = detail.value.engagement;
+    if (engagement.revision !== parsed.data.expectedEngagementRevision) {
+      return failed({
+        code: "revision_conflict",
+        currentRevision: engagement.revision,
+        resourceType: "engagement",
+        resourceId: engagement.id,
+      });
+    }
+    if (engagement.status === "archived") {
+      return failed({ code: "engagement_archived" });
+    }
+    if (
+      engagement.activeScopeRevisionId !==
+      parsed.data.expectedActiveScopeRevisionId
+    ) {
+      return failed({ code: "invalid_repository_input" });
+    }
+
+    const targets = normalizeOperatorTargets([parsed.data.origin]);
+    if (!targets.ok) return targets;
+    const canonical = targets.value[0];
+    if (targets.value.length !== 1 || canonical?.kind !== "url") {
+      return failed({ code: "invalid_repository_input" });
+    }
+    const typedOptions = {
+      declaredPorts: null,
+      ffuf: {
+        // The warned canonical URL, not the raw operator string, so the
+        // executed argv always matches the acknowledged target context.
+        origin: canonical.url,
+        wordlistPath: parsed.data.wordlistPath,
+        rate: parsed.data.rate,
+        threads: parsed.data.threads,
+        timeoutSeconds: parsed.data.timeoutSeconds,
+        maxTimeSeconds: parsed.data.maxTimeSeconds,
+        matchStatusCodes: [...parsed.data.matchStatusCodes],
+      },
+    };
+    const actionId = this.nextId();
+    const warning = derivePlanningWarningState({
+      actionId,
+      scopeRevisionId: engagement.activeScopeRevisionId,
+      rules: detail.value.activeScopeRevision?.rules ?? [],
+      targets: targets.value,
+      declaredPorts: null,
+    });
+    if (!warning.ok) return warning;
+    // ffuf discovery is T2: exactly one concise pre-run warning unless the
+    // engagement auto-continues. The tier rides the shared warning path.
+    for (const reason of riskTierReasonsForTypedOptions(typedOptions)) {
+      if (!warning.value.reasonCodes.includes(reason)) {
+        warning.value.reasonCodes.push(reason);
+      }
+    }
+    const snapshot = bindPlannedSnapshot({
+      actionId,
+      snapshotId: this.nextId(),
+      version: 1,
+      scopeRevisionId: engagement.activeScopeRevisionId,
+      targets: targets.value,
+      typedOptions,
+      resolutionSnapshots: [],
+      warningState: warning.value,
+    });
+    if (!snapshot.ok) return snapshot;
+    return this.persistPlannedAction({
+      engagementId,
+      snapshot: snapshot.value,
+      representable: true,
+      capabilityErrorCode: null,
+      occurredAt: this.clock().toISOString(),
+    });
+  }
+
   addScopeAndRunOperatorAction(
     engagementId: string,
     actionId: string,
@@ -933,6 +1022,12 @@ class TransactionRepository implements EngagementWriteTransaction {
     });
     if (!warning.ok) {
       throw new Error("action persist write aborted: invalid_repository_input");
+    }
+    // Re-planning preserves the action's informational risk tier (ffuf stays T2).
+    for (const reason of riskTierReasonsForTypedOptions(latest.typedOptions)) {
+      if (!warning.value.reasonCodes.includes(reason)) {
+        warning.value.reasonCodes.push(reason);
+      }
     }
     const snapshot = bindPlannedSnapshot({
       actionId,
@@ -1322,6 +1417,17 @@ export class EngagementRepository {
   ): RepositoryResult<PersistedAction, ActionRepositoryError> {
     return this.runMutation(
       (repository) => repository.planOperatorAction(engagementId, input),
+      transaction,
+    );
+  }
+
+  planFfufDiscoveryAction(
+    engagementId: string,
+    input: unknown,
+    transaction?: EngagementWriteTransaction,
+  ): RepositoryResult<PersistedAction, ActionRepositoryError> {
+    return this.runMutation(
+      (repository) => repository.planFfufDiscoveryAction(engagementId, input),
       transaction,
     );
   }

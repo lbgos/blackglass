@@ -73,11 +73,13 @@ async function publishSingleArtifact(input: {
   const originalFileName =
     slot === "nmap-xml"
       ? "nmap.xml"
-      : slot === "stdout"
-        ? "stdout.log"
-        : slot === "stderr"
-          ? "stderr.log"
-          : "http-probe.json";
+      : slot === "ffuf-json"
+        ? "ffuf.json"
+        : slot === "stdout"
+          ? "stdout.log"
+          : slot === "stderr"
+            ? "stderr.log"
+            : "http-probe.json";
   const declaredContentType =
     slot === "nmap-xml"
       ? "application/xml"
@@ -334,12 +336,21 @@ export async function publishHttpProbeArtifacts(
  * Completeness: truncated if stream metadata truncated, else partial on cancellation, else complete. Truncated wins.
  * Grant uses lease identity, live eventSequence, durable outbox, PUT raw Buffer, POST strict complete.
  * Preserve first slot if second fails: stdout is not rolled back when stderr fails.
+ * An optional tool_raw sidecar (nmap-xml or ffuf-json) publishes last with
+ * partial completeness on cancellation or a non-zero tool exit.
  */
 export async function publishEvidenceArtifacts(
   config: RunnerConfig,
   lease: LeaseIdentity,
   result: ProcessResult,
-  options: { isCancelled: boolean; eventSequence: number; nmapXml?: Buffer; nmapExitCode?: number | null },
+  options: {
+    isCancelled: boolean;
+    eventSequence: number;
+    nmapXml?: Buffer;
+    nmapExitCode?: number | null;
+    ffufJson?: Buffer;
+    ffufExitCode?: number | null;
+  },
 ): Promise<void> {
   const isCancelled = options.isCancelled;
   const eventSequence = options.eventSequence;
@@ -363,29 +374,53 @@ export async function publishEvidenceArtifacts(
     truncated: result.stderrMeta.truncated,
     isCancelled,
   });
+  const sidecars: Array<{ slot: "nmap-xml" | "ffuf-json"; buffer: Buffer; exitCode: number | null | undefined }> = [];
   if (options.nmapXml !== undefined) {
-    let nmapCompleteness: "complete" | "partial" = "complete";
-
+    sidecars.push({ slot: "nmap-xml", buffer: options.nmapXml, exitCode: options.nmapExitCode });
+  }
+  if (options.ffufJson !== undefined) {
+    sidecars.push({ slot: "ffuf-json", buffer: options.ffufJson, exitCode: options.ffufExitCode });
+  }
+  for (const sidecar of sidecars) {
+    let toolCompleteness: "complete" | "partial" = "complete";
     if (isCancelled) {
-      nmapCompleteness = "partial";
+      toolCompleteness = "partial";
     } else if (
-      options.nmapExitCode !== undefined &&
-      options.nmapExitCode !== null &&
-      options.nmapExitCode !== 0
+      sidecar.exitCode !== undefined &&
+      sidecar.exitCode !== null &&
+      sidecar.exitCode !== 0
     ) {
-      nmapCompleteness = "partial";
+      toolCompleteness = "partial";
     }
-
     await publishSingleArtifact({
       config,
       lease,
       eventSequence,
-      slot: "nmap-xml",
+      slot: sidecar.slot,
       kind: "tool_raw",
-      buffer: options.nmapXml,
+      buffer: sidecar.buffer,
       truncated: false,
       isCancelled,
-      completenessOverride: nmapCompleteness,
+      completenessOverride: toolCompleteness,
     });
   }
+}
+
+/**
+ * Publish ffuf discovery evidence: stdout, stderr, then the raw ffuf -of
+ * json output as tool_raw under the ffuf-json slot. The control plane
+ * projects parsed results from the preserved JSON bytes.
+ */
+export async function publishFfufArtifacts(
+  config: RunnerConfig,
+  lease: LeaseIdentity,
+  result: ProcessResult,
+  options: { isCancelled: boolean; eventSequence: number; ffufJson?: Buffer; ffufExitCode?: number | null },
+): Promise<void> {
+  return publishEvidenceArtifacts(config, lease, result, {
+    isCancelled: options.isCancelled,
+    eventSequence: options.eventSequence,
+    ...(options.ffufJson === undefined ? {} : { ffufJson: options.ffufJson }),
+    ...(options.ffufExitCode === undefined ? {} : { ffufExitCode: options.ffufExitCode }),
+  });
 }
