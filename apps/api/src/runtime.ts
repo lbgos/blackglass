@@ -4,6 +4,7 @@ import {
   HttpProbeRepository,
   NmapServiceRepository,
   OperatorCommandRepository,
+  RunOutputRepository,
   RunRepository,
   RunnerRepository,
   openEngagementDatabase,
@@ -47,6 +48,7 @@ export async function buildStorageBackedApp(
     const evidenceGrantRepository = new EvidenceGrantRepository(database.db);
     const nmapServiceRepository = new NmapServiceRepository(database.db);
     const httpProbeRepository = new HttpProbeRepository(database.db);
+    const runOutputRepository = new RunOutputRepository(database.db);
 
     // Evidence publication is fail-closed: without a loadable native binding
     // or valid managed evidence roots, the upload routes are not registered.
@@ -93,6 +95,7 @@ export async function buildStorageBackedApp(
       ...(backupLock === undefined ? {} : { storageGate: backupLock }),
       nmapServiceRepository,
       httpProbeRepository,
+      runOutputRepository,
       async getDevelopmentStorageReadiness() {
         await checkDevelopmentStorage(dataDirectory);
         return "ready" as const;

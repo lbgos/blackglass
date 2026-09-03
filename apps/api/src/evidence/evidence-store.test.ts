@@ -22,7 +22,7 @@ import { promisify } from "node:util";
 import { O_CLOEXEC, loadEvidenceNative } from "@blackglass/evidence-native";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { EvidenceStore, DOWNLOAD_CHUNK_BYTES } from "./evidence-store.js";
+import { EvidenceStore, DOWNLOAD_CHUNK_BYTES, VERIFIED_EXCERPT_MAX_BYTES } from "./evidence-store.js";
 
 const writeFileAt = promisify(write);
 const fsyncFd = promisify(fsync);
@@ -451,6 +451,57 @@ describe("EvidenceStore", () => {
         break;
       }
       expect(openFdCount()).toBe(beforeAbort - 1);
+    });
+  });
+
+  describe("verifiedExcerpt", () => {
+    it("returns exact bytes with truncated false when under the cap", async () => {
+      const { store } = await openStore();
+      const bytes = "hello-excerpt-bytes";
+      await publishReady(store, "up-excerpt", "artifact-excerpt", bytes);
+      const excerpt = await store.verifiedExcerpt({
+        artifactId: "artifact-excerpt",
+        expectedSizeBytes: bytes.length,
+        expectedDigest: sha256(bytes),
+        maxBytes: VERIFIED_EXCERPT_MAX_BYTES,
+      });
+      expect(excerpt).toEqual({
+        status: "ready",
+        totalBytes: bytes.length,
+        truncated: false,
+        content: Buffer.from(bytes),
+      });
+    });
+
+    it("truncates to maxBytes with a truthful flag and never returns more", async () => {
+      const { store } = await openStore();
+      const bytes = "x".repeat(VERIFIED_EXCERPT_MAX_BYTES + 100);
+      await publishReady(store, "up-excerpt-big", "artifact-excerpt-big", bytes);
+      const excerpt = await store.verifiedExcerpt({
+        artifactId: "artifact-excerpt-big",
+        expectedSizeBytes: bytes.length,
+        expectedDigest: sha256(bytes),
+        maxBytes: VERIFIED_EXCERPT_MAX_BYTES,
+      });
+      if (excerpt.status !== "ready") throw new Error(`expected ready: ${excerpt.status}`);
+      expect(excerpt.totalBytes).toBe(bytes.length);
+      expect(excerpt.truncated).toBe(true);
+      expect(excerpt.content.length).toBe(VERIFIED_EXCERPT_MAX_BYTES);
+      expect(excerpt.content.equals(Buffer.from(bytes.slice(0, VERIFIED_EXCERPT_MAX_BYTES)))).toBe(
+        true,
+      );
+    });
+
+    it("rejects oversized maxBytes without touching the filesystem", async () => {
+      const { store } = await openStore();
+      await expect(
+        store.verifiedExcerpt({
+          artifactId: "artifact-excerpt",
+          expectedSizeBytes: 0,
+          expectedDigest: sha256(""),
+          maxBytes: VERIFIED_EXCERPT_MAX_BYTES + 1,
+        }),
+      ).resolves.toEqual({ status: "corrupt", code: "invalid_download_request" });
     });
   });
 });

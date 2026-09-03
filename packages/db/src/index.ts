@@ -67,6 +67,7 @@ export {
 } from "./runner.js";
 export { NmapServiceRepository } from "./nmap-service.js";
 export { HttpProbeRepository } from "./http-probe.js";
+export { RunOutputRepository } from "./run-output.js";
 export {
   actionCoveredDestinations,
   actionSnapshots,

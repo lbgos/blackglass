@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   canonicalizeJson,
   isOperatorArtifactContentRoute,
+  isOperatorRunOutputRoute,
   isRunnerControlRoute,
   parseRunnerAuthorizationHeader,
   type CommandJsonV1DigestProjection,
@@ -233,13 +234,14 @@ export function registerRunnerAuthHook(
     }
 
     if (credential.ok) {
-      // Only the GET verb of the operator artifact-content route serves
-      // engagement evidence to operators; a syntactically valid runner
-      // credential must never be accepted there (nor treated as the generic
-      // operator 403). Other methods keep the existing route behavior.
+      // Only the GET verb of the operator artifact-content and run-output
+      // routes serves engagement evidence to operators; a syntactically valid
+      // runner credential must never be accepted there (nor treated as the
+      // generic operator 403). Other methods keep existing route behavior.
       if (
         request.method === "GET" &&
-        isOperatorArtifactContentRoute(request.url)
+        (isOperatorArtifactContentRoute(request.url) ||
+          isOperatorRunOutputRoute(request.url))
       ) {
         return sendRunnerError(reply, 403, { code: "operator_identity_required" });
       }
