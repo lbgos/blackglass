@@ -605,4 +605,67 @@ describe("action planner", () => {
     }
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
   });
+
+  it("polls the current action to succeeded and invalidates services once", async () => {
+    const noScope = { ...activeEngagement, revision: 1, activeScopeRevisionId: null };
+    const queued = persistedAction("queued");
+    const succeeded = persistedAction("succeeded", { queuedSnapshotVersion: 1, runState: null });
+    const fetchMock = stubFetch((url, init) => {
+      if (url.endsWith("/actions") && init?.method === "POST") return response(queued, 201);
+      if (url.includes(`/actions/${ACTION_ID}`) && (init?.method === undefined || init?.method === "GET")) return response(succeeded);
+      if (url.includes("/services")) return response([]);
+      return readResponse(url, noScope, null) ?? response({ code: "invalid_request" }, 400);
+    });
+    const { queryClient } = await renderPlanner(noScope);
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    await planTarget();
+    expect(await screen.findByText(/Action succeeded/)).toBeTruthy();
+    await waitFor(() => expect(spy.mock.calls.some(([a]) => JSON.stringify((a as { queryKey?: unknown })?.queryKey).includes("services"))).toBe(true));
+    expect(spy.mock.calls.filter(([a]) => JSON.stringify((a as { queryKey?: unknown })?.queryKey).includes("services"))).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).includes(`/actions/${ACTION_ID}`))).toHaveLength(1);
+  });
+
+  it("preserves queued state on failed poll, hides error while retrying, and shows succeeded after Refresh", async () => {
+    const noScope = { ...activeEngagement, revision: 1, activeScopeRevisionId: null };
+    const queued = persistedAction("queued");
+    const succeeded = persistedAction("succeeded", { queuedSnapshotVersion: 1, runState: null });
+    let pollCalls = 0;
+    let releaseSecondPoll: ((value: Response) => void) | undefined;
+    const fetchMock = stubFetch((url, init) => {
+      if (url.endsWith("/actions") && init?.method === "POST") return response(queued, 201);
+      if (url.includes(`/actions/${ACTION_ID}`) && (init?.method === undefined || init?.method === "GET")) {
+        pollCalls += 1;
+        if (pollCalls === 1) return response({ code: "request_failed" }, 500);
+        if (pollCalls === 2) {
+          return new Promise<Response>((resolve) => {
+            releaseSecondPoll = resolve;
+          });
+        }
+        return response(succeeded);
+      }
+      if (url.includes("/services")) return response([]);
+      return readResponse(url, noScope, null) ?? response({ code: "invalid_request" }, 400);
+    });
+    const { queryClient } = await renderPlanner(noScope);
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    await planTarget();
+    expect(await screen.findByText(/Action queued/)).toBeTruthy();
+    expect(await screen.findByText("Status update failed.")).toBeTruthy();
+    expect(screen.queryByText(/Action succeeded/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.queryByText("Status update failed.")).toBeNull());
+    expect(screen.getByText(/Action queued/)).toBeTruthy();
+    releaseSecondPoll!(response(succeeded));
+    expect(await screen.findByText(/Action succeeded/)).toBeTruthy();
+    expect(screen.queryByText("Status update failed.")).toBeNull();
+    await waitFor(() =>
+      expect(
+        spy.mock.calls.some(([a]) => JSON.stringify((a as { queryKey?: unknown })?.queryKey).includes("services")),
+      ).toBe(true),
+    );
+    expect(
+      spy.mock.calls.filter(([a]) => JSON.stringify((a as { queryKey?: unknown })?.queryKey).includes("services")),
+    ).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).includes(`/actions/${ACTION_ID}`))).toHaveLength(2);
+  });
 });

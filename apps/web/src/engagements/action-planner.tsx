@@ -10,12 +10,19 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+
 import {
   useAddScopeAndRunActionMutation,
   useCancelActionMutation,
   useContinueActionMutation,
   useCreateActionMutation,
 } from "./action-mutations.js";
+import {
+  actionLifecycleStatusCopy,
+  isTerminalActionState,
+  persistedActionQueryOptions,
+} from "./action-query.js";
 import {
   buildAddScopeAndRunRules,
   capabilityErrorCopy,
@@ -27,7 +34,7 @@ import {
   warningReasonSummary,
 } from "./action-targets.js";
 import { engagementMutationMessage, isRevisionConflict } from "./errors.js";
-import { useEngagementDetailQuery } from "./query.js";
+import { engagementServicesQueryKey, useEngagementDetailQuery } from "./query.js";
 import { useEngagementWorkspace } from "./workspace-context.js";
 
 export function ActionPlanner({
@@ -57,6 +64,7 @@ export function ActionPlanner({
       ) : null}
       {hasData ? (
         <PlannerBody
+          key={engagementId}
           archived={archived}
           engagementId={engagementId}
           expectedActiveScopeRevisionId={detail.data.activeScopeRevision?.id ?? null}
@@ -104,8 +112,40 @@ function PlannerBody({
   const [queuedBy, setQueuedBy] = useState<"continue" | "add_scope_and_run" | "plan" | undefined>(
     undefined,
   );
+  const [trackedActionId, setTrackedActionId] = useState<string | undefined>(undefined);
+  const queryClient = useQueryClient();
+  const hasInvalidatedServicesRef = useRef<string | null>(null);
 
   const createAction = useCreateActionMutation();
+
+  const polledActionQuery = useQuery({
+    ...persistedActionQueryOptions(engagementId, trackedActionId),
+    refetchInterval: (query) => {
+      const data = query.state.data as PersistedAction | undefined;
+      if (data !== undefined && isTerminalActionState(data.action.state)) return false;
+      if (query.state.error) return false;
+      return 1500;
+    },
+    retry: false,
+  });
+
+  const displayAction = trackedActionId !== undefined ? (polledActionQuery.data ?? result) : undefined;
+  const showPollError =
+    trackedActionId !== undefined && polledActionQuery.isError && !polledActionQuery.isFetching;
+
+  useEffect(() => {
+    hasInvalidatedServicesRef.current = null;
+  }, [trackedActionId]);
+
+  useEffect(() => {
+    const action = polledActionQuery.data;
+    if (action === undefined || trackedActionId === undefined) return;
+    if (action.action.actionId !== trackedActionId) return;
+    if (action.action.state !== "succeeded") return;
+    if (hasInvalidatedServicesRef.current === trackedActionId) return;
+    hasInvalidatedServicesRef.current = trackedActionId;
+    void queryClient.invalidateQueries({ queryKey: engagementServicesQueryKey(engagementId) });
+  }, [engagementId, polledActionQuery.data, queryClient, trackedActionId]);
 
   useEffect(() => {
     if (focusRunsToken === 0) return;
@@ -126,6 +166,7 @@ function PlannerBody({
     setResult(undefined);
     setOutcome(undefined);
     setQueuedBy(undefined);
+    setTrackedActionId(undefined);
     const parsed = parsePlannedTargets(rawTargets);
     const parsedPorts = parseDeclaredPorts(rawDeclaredPorts);
     if (!parsed.ok) setFieldError(parsed.message);
@@ -148,6 +189,7 @@ function PlannerBody({
           if (action.action.state === "queued") {
             setOutcome("queued");
             setQueuedBy("plan");
+            setTrackedActionId(action.action.actionId);
           }
         },
       },
@@ -162,6 +204,11 @@ function PlannerBody({
     setResult(action);
     setOutcome(nextOutcome);
     setQueuedBy(nextQueuedBy);
+    if (nextOutcome === "queued" && action.action.state === "queued") {
+      setTrackedActionId(action.action.actionId);
+    } else {
+      setTrackedActionId(undefined);
+    }
   };
 
   return (
@@ -260,10 +307,12 @@ function PlannerBody({
         />
       ) : null}
 
-      {outcome === "queued" && result?.action.state === "queued" ? (
-        <QueuedConfirmation
-          action={result}
+      {trackedActionId !== undefined && displayAction !== undefined ? (
+        <TrackedActionStatus
+          action={displayAction}
           scopeUpdated={queuedBy === "add_scope_and_run"}
+          showPollError={showPollError}
+          onRefresh={() => void polledActionQuery.refetch()}
         />
       ) : null}
 
@@ -417,24 +466,42 @@ function WarningCard({
   );
 }
 
-function QueuedConfirmation({
+function TrackedActionStatus({
   action,
+  onRefresh,
   scopeUpdated,
+  showPollError,
 }: {
   action: PersistedAction;
+  onRefresh: () => void;
   scopeUpdated: boolean;
+  showPollError: boolean;
 }) {
   const snapshot = latestActionSnapshot(action);
+  const statusText = actionLifecycleStatusCopy(action.action);
+  const isQueued = action.action.state === "queued";
   return (
-    <p className="mt-4 mb-0 text-[13px] text-foreground" role="status">
-      Action queued
-      {scopeUpdated
-        ? ". A new saved-scope revision was created."
-        : ". Saved scope was not changed."}{" "}
-      <span className="font-mono text-[12px] text-muted-foreground">
-        {action.action.actionId} · snapshot {snapshot.version}
-      </span>
-    </p>
+    <div className="mt-4">
+      <p className="mb-0 text-[13px] text-foreground" role="status">
+        {isQueued ? "Action queued" : statusText}
+        {isQueued
+          ? scopeUpdated
+            ? ". A new saved-scope revision was created."
+            : ". Saved scope was not changed."
+          : ""}{" "}
+        <span className="font-mono text-[12px] text-muted-foreground">
+          {action.action.actionId} · snapshot {snapshot.version}
+        </span>
+      </p>
+      {showPollError ? (
+        <p className="mt-2 mb-0 flex items-center gap-2 text-[12px] text-muted-foreground" role="status">
+          <span>Status update failed.</span>
+          <Button type="button" variant="quiet" className="h-7 px-2 text-[12px]" onClick={onRefresh}>
+            Refresh
+          </Button>
+        </p>
+      ) : null}
+    </div>
   );
 }
 
