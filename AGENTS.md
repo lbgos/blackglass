@@ -173,4 +173,8 @@ Report:
 
 PR descriptions are written for the whole project, not for the owner's current machine. An `Owner walkthrough` section is optional and omitted by default. Never include owner-specific worktree paths, occupied ports, running-process assumptions, or instructions addressed only to the owner. When a walkthrough materially improves review, write portable steps that any contributor can follow from a clean checkout and use placeholders for environment-specific paths and ports.
 
+When a walkthrough materially improves review, write portable steps that any contributor can follow from a clean checkout and use placeholders for environment-specific paths and ports.
+
+Keep pull requests small and outward-facing. Budget: at most about 1000 added lines per PR excluding generated files (drizzle snapshots, dist output) and binary assets; split larger work into sequential PRs based on main, each independently reviewable and verified. Write Why and What for an external reader in product language: what the user gains and what changed. Internal orchestration detail (subagent narrative, worktree paths, machine-specific state) stays in the session handoff, never in the PR body.
+
 High-risk changes require an independent review agent from a clean context and owner review of the security boundary. The implementing agent cannot self-approve that risk.
