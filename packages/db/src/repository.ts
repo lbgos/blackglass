@@ -4,10 +4,13 @@ import {
   AddScopeAndRunActionRequestSchema,
   AppendScopeRevisionInputSchema,
   CreateEngagementInputSchema,
+  CreateFindingRequestSchema,
   ENGAGEMENT_CONTRACT_VERSION,
   EngagementNotesSchema,
   EngagementSchema,
   EngagementWithActiveScopeSchema,
+  FINDING_CONTRACT_VERSION,
+  FindingSchema,
   ScopeRevisionSchema,
   UpdateEngagementNotesRequestSchema,
   type AcceptHeartbeatResult,
@@ -17,6 +20,7 @@ import {
   type EngagementNotes,
   type EngagementStatus,
   type EngagementWithActiveScope,
+  type Finding,
   type CanonicalUrlHost,
   type PersistedAction,
   type PersistedRun,
@@ -66,16 +70,20 @@ import {
   engagementActiveScopes,
   engagementNotes,
   engagements,
+  findings,
   scopeRevisions,
   type EngagementNotesRow,
   type EngagementRow,
+  type FindingRow,
   type ScopeRevisionRow,
 } from "./schema.js";
 
 export type RepositoryError =
   | { code: "engagement_archived" }
   | { code: "engagement_not_found" }
+  | { code: "finding_not_found" }
   | { code: "invalid_engagement_transition" }
+  | { code: "invalid_finding_transition" }
   | { code: "invalid_persisted_data" }
   | { code: "invalid_repository_input" }
   | {
@@ -135,6 +143,19 @@ export interface EngagementWriteTransaction {
     engagementId: string,
     input: unknown,
   ): RepositoryResult<EngagementNotes>;
+  createFinding(
+    engagementId: string,
+    input: unknown,
+  ): RepositoryResult<Finding>;
+  listFindings(engagementId: string): RepositoryResult<Finding[]>;
+  resolveFinding(
+    engagementId: string,
+    findingId: string,
+  ): RepositoryResult<Finding>;
+  reopenFinding(
+    engagementId: string,
+    findingId: string,
+  ): RepositoryResult<Finding>;
   getAction(
     engagementId: string,
     actionId: string,
@@ -332,6 +353,30 @@ function engagementNotesFromRow(row: EngagementNotesRow): RepositoryResult<Engag
   const parsed = EngagementNotesSchema.safeParse({
     engagementId: row.engagementId,
     markdown: row.markdown,
+    updatedAt: row.updatedAt,
+  });
+  return parsed.success
+    ? { ok: true, value: parsed.data }
+    : failed({ code: "invalid_persisted_data" });
+}
+
+function findingFromRow(row: FindingRow): RepositoryResult<Finding> {
+  let evidenceArtifactIds: unknown;
+  try {
+    evidenceArtifactIds = JSON.parse(row.evidenceArtifactIdsJson);
+  } catch {
+    return failed({ code: "invalid_persisted_data" });
+  }
+  const parsed = FindingSchema.safeParse({
+    contractVersion: row.contractVersion,
+    id: row.id,
+    engagementId: row.engagementId,
+    title: row.title,
+    severity: row.severity,
+    status: row.status,
+    body: row.body,
+    evidenceArtifactIds,
+    createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   });
   return parsed.success
@@ -661,6 +706,108 @@ class TransactionRepository implements EngagementWriteTransaction {
       .get();
     if (stored === undefined) return failed({ code: "invalid_persisted_data" });
     return engagementNotesFromRow(stored);
+  }
+
+  createFinding(
+    engagementId: string,
+    input: unknown,
+  ): RepositoryResult<Finding> {
+    const parsed = CreateFindingRequestSchema.safeParse(input);
+    if (!parsed.success) return failed({ code: "invalid_repository_input" });
+    const current = this.currentEngagement(engagementId);
+    if (!current.ok) return current;
+    if (current.value.status === "archived") {
+      return failed({ code: "engagement_archived" });
+    }
+    const timestamp = this.clock().toISOString();
+    const row = {
+      id: this.nextId(),
+      contractVersion: FINDING_CONTRACT_VERSION,
+      engagementId,
+      title: parsed.data.title,
+      severity: parsed.data.severity,
+      status: "open" as const,
+      body: parsed.data.body,
+      evidenceArtifactIdsJson: JSON.stringify(parsed.data.evidenceArtifactIds),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    this.client.insert(findings).values(row).run();
+    const stored = this.client
+      .select()
+      .from(findings)
+      .where(eq(findings.id, row.id))
+      .get();
+    if (stored === undefined) return failed({ code: "invalid_persisted_data" });
+    return findingFromRow(stored);
+  }
+
+  listFindings(engagementId: string): RepositoryResult<Finding[]> {
+    const current = this.currentEngagement(engagementId);
+    if (!current.ok) return current;
+    const rows = this.client
+      .select()
+      .from(findings)
+      .where(eq(findings.engagementId, engagementId))
+      .orderBy(asc(findings.createdAt), asc(findings.id))
+      .all();
+    const values: Finding[] = [];
+    for (const row of rows) {
+      const parsed = findingFromRow(row);
+      if (!parsed.ok) return parsed;
+      values.push(parsed.value);
+    }
+    return { ok: true, value: values };
+  }
+
+  private setFindingStatus(
+    engagementId: string,
+    findingId: string,
+    status: "open" | "resolved",
+  ): RepositoryResult<Finding> {
+    const current = this.currentEngagement(engagementId);
+    if (!current.ok) return current;
+    if (current.value.status === "archived") {
+      return failed({ code: "engagement_archived" });
+    }
+    const row = this.client
+      .select()
+      .from(findings)
+      .where(eq(findings.id, findingId))
+      .get();
+    if (row === undefined || row.engagementId !== engagementId) {
+      return failed({ code: "finding_not_found" });
+    }
+    if (row.status === status) {
+      return failed({ code: "invalid_finding_transition" });
+    }
+    const updatedAt = this.clock().toISOString();
+    this.client
+      .update(findings)
+      .set({ status, updatedAt })
+      .where(eq(findings.id, findingId))
+      .run();
+    const stored = this.client
+      .select()
+      .from(findings)
+      .where(eq(findings.id, findingId))
+      .get();
+    if (stored === undefined) return failed({ code: "invalid_persisted_data" });
+    return findingFromRow(stored);
+  }
+
+  resolveFinding(
+    engagementId: string,
+    findingId: string,
+  ): RepositoryResult<Finding> {
+    return this.setFindingStatus(engagementId, findingId, "resolved");
+  }
+
+  reopenFinding(
+    engagementId: string,
+    findingId: string,
+  ): RepositoryResult<Finding> {
+    return this.setFindingStatus(engagementId, findingId, "open");
   }
 
   getAction(
@@ -1049,6 +1196,67 @@ export class EngagementRepository {
   ): RepositoryResult<EngagementNotes> {
     return this.runMutation(
       (repository) => repository.putEngagementNotes(engagementId, input),
+      transaction,
+    );
+  }
+
+  createFinding(
+    engagementId: string,
+    input: unknown,
+    transaction?: EngagementWriteTransaction,
+  ): RepositoryResult<Finding> {
+    return this.runMutation(
+      (repository) => repository.createFinding(engagementId, input),
+      transaction,
+    );
+  }
+
+  listFindings(engagementId: string): RepositoryResult<Finding[]> {
+    try {
+      const engagement = this.db
+        .select({ id: engagements.id })
+        .from(engagements)
+        .where(eq(engagements.id, engagementId))
+        .get();
+      if (engagement === undefined) return failed({ code: "engagement_not_found" });
+      const rows = this.db
+        .select()
+        .from(findings)
+        .where(eq(findings.engagementId, engagementId))
+        .orderBy(asc(findings.createdAt), asc(findings.id))
+        .all();
+      const values: Finding[] = [];
+      for (const row of rows) {
+        const parsed = findingFromRow(row);
+        if (!parsed.ok) return parsed;
+        values.push(parsed.value);
+      }
+      return { ok: true, value: values };
+    } catch (error) {
+      return failed({
+        code: isStorageBusy(error) ? "storage_busy" : "invalid_persisted_data",
+      });
+    }
+  }
+
+  resolveFinding(
+    engagementId: string,
+    findingId: string,
+    transaction?: EngagementWriteTransaction,
+  ): RepositoryResult<Finding> {
+    return this.runMutation(
+      (repository) => repository.resolveFinding(engagementId, findingId),
+      transaction,
+    );
+  }
+
+  reopenFinding(
+    engagementId: string,
+    findingId: string,
+    transaction?: EngagementWriteTransaction,
+  ): RepositoryResult<Finding> {
+    return this.runMutation(
+      (repository) => repository.reopenFinding(engagementId, findingId),
       transaction,
     );
   }

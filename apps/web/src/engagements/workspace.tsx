@@ -16,6 +16,7 @@ import {
 } from "./format.js";
 import { partitionEngagements, useEngagementDetailQuery, useEngagementsQuery } from "./query.js";
 import { ActionPlanner } from "./action-planner.js";
+import { EngagementFindingsSection } from "./findings.js";
 import { EngagementNotesSection } from "./notes.js";
 import { SavedScopeEditor } from "./scope-editor.js";
 import { EngagementHttpProbesSection } from "./http-probe-surface.js";
@@ -251,6 +252,12 @@ function EngagementDetail({ engagement }: { engagement: Engagement }) {
 
       <EngagementNotesSection
         key={displayed.id}
+        archived={displayed.status === "archived"}
+        engagementId={displayed.id}
+      />
+
+      <EngagementFindingsSection
+        key={`findings-${displayed.id}`}
         archived={displayed.status === "archived"}
         engagementId={displayed.id}
       />

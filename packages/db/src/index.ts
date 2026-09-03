@@ -77,6 +77,7 @@ export {
   engagements,
   evidenceArtifacts,
   evidenceGrants,
+  findings,
   httpProbeResults,
   nmapServices,
   operatorCommandIdempotency,
