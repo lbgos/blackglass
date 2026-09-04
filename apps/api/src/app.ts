@@ -19,6 +19,7 @@ import type {
   RunOutputRepository,
   RunRepository,
   RunnerRepository,
+  SettingsRepository,
 } from "@blackglass/db";
 
 import { registerActionMutationRoutes } from "./action-mutation-routes.js";
@@ -40,6 +41,7 @@ import { registerRunOutputRoutes } from "./run-output-routes.js";
 import { registerRunnerEvidenceGrantRoutes } from "./runner-evidence-grant-routes.js";
 import { registerRunnerEvidenceUploadRoutes } from "./runner-evidence-upload-routes.js";
 import { registerHttpProbeRoutes } from "./http-probe-routes.js";
+import { registerSettingsRoutes } from "./settings-routes.js";
 
 interface BuildAppOptions {
   getDevelopmentStorageReadiness: () => Readiness | Promise<Readiness>;
@@ -92,6 +94,10 @@ interface BuildAppOptions {
   // store is available; without it the route does not exist.
   evidenceStore?: Pick<EvidenceStore, "verifiedDownload" | "verifiedExcerpt">;
   nmapServiceRepository?: Pick<NmapServiceRepository, "listForEngagement">;
+  settingsRepository?: Pick<
+    SettingsRepository,
+    "getRunnerSettings" | "updateRunnerSettings"
+  >;
   httpProbeRepository?: Pick<HttpProbeRepository, "listForEngagement">;
   ffufRepository?: Pick<FfufRepository, "listForEngagement">;
   runOutputRepository?: Pick<
@@ -113,6 +119,7 @@ export function buildApp({
   storageGate,
   evidenceStore,
   nmapServiceRepository,
+  settingsRepository,
   httpProbeRepository,
   ffufRepository,
   runOutputRepository,
@@ -229,6 +236,9 @@ export function buildApp({
   }
   if (nmapServiceRepository !== undefined) {
     registerNmapServiceRoutes(app, { repository: nmapServiceRepository });
+  }
+  if (settingsRepository !== undefined) {
+    registerSettingsRoutes(app, { repository: settingsRepository });
   }
   if (httpProbeRepository !== undefined) {
     registerHttpProbeRoutes(app, { repository: httpProbeRepository });

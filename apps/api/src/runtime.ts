@@ -8,6 +8,7 @@ import {
   RunOutputRepository,
   RunRepository,
   RunnerRepository,
+  SettingsRepository,
   openEngagementDatabase,
   type EngagementDatabase,
 } from "@blackglass/db";
@@ -51,6 +52,7 @@ export async function buildStorageBackedApp(
     const nmapServiceRepository = new NmapServiceRepository(database.db);
     const httpProbeRepository = new HttpProbeRepository(database.db);
     const ffufRepository = new FfufRepository(database.db);
+    const settingsRepository = new SettingsRepository(database.db);
     const runOutputRepository = new RunOutputRepository(database.db);
 
     // Evidence publication is fail-closed: without a loadable native binding
@@ -101,6 +103,7 @@ export async function buildStorageBackedApp(
       ...(evidenceStore === undefined ? {} : { evidenceStore }),
       ...(backupLock === undefined ? {} : { storageGate: backupLock }),
       nmapServiceRepository,
+      settingsRepository,
       httpProbeRepository,
       ffufRepository,
       runOutputRepository,
