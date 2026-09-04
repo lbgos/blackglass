@@ -21,6 +21,7 @@ const activeEngagement = {
   authorizationContext: null,
   autoContinueWarnings: false,
   activeScopeRevisionId: "20000000-0000-4000-8000-000000000010",
+  deadlineAt: null,
   createdAt: "2026-08-12T12:00:00.000Z",
   updatedAt: "2026-08-12T12:05:00.000Z",
 };

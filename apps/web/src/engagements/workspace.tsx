@@ -16,6 +16,7 @@ import {
 } from "./format.js";
 import { partitionEngagements, useEngagementDetailQuery, useEngagementsQuery } from "./query.js";
 import { ActionPlanner } from "./action-planner.js";
+import { EngagementDeadlineSection } from "./deadline.js";
 import { EngagementFindingsSection } from "./findings.js";
 import { EngagementFfufSection } from "./ffuf-surface.js";
 import { EngagementNotesSection } from "./notes.js";
@@ -237,6 +238,11 @@ function EngagementDetail({ engagement }: { engagement: Engagement }) {
           </div>
         </section>
       ) : null}
+
+      <EngagementDeadlineSection
+        archived={displayed.status === "archived"}
+        engagementId={displayed.id}
+      />
 
       <div className="mt-5">
         <EngagementServicesSection engagementId={displayed.id} />

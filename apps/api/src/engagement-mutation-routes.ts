@@ -8,11 +8,13 @@ import {
   JsonValueSchema,
   ScopeRevisionMutationResponseSchema,
   UpdateAutoContinueWarningsRequestSchema,
+  UpdateEngagementDeadlineRequestSchema,
   commandJsonV1AppendScopeRevisionDigest,
   commandJsonV1ArchiveEngagementDigest,
   commandJsonV1CreateEngagementDigest,
   commandJsonV1ReopenEngagementDigest,
   commandJsonV1UpdateAutoContinueWarningsDigest,
+  commandJsonV1UpdateDeadlineDigest,
   type EngagementMutationError,
   type JsonValue,
 } from "@blackglass/contracts";
@@ -184,6 +186,41 @@ export function registerEngagementMutationRoutes(
               params.data.engagementId,
               body.data.expectedRevision,
               body.data.autoContinueWarnings,
+            ),
+            200,
+            EngagementMutationResponseSchema,
+            params.data.engagementId,
+          );
+        },
+      });
+    },
+  );
+
+  app.patch(
+    "/api/v1/engagements/:engagementId/deadline",
+    async (request, reply) => {
+      const engagementId = readPathParam(request.params, "engagementId");
+      if (engagementId === undefined) {
+        return sendFixedOperatorError(reply, 400, "invalid_request");
+      }
+      return dispatchOperatorMutation(request, reply, repository, {
+        route: `/api/v1/engagements/${engagementId}/deadline`,
+        operation: "update_deadline",
+        digest: commandJsonV1UpdateDeadlineDigest,
+        mutate: (transaction: EngagementWriteTransaction) => {
+          const params = EngagementIdParamsSchema.safeParse(request.params);
+          const body = UpdateEngagementDeadlineRequestSchema.safeParse(
+            request.body,
+          );
+          const query = EngagementMutationQuerySchema.safeParse(request.query);
+          if (!params.success || !body.success || !query.success) {
+            return invalidRequest();
+          }
+          return definitiveResponse(
+            transaction.updateDeadline(
+              params.data.engagementId,
+              body.data.expectedRevision,
+              body.data.deadlineAt,
             ),
             200,
             EngagementMutationResponseSchema,

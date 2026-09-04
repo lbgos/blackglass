@@ -241,7 +241,14 @@ describe("action persistence foundation", () => {
     const partialDirectory = writePartialMigrations();
     try {
       const upgraded = createFixture(partialDirectory);
-      const engagement = createEngagement(upgraded.repository);
+      // The pre-upgrade binary wrote the old row shape without deadline_at,
+      // so seed it with raw SQL instead of the current repository.
+      const legacyId = IDS[0];
+      upgraded.database.sqlite
+        .prepare(
+          "insert into engagements (id, contract_version, revision, name, kind, status, description, authorization_context, auto_continue_warnings, created_at, updated_at) values (?, 1, 1, 'Target lab', 'lab', 'active', null, 'Synthetic fixture authorization context', 0, '2026-08-12T12:00:00.000Z', '2026-08-12T12:00:00.000Z')",
+        )
+        .run(legacyId);
       expect(
         upgraded.database.sqlite
           .prepare("select count(*) as count from __drizzle_migrations")
@@ -260,9 +267,11 @@ describe("action persistence foundation", () => {
           .prepare("select count(*) as count from __drizzle_migrations")
           .get(),
       ).toEqual({ count: DATABASE_SCHEMA_VERSION });
-      expect(upgradedRepository.getEngagement(engagement.id)).toMatchObject({
+      expect(upgradedRepository.getEngagement(legacyId)).toMatchObject({
         ok: true,
-        value: { engagement: { id: engagement.id, name: "Target lab" } },
+        value: {
+          engagement: { id: legacyId, name: "Target lab", deadlineAt: null },
+        },
       });
     } finally {
       rmSync(partialDirectory, { recursive: true, force: true });

@@ -2,6 +2,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { useEffect } from "react";
 
 import { engagementMutationMessage, isRevisionConflict } from "./engagements/errors.js";
+import { DeadlinePill } from "./engagements/deadline.js";
 import {
   useArchiveEngagementMutation,
   useReopenEngagementMutation,
@@ -123,6 +124,7 @@ function EngagementStageActions({ engagementId }: { engagementId: string }) {
 
   return (
     <div className="flex min-w-0 shrink-0 items-center gap-1">
+      <DeadlinePill deadlineAt={engagement.deadlineAt} />
       <button
         type="button"
         className="inline-flex h-8 items-center rounded-md px-2 text-[13px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"

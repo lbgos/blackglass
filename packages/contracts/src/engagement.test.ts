@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AppendScopeRevisionInputSchema,
   CreateEngagementInputSchema,
+  EngagementDeadlineSchema,
   EngagementSchema,
   EngagementWithActiveScopeSchema,
   ScopeRevisionSchema,
@@ -19,6 +20,7 @@ const engagement = {
   authorizationContext: "Synthetic fixture authorization context",
   autoContinueWarnings: false,
   activeScopeRevisionId: null,
+  deadlineAt: null,
   createdAt: "2026-08-12T12:00:00.000Z",
   updatedAt: "2026-08-12T12:00:00.000Z",
 } as const;
@@ -105,6 +107,59 @@ describe("engagement contracts", () => {
     expect(
       EngagementSchema.safeParse({ ...engagement, untrusted: true }).success,
     ).toBe(false);
+  });
+
+  it("accepts an optional deadline and rejects empty, malformed, or far-future values", () => {
+    const base = {
+      name: "Target lab",
+      kind: "lab",
+      description: null,
+      authorizationContext: null,
+      autoContinueWarnings: false,
+    } as const;
+    // Absent means none.
+    expect(CreateEngagementInputSchema.safeParse(base).success).toBe(true);
+    expect(
+      CreateEngagementInputSchema.safeParse({
+        ...base,
+        deadlineAt: "2026-08-14T12:00:00.000Z",
+      }).success,
+    ).toBe(true);
+    // Empty string, malformed, offset (non-UTC), and local datetimes rejected.
+    for (const deadlineAt of [
+      "",
+      "not-a-date",
+      "2026-08-14 12:00:00",
+      "2026-08-14T12:00:00.000+02:00",
+      "2026-08-14T12:00:00",
+    ]) {
+      expect(
+        CreateEngagementInputSchema.safeParse({ ...base, deadlineAt }).success,
+      ).toBe(false);
+      expect(EngagementDeadlineSchema.safeParse(deadlineAt).success).toBe(false);
+    }
+    // More than 10 years out rejected; just inside the window accepted.
+    const yearMs = 365 * 24 * 60 * 60 * 1000;
+    const farFuture = new Date(Date.now() + 11 * yearMs).toISOString();
+    const nearFuture = new Date(Date.now() + 9 * yearMs).toISOString();
+    expect(EngagementDeadlineSchema.safeParse(farFuture).success).toBe(false);
+    expect(
+      CreateEngagementInputSchema.safeParse({ ...base, deadlineAt: farFuture })
+        .success,
+    ).toBe(false);
+    expect(EngagementDeadlineSchema.safeParse(nearFuture).success).toBe(true);
+    // Past deadlines stay representable so overdue work shows truthfully.
+    expect(
+      EngagementDeadlineSchema.safeParse("2026-08-10T12:00:00.000Z").success,
+    ).toBe(true);
+    // Stored records carry an explicit null when no deadline is set.
+    expect(EngagementSchema.safeParse({ ...engagement, deadlineAt: null }).success).toBe(
+      true,
+    );
+    expect(
+      EngagementSchema.safeParse({ ...engagement, deadlineAt: "2026-08-14T12:00:00.000Z" })
+        .success,
+    ).toBe(true);
   });
 
   it("rejects non-UTC timestamps and unknown scope fields", () => {
