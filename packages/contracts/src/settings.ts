@@ -1,16 +1,19 @@
 import { z } from "zod";
 
 /**
- * Slice 1 settings contract: RUNNER scope only.
- * Persists validated runner defaults (ffuf binary path, default wordlist,
- * rate/threads/timeout/duration). Other scopes (general, appearance,
- * advisor, evidence, diagnostics) stay out of scope until later slices.
+ * Settings contracts: RUNNER and ADVISOR scopes.
+ * Each scope persists validated operator defaults. Other scopes (general,
+ * appearance, evidence, diagnostics) stay out of scope until later slices.
  * Strict Zod, no passthrough.
  */
 
 export const SETTING_SCOPE_RUNNER = "runner" as const;
+export const SETTING_SCOPE_ADVISOR = "advisor" as const;
 
-export const SettingScopeSchema = z.enum([SETTING_SCOPE_RUNNER]);
+export const SettingScopeSchema = z.enum([
+  SETTING_SCOPE_RUNNER,
+  SETTING_SCOPE_ADVISOR,
+]);
 
 export type SettingScope = z.infer<typeof SettingScopeSchema>;
 
@@ -83,3 +86,109 @@ export const UpdateSettingsRequestSchema = z.strictObject({
 });
 
 export type UpdateSettingsRequest = z.infer<typeof UpdateSettingsRequestSchema>;
+
+// Advisor scope: connection and budget defaults for the M8 local advisor.
+// Empty endpointBaseUrl/modelId means unconfigured. API keys are never
+// stored: apiKeyEnvVar names the environment variable resolved at request
+// time (D6). A public endpoint URL without publicEndpointOptIn is accepted
+// at storage; enforcement happens in a later runtime slice.
+export const ADVISOR_ENDPOINT_BASE_URL_DEFAULT = "" as const;
+export const ADVISOR_MODEL_ID_DEFAULT = "" as const;
+export const ADVISOR_API_KEY_ENV_VAR_DEFAULT = "" as const;
+export const ADVISOR_REQUEST_BUDGET_DEFAULT = 10 as const;
+export const ADVISOR_RAW_RESPONSE_VISIBILITY_DEFAULT = true as const;
+export const ADVISOR_PUBLIC_ENDPOINT_OPT_IN_DEFAULT = false as const;
+
+const ADVISOR_ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
+
+// Key material must never reach stored settings: any string value carrying
+// a secret prefix is rejected before persistence.
+const KEY_MATERIAL_PATTERN = /sk-|bearer /i;
+
+function hasKeyMaterial(value: string): boolean {
+  return KEY_MATERIAL_PATTERN.test(value);
+}
+
+function isHttpUrl(value: string): boolean {
+  if (!value.startsWith("http://") && !value.startsWith("https://")) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+// Empty means unset: the operator has not configured an advisor endpoint yet.
+const AdvisorEndpointBaseUrlSchema = z
+  .string()
+  .max(2048)
+  .refine((value) => value === "" || isHttpUrl(value), {
+    message: "endpoint must be an http(s) URL or empty",
+  })
+  .refine((value) => !hasKeyMaterial(value), {
+    message: "key material rejected",
+  });
+
+// Empty means unset: the operator has not chosen a model yet.
+const AdvisorModelIdSchema = z
+  .string()
+  .max(128)
+  .refine((value) => !hasKeyMaterial(value), {
+    message: "key material rejected",
+  });
+
+const AdvisorApiKeyEnvVarSchema = z
+  .string()
+  .max(128)
+  .refine(
+    (value) => value === "" || ADVISOR_ENV_VAR_NAME_PATTERN.test(value),
+    { message: "env var must match [A-Z_][A-Z0-9_]* or be empty" },
+  )
+  .refine((value) => !hasKeyMaterial(value), {
+    message: "key material rejected",
+  });
+
+export const AdvisorSettingsSchema = z.strictObject({
+  endpointBaseUrl: AdvisorEndpointBaseUrlSchema,
+  modelId: AdvisorModelIdSchema,
+  apiKeyEnvVar: AdvisorApiKeyEnvVarSchema,
+  requestBudget: z.number().int().min(1).max(100),
+  rawResponseVisibility: z.boolean(),
+  publicEndpointOptIn: z.boolean(),
+});
+
+export type AdvisorSettings = z.infer<typeof AdvisorSettingsSchema>;
+
+export const ADVISOR_SETTINGS_DEFAULTS: AdvisorSettings = {
+  endpointBaseUrl: ADVISOR_ENDPOINT_BASE_URL_DEFAULT,
+  modelId: ADVISOR_MODEL_ID_DEFAULT,
+  apiKeyEnvVar: ADVISOR_API_KEY_ENV_VAR_DEFAULT,
+  requestBudget: ADVISOR_REQUEST_BUDGET_DEFAULT,
+  rawResponseVisibility: ADVISOR_RAW_RESPONSE_VISIBILITY_DEFAULT,
+  publicEndpointOptIn: ADVISOR_PUBLIC_ENDPOINT_OPT_IN_DEFAULT,
+};
+
+export const GetAdvisorSettingsResponseSchema = AdvisorSettingsSchema;
+
+export type GetAdvisorSettingsResponse = z.infer<
+  typeof GetAdvisorSettingsResponseSchema
+>;
+
+// Partial update: every field optional, unknown keys rejected.
+export const UpdateAdvisorSettingsRequestSchema = z.strictObject({
+  endpointBaseUrl: AdvisorEndpointBaseUrlSchema.optional(),
+  modelId: AdvisorModelIdSchema.optional(),
+  apiKeyEnvVar: AdvisorApiKeyEnvVarSchema.optional(),
+  requestBudget: AdvisorSettingsSchema.shape.requestBudget.optional(),
+  rawResponseVisibility:
+    AdvisorSettingsSchema.shape.rawResponseVisibility.optional(),
+  publicEndpointOptIn:
+    AdvisorSettingsSchema.shape.publicEndpointOptIn.optional(),
+});
+
+export type UpdateAdvisorSettingsRequest = z.infer<
+  typeof UpdateAdvisorSettingsRequestSchema
+>;

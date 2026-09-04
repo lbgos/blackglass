@@ -120,3 +120,101 @@ describe("runner settings routes", () => {
     expect(unchanged.json()).toMatchObject({ ffufRate: 100, ffufWordlistPath: "" });
   });
 });
+
+describe("advisor settings routes", () => {
+  it("serves shipped defaults on a fresh database", async () => {
+    const { app } = await createSettingsBackedApp();
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/settings/advisor",
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      endpointBaseUrl: "",
+      modelId: "",
+      apiKeyEnvVar: "",
+      requestBudget: 10,
+      rawResponseVisibility: true,
+      publicEndpointOptIn: false,
+    });
+  });
+
+  it("persists a partial update and serves it back", async () => {
+    const { app } = await createSettingsBackedApp();
+
+    const updated = await app.inject({
+      method: "PUT",
+      url: "/api/v1/settings/advisor",
+      payload: {
+        endpointBaseUrl: "http://127.0.0.1:11434/v1",
+        modelId: "qwen3:8b",
+        apiKeyEnvVar: "BLACKGLASS_ADVISOR_API_KEY",
+        requestBudget: 25,
+      },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toEqual({
+      endpointBaseUrl: "http://127.0.0.1:11434/v1",
+      modelId: "qwen3:8b",
+      apiKeyEnvVar: "BLACKGLASS_ADVISOR_API_KEY",
+      requestBudget: 25,
+      rawResponseVisibility: true,
+      publicEndpointOptIn: false,
+    });
+
+    const reloaded = await app.inject({
+      method: "GET",
+      url: "/api/v1/settings/advisor",
+    });
+    expect(reloaded.statusCode).toBe(200);
+    expect(reloaded.json()).toEqual(updated.json());
+  });
+
+  it("rejects key material, bad env names, bad URLs, and unknown keys with 400", async () => {
+    const { app } = await createSettingsBackedApp();
+
+    for (const payload of [
+      { modelId: "sk-abc123" },
+      { modelId: "Bearer eyJhbGciOiJIUzI1NiJ9" },
+      { endpointBaseUrl: "https://example.invalid/sk-abc123" },
+      { endpointBaseUrl: "gopher://example.invalid" },
+      { apiKeyEnvVar: "bad-name" },
+      { requestBudget: 0 },
+      { requestBudget: 101 },
+      { requestBudget: 5, scope: "advisor" },
+    ]) {
+      const response = await app.inject({
+        method: "PUT",
+        url: "/api/v1/settings/advisor",
+        payload,
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ code: "invalid_request" });
+    }
+
+    const unchanged = await app.inject({
+      method: "GET",
+      url: "/api/v1/settings/advisor",
+    });
+    expect(unchanged.json()).toMatchObject({ endpointBaseUrl: "", requestBudget: 10 });
+  });
+
+  it("leaves the runner scope unaffected by advisor writes", async () => {
+    const { app } = await createSettingsBackedApp();
+
+    const updated = await app.inject({
+      method: "PUT",
+      url: "/api/v1/settings/advisor",
+      payload: { requestBudget: 5 },
+    });
+    expect(updated.statusCode).toBe(200);
+
+    const runner = await app.inject({
+      method: "GET",
+      url: "/api/v1/settings/runner",
+    });
+    expect(runner.statusCode).toBe(200);
+    expect(runner.json()).toMatchObject({ ffufRate: 100 });
+  });
+});

@@ -1,9 +1,13 @@
 import { eq } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import {
+  ADVISOR_SETTINGS_DEFAULTS,
   RUNNER_SETTINGS_DEFAULTS,
+  AdvisorSettingsSchema,
   RunnerSettingsSchema,
+  UpdateAdvisorSettingsRequestSchema,
   UpdateSettingsRequestSchema,
+  type AdvisorSettings,
   type RunnerSettings,
 } from "@blackglass/contracts";
 import * as schema from "./schema.js";
@@ -45,8 +49,20 @@ function parseStoredValue(raw: string): RunnerSettings | undefined {
   return validated.success ? validated.data : undefined;
 }
 
-// Control-plane store for validated runner settings. The row is absent on a
-// fresh database; readers then serve the shipped defaults without writing.
+function parseStoredAdvisorValue(raw: string): AdvisorSettings | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  const validated = AdvisorSettingsSchema.safeParse(parsed);
+  return validated.success ? validated.data : undefined;
+}
+
+// Control-plane store for validated runner and advisor settings. Each scope
+// has its own row, absent on a fresh database; readers then serve the shipped
+// defaults without writing.
 export class SettingsRepository {
   constructor(
     private readonly db: Database,
@@ -97,6 +113,60 @@ export class SettingsRepository {
         .insert(settings)
         .values({
           scope: "runner",
+          valueJson: JSON.stringify(merged.data),
+          updatedAt,
+        })
+        .onConflictDoUpdate({
+          target: settings.scope,
+          set: { valueJson: JSON.stringify(merged.data), updatedAt },
+        })
+        .run();
+      return { ok: true, value: merged.data };
+    } catch (error) {
+      return { ok: false, error: storageError(error) };
+    }
+  }
+
+  getAdvisorSettings(): SettingsResult<AdvisorSettings> {
+    try {
+      const row = this.db
+        .select()
+        .from(settings)
+        .where(eq(settings.scope, "advisor"))
+        .get();
+      if (row === undefined) {
+        return { ok: true, value: { ...ADVISOR_SETTINGS_DEFAULTS } };
+      }
+      const value = parseStoredAdvisorValue(row.valueJson);
+      if (value === undefined) {
+        return { ok: false, error: { code: "invalid_persisted_data" } };
+      }
+      return { ok: true, value };
+    } catch (error) {
+      return { ok: false, error: storageError(error) };
+    }
+  }
+
+  updateAdvisorSettings(input: unknown): SettingsResult<AdvisorSettings> {
+    const parsed = UpdateAdvisorSettingsRequestSchema.safeParse(input);
+    if (!parsed.success) {
+      return { ok: false, error: { code: "invalid_repository_input" } };
+    }
+    const current = this.getAdvisorSettings();
+    if (!current.ok) return current;
+    const merged = AdvisorSettingsSchema.safeParse({
+      ...current.value,
+      ...parsed.data,
+    });
+    if (!merged.success) {
+      return { ok: false, error: { code: "invalid_repository_input" } };
+    }
+    try {
+      const updatedAt = this.now().toISOString();
+      this.db
+        .insert(settings)
+        .values({
+          scope: "advisor",
           valueJson: JSON.stringify(merged.data),
           updatedAt,
         })
