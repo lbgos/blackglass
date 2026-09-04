@@ -25,10 +25,6 @@ export interface RunDirectories {
   tmpDir: string;
 }
 
-export function isPathTraversalAttempt(value: string): boolean {
-  return value.includes("..") || value.includes("\0") || path.isAbsolute(value) || value.includes(path.sep);
-}
-
 export function resolveRunDirPath(runRoot: string, runId: string, fence: string): string {
   if (runId.includes("..") || runId.includes("/") || runId.includes("\\") || runId.includes("\0")) {
     throw new Error("working_directory_escape");
