@@ -11,7 +11,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { bindActionSnapshot } from "./action-snapshot.js";
-import { openEngagementDatabase } from "./database.js";
+import { openEngagementDatabase, DATABASE_SCHEMA_VERSION } from "./database.js";
 import { EngagementRepository } from "./repository.js";
 
 const IDS = [
@@ -229,7 +229,7 @@ describe("action persistence foundation", () => {
       fresh.database.sqlite
         .prepare("select count(*) as count from __drizzle_migrations")
         .get(),
-    ).toEqual({ count: 12 });
+    ).toEqual({ count: DATABASE_SCHEMA_VERSION });
     expect(
       fresh.database.sqlite
         .prepare(
@@ -259,7 +259,7 @@ describe("action persistence foundation", () => {
         upgraded.database.sqlite
           .prepare("select count(*) as count from __drizzle_migrations")
           .get(),
-      ).toEqual({ count: 12 });
+      ).toEqual({ count: DATABASE_SCHEMA_VERSION });
       expect(upgradedRepository.getEngagement(engagement.id)).toMatchObject({
         ok: true,
         value: { engagement: { id: engagement.id, name: "Target lab" } },

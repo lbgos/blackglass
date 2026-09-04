@@ -10,7 +10,7 @@ import leaseFixtureData from "../../../docs/architecture/fixtures/d2/lease-event
   type: "json",
 };
 import { bindActionSnapshot } from "./action-snapshot.js";
-import { DATABASE_FILENAME, openEngagementDatabase } from "./database.js";
+import { DATABASE_FILENAME, openEngagementDatabase, DATABASE_SCHEMA_VERSION } from "./database.js";
 import { EngagementRepository } from "./repository.js";
 import { RunRepository } from "./run.js";
 
@@ -1227,7 +1227,7 @@ describe("run persistence schema", () => {
       fixture.database.sqlite
         .prepare("select count(*) as count from __drizzle_migrations")
         .get(),
-    ).toEqual({ count: 12 });
+    ).toEqual({ count: DATABASE_SCHEMA_VERSION });
     const evidenceTable = fixture.database.sqlite
       .prepare(
         "select count(*) as count from sqlite_master where type = 'table' and name = 'evidence_grants'",

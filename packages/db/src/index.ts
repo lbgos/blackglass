@@ -66,6 +66,13 @@ export {
   type RunnerResult,
 } from "./runner.js";
 export { NmapServiceRepository } from "./nmap-service.js";
+export { SettingsRepository } from "./settings.js";
+export type {
+  SettingsRepositoryError,
+  SettingsRepositoryErrorCode,
+  SettingsRepositoryProviders,
+  SettingsResult,
+} from "./settings.js";
 export { HttpProbeRepository } from "./http-probe.js";
 export { FfufRepository } from "./ffuf.js";
 export { RunOutputRepository } from "./run-output.js";
@@ -91,4 +98,5 @@ export {
   runnerSessions,
   runs,
   scopeRevisions,
+  settings,
 } from "./schema.js";

@@ -9,7 +9,7 @@ import fixtureData from "../../../docs/architecture/fixtures/d2/runner-identity.
   type: "json",
 };
 import { bindActionSnapshot } from "./action-snapshot.js";
-import { openEngagementDatabase } from "./database.js";
+import { openEngagementDatabase, DATABASE_SCHEMA_VERSION } from "./database.js";
 import { EngagementRepository } from "./repository.js";
 import { RunRepository } from "./run.js";
 import {
@@ -239,7 +239,7 @@ describe("runner identity schema", () => {
       fixture.database.sqlite
         .prepare("select count(*) as count from __drizzle_migrations")
         .get(),
-    ).toEqual({ count: 12 });
+    ).toEqual({ count: DATABASE_SCHEMA_VERSION });
     expect(
       fixture.database.sqlite
         .prepare(

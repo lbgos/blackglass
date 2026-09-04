@@ -1249,6 +1249,23 @@ export const findings = sqliteTable(
   ],
 );
 
+export const settings = sqliteTable(
+  "settings",
+  {
+    scope: text("scope").primaryKey(),
+    valueJson: text("value_json").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check("settings_scope", sql`${table.scope} = 'runner'`),
+    check(
+      "settings_value_json",
+      sql`json_valid(${table.valueJson}) and length(cast(${table.valueJson} as blob)) <= 65536`,
+    ),
+    check("settings_updated_at", sql`length(${table.updatedAt}) >= 20`),
+  ],
+);
+
 export type RunRow = typeof runs.$inferSelect;
 export type RunLeaseRow = typeof runLeases.$inferSelect;
 export type RunEventRow = typeof runEvents.$inferSelect;
@@ -1262,3 +1279,4 @@ export type NmapServiceRow = typeof nmapServices.$inferSelect;
 export type HttpProbeResultRow = typeof httpProbeResults.$inferSelect;
 export type FfufResultRow = typeof ffufResults.$inferSelect;
 export type FindingRow = typeof findings.$inferSelect;
+export type SettingsRow = typeof settings.$inferSelect;

@@ -25,3 +25,4 @@ export * from "./target-normalization.js";
 export * from "./nmap.js";
 export * from "./ffuf.js";
 export * from "./http-probe.js";
+export * from "./settings.js";
