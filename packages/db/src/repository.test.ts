@@ -5,7 +5,7 @@ import path from "node:path";
 import type { SavedScopeRule } from "@blackglass/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { DATABASE_FILENAME, openEngagementDatabase } from "./database.js";
+import { DATABASE_FILENAME, openEngagementDatabase, DATABASE_SCHEMA_VERSION } from "./database.js";
 import { EngagementRepository } from "./repository.js";
 
 const IDS = [
@@ -102,7 +102,7 @@ describe("engagement persistence", () => {
       fixture.database.sqlite
         .prepare("select count(*) as count from __drizzle_migrations")
         .get(),
-    ).toEqual({ count: 13 });
+    ).toEqual({ count: DATABASE_SCHEMA_VERSION });
   });
 
   it("creates, lists, archives, and reopens with optimistic revisions", () => {
