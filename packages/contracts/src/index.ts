@@ -23,6 +23,7 @@ export * from "./run-output.js";
 export * from "./saved-scope.js";
 export * from "./target-normalization.js";
 export * from "./nmap.js";
+export * from "./report.js";
 export * from "./ffuf.js";
 export * from "./http-probe.js";
 export * from "./settings.js";

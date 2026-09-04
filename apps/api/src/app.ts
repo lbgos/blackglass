@@ -41,6 +41,7 @@ import { registerRunOutputRoutes } from "./run-output-routes.js";
 import { registerRunnerEvidenceGrantRoutes } from "./runner-evidence-grant-routes.js";
 import { registerRunnerEvidenceUploadRoutes } from "./runner-evidence-upload-routes.js";
 import { registerHttpProbeRoutes } from "./http-probe-routes.js";
+import { registerReportRoutes } from "./report-routes.js";
 import { registerSettingsRoutes } from "./settings-routes.js";
 
 interface BuildAppOptions {
@@ -102,7 +103,10 @@ interface BuildAppOptions {
   ffufRepository?: Pick<FfufRepository, "listForEngagement">;
   runOutputRepository?: Pick<
     RunOutputRepository,
-    "latestTerminalRunForEngagement" | "runForEngagement" | "artifactsForRun"
+    | "latestTerminalRunForEngagement"
+    | "runForEngagement"
+    | "artifactsForRun"
+    | "listArtifactsForEngagement"
   >;
   logger?: FastifyServerOptions["logger"];
   now?: () => Date;
@@ -256,6 +260,31 @@ export function buildApp({
     registerRunOutputRoutes(app, {
       repository: runOutputRepository,
       store: evidenceStore,
+    });
+  }
+  const listFindings = engagementRepository.listFindings?.bind(engagementRepository);
+  const listArtifactsForEngagement =
+    runOutputRepository?.listArtifactsForEngagement?.bind(runOutputRepository);
+  if (
+    listFindings !== undefined &&
+    nmapServiceRepository !== undefined &&
+    httpProbeRepository !== undefined &&
+    ffufRepository !== undefined &&
+    listArtifactsForEngagement !== undefined
+  ) {
+    registerReportRoutes(app, {
+      engagements: {
+        getEngagement: engagementRepository.getEngagement.bind(engagementRepository),
+        getEngagementNotes: engagementRepository.getEngagementNotes.bind(engagementRepository),
+        listFindings,
+      },
+      services: nmapServiceRepository,
+      probes: httpProbeRepository,
+      ffuf: ffufRepository,
+      outputs: {
+        listArtifactsForEngagement,
+      },
+      ...(now === undefined ? {} : { now }),
     });
   }
 

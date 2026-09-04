@@ -22,6 +22,13 @@ type ArtifactsForRunResult =
   | { ok: true; artifacts: RunOutputArtifactRow[] }
   | { ok: false; code: "storage_busy" | "invalid_persisted_data" };
 
+type ArtifactsForEngagementResult =
+  | { ok: true; artifacts: RunOutputArtifactRow[] }
+  | {
+      ok: false;
+      code: "engagement_not_found" | "storage_busy" | "invalid_persisted_data";
+    };
+
 function persistedRunFromRow(row: typeof runs.$inferSelect): PersistedRun | undefined {
   const parsed = PersistedRunSchema.safeParse({
     contractVersion: row.contractVersion,
@@ -124,6 +131,37 @@ export class RunOutputRepository {
         .where(eq(evidenceArtifacts.runId, runId))
         .all();
       return { ok: true, artifacts: rows };
+    } catch (error) {
+      return { ok: false, code: storageCode(error) };
+    }
+  }
+
+  // Published evidence digests scoped to one engagement through
+  // run -> action membership. Read-only: archived engagements stay readable.
+  listArtifactsForEngagement(engagementId: string): ArtifactsForEngagementResult {
+    try {
+      const engagement = this.db
+        .select({ id: engagements.id })
+        .from(engagements)
+        .where(eq(engagements.id, engagementId))
+        .get();
+      if (engagement === undefined) {
+        return { ok: false, code: "engagement_not_found" };
+      }
+      const rows = this.db
+        .select({ artifact: evidenceArtifacts })
+        .from(evidenceArtifacts)
+        .innerJoin(runs, eq(runs.id, evidenceArtifacts.runId))
+        .innerJoin(actions, eq(actions.id, runs.actionId))
+        .where(
+          and(
+            eq(runs.engagementId, engagementId),
+            eq(actions.engagementId, engagementId),
+          ),
+        )
+        .orderBy(evidenceArtifacts.createdAt, evidenceArtifacts.artifactId)
+        .all();
+      return { ok: true, artifacts: rows.map((row) => row.artifact) };
     } catch (error) {
       return { ok: false, code: storageCode(error) };
     }
