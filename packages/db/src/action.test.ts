@@ -229,7 +229,7 @@ describe("action persistence foundation", () => {
       fresh.database.sqlite
         .prepare("select count(*) as count from __drizzle_migrations")
         .get(),
-    ).toEqual({ count: 11 });
+    ).toEqual({ count: 12 });
     expect(
       fresh.database.sqlite
         .prepare(
@@ -259,7 +259,7 @@ describe("action persistence foundation", () => {
         upgraded.database.sqlite
           .prepare("select count(*) as count from __drizzle_migrations")
           .get(),
-      ).toEqual({ count: 11 });
+      ).toEqual({ count: 12 });
       expect(upgradedRepository.getEngagement(engagement.id)).toMatchObject({
         ok: true,
         value: { engagement: { id: engagement.id, name: "Target lab" } },

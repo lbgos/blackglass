@@ -12,6 +12,7 @@ import Fastify, {
 import type {
   EngagementRepository,
   EvidenceGrantRepository,
+  FfufRepository,
   HttpProbeRepository,
   NmapServiceRepository,
   OperatorCommandRepository,
@@ -33,6 +34,7 @@ import { registerFindingRoutes } from "./finding-routes.js";
 import { registerRunnerAuthHook, stripAuthorizationHeader } from "./runner-http.js";
 import { registerRunnerEnrollmentRoutes } from "./runner-enrollment-routes.js";
 import { registerRunnerControlRoutes } from "./runner-routes.js";
+import { registerFfufRoutes } from "./ffuf-routes.js";
 import { registerNmapServiceRoutes } from "./nmap-service-routes.js";
 import { registerRunOutputRoutes } from "./run-output-routes.js";
 import { registerRunnerEvidenceGrantRoutes } from "./runner-evidence-grant-routes.js";
@@ -91,6 +93,7 @@ interface BuildAppOptions {
   evidenceStore?: Pick<EvidenceStore, "verifiedDownload" | "verifiedExcerpt">;
   nmapServiceRepository?: Pick<NmapServiceRepository, "listForEngagement">;
   httpProbeRepository?: Pick<HttpProbeRepository, "listForEngagement">;
+  ffufRepository?: Pick<FfufRepository, "listForEngagement">;
   runOutputRepository?: Pick<
     RunOutputRepository,
     "latestTerminalRunForEngagement" | "runForEngagement" | "artifactsForRun"
@@ -111,6 +114,7 @@ export function buildApp({
   evidenceStore,
   nmapServiceRepository,
   httpProbeRepository,
+  ffufRepository,
   runOutputRepository,
   logger = false,
   now,
@@ -228,6 +232,12 @@ export function buildApp({
   }
   if (httpProbeRepository !== undefined) {
     registerHttpProbeRoutes(app, { repository: httpProbeRepository });
+  }
+  if (ffufRepository !== undefined) {
+    registerFfufRoutes(app, {
+      results: ffufRepository,
+      ...(operatorCommandRepository === undefined ? {} : { commands: operatorCommandRepository }),
+    });
   }
   if (
     evidenceStore !== undefined &&

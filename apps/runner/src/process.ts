@@ -54,6 +54,10 @@ export function resolveNmapXmlPath(runRoot: string, runId: string, fence: string
   return path.join(resolveRunDirPath(runRoot, runId, fence), "nmap.xml");
 }
 
+export function resolveFfufJsonPath(runRoot: string, runId: string, fence: string): string {
+  return path.join(resolveRunDirPath(runRoot, runId, fence), "ffuf.json");
+}
+
 export async function createRunDirectory(runRoot: string, runId: string, fence: string): Promise<RunDirectories> {
   const runDir = resolveRunDirPath(runRoot, runId, fence);
   await mkdir(runRoot, { recursive: true, mode: 0o700 }).catch(() => {
@@ -273,37 +277,50 @@ export async function readNmapXmlSecurely(params: {
   runId: string;
   fence: string;
 }): Promise<Buffer> {
-  const expected = resolveNmapXmlPath(params.runRoot, params.runId, params.fence);
-  const expectedResolved = path.resolve(expected);
+  return readRunFileSecurely({
+    ...params,
+    expected: resolveNmapXmlPath(params.runRoot, params.runId, params.fence),
+    errorCode: "nmap_xml_unavailable",
+  });
+}
+
+async function readRunFileSecurely(params: {
+  runRoot: string;
+  runId: string;
+  fence: string;
+  expected: string;
+  errorCode: string;
+}): Promise<Buffer> {
+  const expectedResolved = path.resolve(params.expected);
   const runDir = resolveRunDirPath(params.runRoot, params.runId, params.fence);
   const rootResolved = path.resolve(params.runRoot);
   const limit = EVIDENCE_QUOTA_DEFAULTS.perArtifactBytes;
   try {
     const rootLstat = await lstat(params.runRoot);
-    if (rootLstat.isSymbolicLink() || !rootLstat.isDirectory()) throw new Error("nmap_xml_unavailable");
+    if (rootLstat.isSymbolicLink() || !rootLstat.isDirectory()) throw new Error(params.errorCode);
     const rootReal = await realpath(params.runRoot);
-    if (rootReal !== rootResolved) throw new Error("nmap_xml_unavailable");
+    if (rootReal !== rootResolved) throw new Error(params.errorCode);
     const dirLstat = await lstat(runDir);
-    if (dirLstat.isSymbolicLink() || !dirLstat.isDirectory()) throw new Error("nmap_xml_unavailable");
+    if (dirLstat.isSymbolicLink() || !dirLstat.isDirectory()) throw new Error(params.errorCode);
     const dirReal = await realpath(runDir);
-    if (dirReal !== path.resolve(runDir) || path.dirname(dirReal) !== rootReal) throw new Error("nmap_xml_unavailable");
+    if (dirReal !== path.resolve(runDir) || path.dirname(dirReal) !== rootReal) throw new Error(params.errorCode);
   } catch (e) {
-    if (e instanceof Error && e.message === "nmap_xml_unavailable") throw e;
-    throw new Error("nmap_xml_unavailable");
+    if (e instanceof Error && e.message === params.errorCode) throw e;
+    throw new Error(params.errorCode);
   }
   let fh: Awaited<ReturnType<typeof open>> | null = null;
   try {
-    fh = await open(expected, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    fh = await open(params.expected, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   } catch {
-    throw new Error("nmap_xml_unavailable");
+    throw new Error(params.errorCode);
   }
   try {
     const fdPath = await realpath(`/proc/self/fd/${fh.fd}`).catch(() => {
-      throw new Error("nmap_xml_unavailable");
+      throw new Error(params.errorCode);
     });
-    if (fdPath !== expectedResolved) throw new Error("nmap_xml_unavailable");
+    if (fdPath !== expectedResolved) throw new Error(params.errorCode);
     const st = await fh.stat();
-    if (!st.isFile() || st.nlink !== 1 || st.size === 0 || st.size > limit) throw new Error("nmap_xml_unavailable");
+    if (!st.isFile() || st.nlink !== 1 || st.size === 0 || st.size > limit) throw new Error(params.errorCode);
     const buf = Buffer.allocUnsafe(st.size);
     let off = 0;
     while (off < st.size) {
@@ -311,20 +328,32 @@ export async function readNmapXmlSecurely(params: {
       if (bytesRead === 0) break;
       off += bytesRead;
     }
-    if (off !== st.size) throw new Error("nmap_xml_unavailable");
+    if (off !== st.size) throw new Error(params.errorCode);
     const probe = Buffer.alloc(1);
     const { bytesRead: extra } = await fh.read(probe, 0, 1, null);
-    if (extra !== 0) throw new Error("nmap_xml_unavailable");
+    if (extra !== 0) throw new Error(params.errorCode);
     const st2 = await fh.stat();
-    if (st2.size !== st.size || st2.nlink !== 1) throw new Error("nmap_xml_unavailable");
-    if (st.ino !== st2.ino) throw new Error("nmap_xml_unavailable");
-    if (st.dev !== st2.dev) throw new Error("nmap_xml_unavailable");
-    if (st2.mtimeMs !== st.mtimeMs || st2.ctimeMs !== st.ctimeMs) throw new Error("nmap_xml_unavailable");
+    if (st2.size !== st.size || st2.nlink !== 1) throw new Error(params.errorCode);
+    if (st.ino !== st2.ino) throw new Error(params.errorCode);
+    if (st.dev !== st2.dev) throw new Error(params.errorCode);
+    if (st2.mtimeMs !== st.mtimeMs || st2.ctimeMs !== st.ctimeMs) throw new Error(params.errorCode);
     return buf;
   } catch (e) {
-    if (e instanceof Error && e.message === "nmap_xml_unavailable") throw e;
-    throw new Error("nmap_xml_unavailable");
+    if (e instanceof Error && e.message === params.errorCode) throw e;
+    throw new Error(params.errorCode);
   } finally {
     await fh?.close().catch(() => {});
   }
+}
+
+export async function readFfufJsonSecurely(params: {
+  runRoot: string;
+  runId: string;
+  fence: string;
+}): Promise<Buffer> {
+  return readRunFileSecurely({
+    ...params,
+    expected: resolveFfufJsonPath(params.runRoot, params.runId, params.fence),
+    errorCode: "ffuf_json_unavailable",
+  });
 }

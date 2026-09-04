@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 import {
+  FFUF_MAX_JSON_BYTES,
   FFUF_MAX_RESULTS,
   FfufActionOptionsSchema,
   FfufDiscoveryOutputSchema,
@@ -12,8 +13,7 @@ import { buildFfufArgv } from "@blackglass/domain";
 import { runSupervisedCommand } from "./process.js";
 
 export const FFUF_DEFAULT_EXECUTABLE = "/usr/bin/ffuf";
-/** Guard against unbounded JSON reads; ffuf output scales with the wordlist. */
-export const FFUF_MAX_JSON_BYTES = 64 * 1024 * 1024;
+export { FFUF_MAX_JSON_BYTES };
 
 export interface FfufRunContext {
   runId: string;

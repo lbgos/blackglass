@@ -1140,6 +1140,65 @@ export const httpProbeResults = sqliteTable(
   ],
 );
 
+export const ffufResults = sqliteTable(
+  "ffuf_results",
+  {
+    artifactId: text("artifact_id").notNull(),
+    parserVersion: text("parser_version").notNull(),
+    url: text("url").notNull(),
+    status: integer("status").notNull(),
+    length: integer("length").notNull(),
+    words: integer("words").notNull(),
+    lines: integer("lines").notNull(),
+    redirectlocation: text("redirectlocation"),
+    fuzz: text("fuzz").notNull(),
+    observedAt: text("observed_at").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.artifactId, table.parserVersion, table.url],
+    }),
+    foreignKey({
+      columns: [table.artifactId],
+      foreignColumns: [evidenceArtifacts.artifactId],
+      name: "ffuf_result_artifact_fk",
+    }).onDelete("restrict"),
+    check(
+      "ffuf_result_artifact_id",
+      sql`length(${table.artifactId}) between 1 and 127
+        and substr(${table.artifactId},1,1) glob '[a-z0-9]'
+        and ${table.artifactId} not glob '*[^a-z0-9-]*'`,
+    ),
+    check(
+      "ffuf_result_parser_version",
+      sql`length(${table.parserVersion}) between 1 and 64
+        and ${table.parserVersion} not glob '*[^a-z0-9._-]*'
+        and substr(${table.parserVersion}, 1, 1) glob '[a-z0-9]'`,
+    ),
+    check(
+      "ffuf_result_url",
+      sql`length(${table.url}) between 1 and 2048`,
+    ),
+    check(
+      "ffuf_result_status",
+      sql`${table.status} between 100 and 599`,
+    ),
+    check(
+      "ffuf_result_counts",
+      sql`${table.length} >= 0 and ${table.words} >= 0 and ${table.lines} >= 0`,
+    ),
+    check(
+      "ffuf_result_redirect",
+      sql`${table.redirectlocation} is null or length(${table.redirectlocation}) between 1 and 2048`,
+    ),
+    check(
+      "ffuf_result_fuzz",
+      sql`length(${table.fuzz}) between 1 and 2048`,
+    ),
+    check("ffuf_result_observed_at", sql`length(${table.observedAt}) >= 20`),
+  ],
+);
+
 export const findings = sqliteTable(
   "findings",
   {
@@ -1201,4 +1260,5 @@ export type EvidenceGrantRow = typeof evidenceGrants.$inferSelect;
 export type EvidenceArtifactRow = typeof evidenceArtifacts.$inferSelect;
 export type NmapServiceRow = typeof nmapServices.$inferSelect;
 export type HttpProbeResultRow = typeof httpProbeResults.$inferSelect;
+export type FfufResultRow = typeof ffufResults.$inferSelect;
 export type FindingRow = typeof findings.$inferSelect;

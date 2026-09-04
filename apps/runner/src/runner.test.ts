@@ -16,7 +16,7 @@ import {
   removeOutboxAtomically,
 } from "./outbox.js";
 import { type ActionSnapshot, AcquireRunnerLeaseResponseSchema, commandJsonV1RunnerAppendStartedDigest, EVIDENCE_QUOTA_DEFAULTS } from "@blackglass/contracts";
-import { createRunnerLoop, prepareNmapExecution, runOnce, RunnerShutdownError } from "./runner.js";
+import { createRunnerLoop, prepareFfufExecution, prepareNmapExecution, runOnce, RunnerShutdownError } from "./runner.js";
 
 function fixtureActionSnapshot(actionId = "act-1"): ActionSnapshot {
   return {
@@ -1164,6 +1164,71 @@ describe("prepareNmapExecution", () => {
     await chmod(p, 0o600);
     await expect(verifyExecutable(p)).rejects.toThrow();
     await rm(p, { force: true }).catch(() => {});
+  });
+});
+
+describe("prepareFfufExecution", () => {
+  function ffufSnapshot(actionId: string, typedOptions: unknown): ActionSnapshot {
+    const base = fixtureActionSnapshot(actionId);
+    return {
+      ...base,
+      canonicalTargets: [
+        {
+          normalizationProfile: "d1-v1",
+          kind: "url",
+          url: "http://127.0.0.1:3130/",
+          origin: "http://127.0.0.1:3130",
+          host: { address: "127.0.0.1", zone: null },
+          effectivePort: 80,
+          pathAndQuery: "/",
+        },
+      ],
+      concreteDestinations: [],
+      typedOptions: typedOptions as ActionSnapshot["typedOptions"],
+    } as unknown as ActionSnapshot;
+  }
+
+  const ffufOptions = {
+    origin: "http://127.0.0.1:3130/",
+    wordlistPath: "/lists/smoke.txt",
+    rate: 100,
+    threads: 10,
+    timeoutSeconds: 5,
+    maxTimeSeconds: 60,
+    matchStatusCodes: [200],
+  };
+
+  it("derives runner-owned argv and ignores plain URL snapshots", () => {
+    const runRoot = path.join(tmpdir(), `ffuf-prep-${Date.now()}`);
+    const snapshot = ffufSnapshot("act-ffuf-1", { declaredPorts: null, ffuf: ffufOptions });
+    const prepared = prepareFfufExecution({ snapshot, runRoot, runId: "run-1", fence: "1" });
+    expect(prepared.ok).toBe(true);
+    if (prepared.ok) {
+      const expectedJson = path.join(runRoot, "run-run-1-f1", "ffuf.json");
+      expect(prepared.options.outputJsonPath).toBe(expectedJson);
+      expect(prepared.argv.slice(0, 3)).toEqual(["ffuf", "-u", "http://127.0.0.1:3130/FUZZ"]);
+      expect(prepared.argv).toContain(expectedJson);
+      expect(prepared.argv).not.toContain("-rate");
+    }
+    const plain = prepareFfufExecution({
+      snapshot: fixtureActionSnapshot("act-plain-1"),
+      runRoot,
+      runId: "run-1",
+      fence: "1",
+    });
+    expect(plain).toEqual({ ok: false, reason: "not_ffuf_snapshot" });
+  });
+
+  it("fails closed on corrupt ffuf markers", () => {
+    const runRoot = path.join(tmpdir(), `ffuf-prep-${Date.now()}`);
+    const corrupt = prepareFfufExecution({
+      snapshot: ffufSnapshot("act-ffuf-2", { declaredPorts: null, ffuf: { origin: "ftp://x/" } }),
+      runRoot,
+      runId: "run-1",
+      fence: "1",
+    });
+    expect(corrupt).toEqual({ ok: false, reason: "invalid_action_snapshot" });
+    expect(JSON.stringify(corrupt)).not.toContain("ftp");
   });
 });
 

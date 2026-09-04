@@ -1,10 +1,12 @@
 import {
   EngagementDetailResponseSchema,
+  EngagementFfufResultsResponseSchema,
   EngagementHttpProbesResponseSchema,
   EngagementListResponseSchema,
   EngagementServicesResponseSchema,
   type Engagement,
   type EngagementWithActiveScope,
+  type FfufProjected,
   type HttpProbeProjected,
   type NmapProjectedService,
 } from "@blackglass/contracts";
@@ -12,6 +14,7 @@ import { queryOptions, useQuery } from "@tanstack/react-query";
 
 import {
   EngagementDetailQueryError,
+  EngagementFfufResultsQueryError,
   EngagementHttpProbesQueryError,
   EngagementServicesQueryError,
   EngagementsQueryError,
@@ -149,6 +152,42 @@ export function engagementHttpProbesQueryOptions(engagementId: string) {
 
 export function useEngagementHttpProbesQuery(engagementId: string) {
   return useQuery(engagementHttpProbesQueryOptions(engagementId));
+}
+
+export function engagementFfufResultsQueryKey(engagementId: string) {
+  return [...ENGAGEMENTS_QUERY_KEY, engagementId, "ffuf-results"] as const;
+}
+
+export async function fetchEngagementFfufResults(
+  engagementId: string,
+  signal?: AbortSignal,
+): Promise<FfufProjected[]> {
+  try {
+    const response = await fetch(
+      `/api/v1/engagements/${engagementId}/ffuf-results`,
+      signal ? { signal } : undefined,
+    );
+    if (response.status !== 200) throw new EngagementFfufResultsQueryError();
+
+    const payload: unknown = await response.json();
+    const result = EngagementFfufResultsResponseSchema.safeParse(payload);
+    if (!result.success) throw new EngagementFfufResultsQueryError();
+    return result.data;
+  } catch (error) {
+    if (error instanceof EngagementFfufResultsQueryError) throw error;
+    throw new EngagementFfufResultsQueryError();
+  }
+}
+
+export function engagementFfufResultsQueryOptions(engagementId: string) {
+  return queryOptions({
+    queryKey: engagementFfufResultsQueryKey(engagementId),
+    queryFn: ({ signal }) => fetchEngagementFfufResults(engagementId, signal),
+  });
+}
+
+export function useEngagementFfufResultsQuery(engagementId: string) {
+  return useQuery(engagementFfufResultsQueryOptions(engagementId));
 }
 
 export function partitionEngagements(engagements: readonly Engagement[]) {

@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAppQueryClient } from "../query-client.js";
 import {
   ENGAGEMENT_DETAIL_QUERY_ERROR_MESSAGE,
+  ENGAGEMENT_FFUF_RESULTS_QUERY_ERROR_MESSAGE,
   ENGAGEMENT_HTTP_PROBES_QUERY_ERROR_MESSAGE,
   ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE,
   ENGAGEMENTS_QUERY_ERROR_MESSAGE,
   EngagementDetailQueryError,
+  EngagementFfufResultsQueryError,
   EngagementHttpProbesQueryError,
   EngagementServicesQueryError,
   EngagementsQueryError,
@@ -15,6 +17,8 @@ import {
   ENGAGEMENTS_QUERY_KEY,
   engagementDetailQueryKey,
   engagementDetailQueryOptions,
+  engagementFfufResultsQueryKey,
+  engagementFfufResultsQueryOptions,
   engagementHttpProbesQueryKey,
   engagementHttpProbesQueryOptions,
   engagementServicesQueryKey,
@@ -336,8 +340,59 @@ describe("engagementHttpProbesQueryOptions", () => {
   });
 });
 
-describe("partitionEngagements", () => {
-  it("separates active and archived records without inventing extras", () => {
+describe("engagementFfufResultsQueryOptions", () => {
+  const ffufResult = {
+    source: "ffuf" as const,
+    parserVersion: "ffuf-json-v1",
+    url: "http://127.0.0.1:3130/planted.txt",
+    status: 200,
+    length: 10,
+    words: 1,
+    lines: 2,
+    redirectlocation: null,
+    fuzz: "planted.txt",
+    runId: "run-1",
+    artifactId: "artifact-1",
+    artifactDigest: `sha256:${"a".repeat(64)}`,
+    observedAt: "2026-09-03T00:00:00.000Z",
+  };
+
+  it("fetches projected ffuf results under a stable key", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(response([ffufResult])));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createAppQueryClient();
+    await expect(client.fetchQuery(engagementFfufResultsQueryOptions(engagement.id))).resolves.toEqual([
+      ffufResult,
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/engagements/${engagement.id}/ffuf-results`,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(engagementFfufResultsQueryKey(engagement.id)).toEqual([
+      ...ENGAGEMENTS_QUERY_KEY,
+      engagement.id,
+      "ffuf-results",
+    ]);
+    client.clear();
+  });
+
+  it("rejects extra fields without leaking", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response([{ ...ffufResult, secret: "/private/path" }]))),
+    );
+    const client = createAppQueryClient();
+    await expect(client.fetchQuery(engagementFfufResultsQueryOptions(engagement.id))).rejects.toMatchObject({
+      name: "EngagementFfufResultsQueryError",
+      message: ENGAGEMENT_FFUF_RESULTS_QUERY_ERROR_MESSAGE,
+    });
+    expect(ENGAGEMENT_FFUF_RESULTS_QUERY_ERROR_MESSAGE).not.toContain("secret");
+    client.clear();
+    expect(EngagementFfufResultsQueryError).toBeDefined();
+  });
+});
+
+describe("partitionEngagements", () => {  it("separates active and archived records without inventing extras", () => {
     const archived = { ...engagement, id: "10000000-0000-4000-8000-000000000002", status: "archived" as const };
     expect(partitionEngagements([engagement, archived])).toEqual({
       active: [engagement],
