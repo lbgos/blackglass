@@ -97,7 +97,10 @@ interface BuildAppOptions {
   nmapServiceRepository?: Pick<NmapServiceRepository, "listForEngagement">;
   settingsRepository?: Pick<
     SettingsRepository,
-    "getRunnerSettings" | "updateRunnerSettings"
+    | "getRunnerSettings"
+    | "updateRunnerSettings"
+    | "getAdvisorSettings"
+    | "updateAdvisorSettings"
   >;
   httpProbeRepository?: Pick<HttpProbeRepository, "listForEngagement">;
   ffufRepository?: Pick<FfufRepository, "listForEngagement">;

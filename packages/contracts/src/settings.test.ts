@@ -1,17 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ADVISOR_SETTINGS_DEFAULTS,
+  AdvisorSettingsSchema,
+  GetAdvisorSettingsResponseSchema,
   GetSettingsResponseSchema,
   RUNNER_SETTINGS_DEFAULTS,
   RunnerSettingsSchema,
   SettingScopeSchema,
+  UpdateAdvisorSettingsRequestSchema,
   UpdateSettingsRequestSchema,
 } from "./settings.js";
 
 describe("SettingScopeSchema", () => {
-  it("accepts only the runner scope in this slice", () => {
+  it("accepts the runner and advisor scopes", () => {
     expect(SettingScopeSchema.safeParse("runner").success).toBe(true);
-    for (const scope of ["general", "appearance", "advisor", "evidence", "diagnostics", ""]) {
+    expect(SettingScopeSchema.safeParse("advisor").success).toBe(true);
+    for (const scope of ["general", "appearance", "evidence", "diagnostics", ""]) {
       expect(SettingScopeSchema.safeParse(scope).success).toBe(false);
     }
   });
@@ -144,6 +149,183 @@ describe("UpdateSettingsRequestSchema", () => {
     expect(UpdateSettingsRequestSchema.safeParse({ ffufRate: 0 }).success).toBe(false);
     expect(
       UpdateSettingsRequestSchema.safeParse({ ffufTimeoutSeconds: 10_000 }).success,
+    ).toBe(false);
+  });
+});
+
+describe("AdvisorSettingsSchema", () => {
+  it("accepts the shipped defaults (unconfigured endpoint and model)", () => {
+    const parsed = AdvisorSettingsSchema.safeParse({ ...ADVISOR_SETTINGS_DEFAULTS });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data).toEqual({
+        endpointBaseUrl: "",
+        modelId: "",
+        apiKeyEnvVar: "",
+        requestBudget: 10,
+        rawResponseVisibility: true,
+        publicEndpointOptIn: false,
+      });
+    }
+  });
+
+  it("accepts a configured http(s) endpoint, model, env var, and budget", () => {
+    expect(
+      AdvisorSettingsSchema.safeParse({
+        ...ADVISOR_SETTINGS_DEFAULTS,
+        endpointBaseUrl: "http://127.0.0.1:11434/v1",
+        modelId: "qwen3:8b",
+        apiKeyEnvVar: "BLACKGLASS_ADVISOR_API_KEY",
+        requestBudget: 25,
+        rawResponseVisibility: false,
+        publicEndpointOptIn: false,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects non-http(s) and overlong endpoints", () => {
+    expect(
+      AdvisorSettingsSchema.safeParse({
+        ...ADVISOR_SETTINGS_DEFAULTS,
+        endpointBaseUrl: "ftp://example.invalid/v1",
+      }).success,
+    ).toBe(false);
+    expect(
+      AdvisorSettingsSchema.safeParse({
+        ...ADVISOR_SETTINGS_DEFAULTS,
+        endpointBaseUrl: "not-a-url",
+      }).success,
+    ).toBe(false);
+    expect(
+      AdvisorSettingsSchema.safeParse({
+        ...ADVISOR_SETTINGS_DEFAULTS,
+        endpointBaseUrl: `https://example.invalid/${"a".repeat(2048)}`,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects invalid env var names and overlong model ids", () => {
+    for (const apiKeyEnvVar of ["lowercase", "HAS-DASH", "HAS SPACE", "9STARTS_WITH_DIGIT"]) {
+      expect(
+        AdvisorSettingsSchema.safeParse({ ...ADVISOR_SETTINGS_DEFAULTS, apiKeyEnvVar })
+          .success,
+      ).toBe(false);
+    }
+    expect(
+      AdvisorSettingsSchema.safeParse({
+        ...ADVISOR_SETTINGS_DEFAULTS,
+        apiKeyEnvVar: `${"A".repeat(128)}B`,
+      }).success,
+    ).toBe(false);
+    expect(
+      AdvisorSettingsSchema.safeParse({
+        ...ADVISOR_SETTINGS_DEFAULTS,
+        modelId: "m".repeat(129),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects out-of-range budgets and non-boolean flags", () => {
+    for (const requestBudget of [0, 101, 2.5, "10"]) {
+      expect(
+        AdvisorSettingsSchema.safeParse({ ...ADVISOR_SETTINGS_DEFAULTS, requestBudget })
+          .success,
+      ).toBe(false);
+    }
+    expect(
+      AdvisorSettingsSchema.safeParse({
+        ...ADVISOR_SETTINGS_DEFAULTS,
+        rawResponseVisibility: "yes",
+      }).success,
+    ).toBe(false);
+    expect(
+      AdvisorSettingsSchema.safeParse({
+        ...ADVISOR_SETTINGS_DEFAULTS,
+        publicEndpointOptIn: 1,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects key material in any string value", () => {
+    for (const value of [
+      "sk-abc123",
+      "https://example.invalid/v1?key=sk-abc123",
+      "Bearer eyJhbGciOiJIUzI1NiJ9",
+      "prefix bearer token",
+      "SK-LIVE-KEY",
+    ]) {
+      expect(
+        AdvisorSettingsSchema.safeParse({ ...ADVISOR_SETTINGS_DEFAULTS, modelId: value })
+          .success,
+      ).toBe(false);
+      expect(
+        AdvisorSettingsSchema.safeParse({ ...ADVISOR_SETTINGS_DEFAULTS, apiKeyEnvVar: value })
+          .success,
+      ).toBe(false);
+    }
+    expect(
+      AdvisorSettingsSchema.safeParse({
+        ...ADVISOR_SETTINGS_DEFAULTS,
+        endpointBaseUrl: "https://example.invalid/sk-abc123",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts a public URL without opt-in at storage (enforcement is a later slice)", () => {
+    expect(
+      AdvisorSettingsSchema.safeParse({
+        ...ADVISOR_SETTINGS_DEFAULTS,
+        endpointBaseUrl: "https://api.example-provider.invalid/v1",
+        publicEndpointOptIn: false,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects unknown keys (strict, no passthrough)", () => {
+    expect(
+      AdvisorSettingsSchema.safeParse({ ...ADVISOR_SETTINGS_DEFAULTS, apiKey: "secret" })
+        .success,
+    ).toBe(false);
+    expect(
+      GetAdvisorSettingsResponseSchema.safeParse({
+        ...ADVISOR_SETTINGS_DEFAULTS,
+        scope: "advisor",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("UpdateAdvisorSettingsRequestSchema", () => {
+  it("accepts a partial update", () => {
+    expect(UpdateAdvisorSettingsRequestSchema.safeParse({ requestBudget: 5 }).success).toBe(
+      true,
+    );
+    expect(UpdateAdvisorSettingsRequestSchema.safeParse({}).success).toBe(true);
+    expect(
+      UpdateAdvisorSettingsRequestSchema.safeParse({
+        endpointBaseUrl: "http://127.0.0.1:11434/v1",
+        modelId: "qwen3:8b",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects unknown keys, key material, and invalid values", () => {
+    expect(
+      UpdateAdvisorSettingsRequestSchema.safeParse({ requestBudget: 5, scope: "advisor" })
+        .success,
+    ).toBe(false);
+    expect(
+      UpdateAdvisorSettingsRequestSchema.safeParse({ modelId: "sk-abc123" }).success,
+    ).toBe(false);
+    expect(
+      UpdateAdvisorSettingsRequestSchema.safeParse({ endpointBaseUrl: "gopher://x" })
+        .success,
+    ).toBe(false);
+    expect(
+      UpdateAdvisorSettingsRequestSchema.safeParse({ apiKeyEnvVar: "bad-name" }).success,
+    ).toBe(false);
+    expect(
+      UpdateAdvisorSettingsRequestSchema.safeParse({ requestBudget: 101 }).success,
     ).toBe(false);
   });
 });

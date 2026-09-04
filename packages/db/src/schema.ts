@@ -1258,7 +1258,7 @@ export const settings = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    check("settings_scope", sql`${table.scope} = 'runner'`),
+    check("settings_scope", sql`${table.scope} in ('runner', 'advisor')`),
     check(
       "settings_value_json",
       sql`json_valid(${table.valueJson}) and length(cast(${table.valueJson} as blob)) <= 65536`,

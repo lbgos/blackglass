@@ -5,7 +5,7 @@ import path from "node:path";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { openEngagementDatabase } from "./database.js";
+import { openEngagementDatabase, DATABASE_SCHEMA_VERSION } from "./database.js";
 import { settings } from "./schema.js";
 import { SettingsRepository } from "./settings.js";
 
@@ -137,5 +137,147 @@ describe("runner settings persistence", () => {
 
     expect(first).toBe("2026-08-12T12:00:00.000Z");
     expect(second).toBe("2026-08-12T12:01:00.000Z");
+  });
+});
+
+describe("advisor settings persistence", () => {
+  it("applies all migrations including the advisor scope widening", () => {
+    const { database } = createFixture();
+
+    expect(
+      database.sqlite
+        .prepare("select count(*) as count from __drizzle_migrations")
+        .get(),
+    ).toEqual({ count: DATABASE_SCHEMA_VERSION });
+  });
+
+  it("serves shipped defaults when the row is absent", () => {
+    const { repository } = createFixture();
+
+    expect(repository.getAdvisorSettings()).toEqual({
+      ok: true,
+      value: {
+        endpointBaseUrl: "",
+        modelId: "",
+        apiKeyEnvVar: "",
+        requestBudget: 10,
+        rawResponseVisibility: true,
+        publicEndpointOptIn: false,
+      },
+    });
+  });
+
+  it("persists a partial update and merges it over the previous values", () => {
+    const { repository } = createFixture();
+
+    const updated = repository.updateAdvisorSettings({
+      endpointBaseUrl: "http://127.0.0.1:11434/v1",
+      modelId: "qwen3:8b",
+    });
+    expect(updated).toEqual({
+      ok: true,
+      value: {
+        endpointBaseUrl: "http://127.0.0.1:11434/v1",
+        modelId: "qwen3:8b",
+        apiKeyEnvVar: "",
+        requestBudget: 10,
+        rawResponseVisibility: true,
+        publicEndpointOptIn: false,
+      },
+    });
+    expect(repository.getAdvisorSettings()).toEqual(updated);
+  });
+
+  it("rejects key material, bad env names, bad URLs, and unknown keys without storing", () => {
+    const { repository, database } = createFixture();
+
+    expect(repository.updateAdvisorSettings({ modelId: "sk-abc123" })).toEqual({
+      ok: false,
+      error: { code: "invalid_repository_input" },
+    });
+    expect(
+      repository.updateAdvisorSettings({ modelId: "Bearer eyJhbGciOiJIUzI1NiJ9" }),
+    ).toEqual({ ok: false, error: { code: "invalid_repository_input" } });
+    expect(
+      repository.updateAdvisorSettings({
+        endpointBaseUrl: "https://example.invalid/sk-abc123",
+      }),
+    ).toEqual({ ok: false, error: { code: "invalid_repository_input" } });
+    expect(
+      repository.updateAdvisorSettings({ endpointBaseUrl: "gopher://example.invalid" }),
+    ).toEqual({ ok: false, error: { code: "invalid_repository_input" } });
+    expect(repository.updateAdvisorSettings({ apiKeyEnvVar: "bad-name" })).toEqual({
+      ok: false,
+      error: { code: "invalid_repository_input" },
+    });
+    expect(repository.updateAdvisorSettings({ requestBudget: 101 })).toEqual({
+      ok: false,
+      error: { code: "invalid_repository_input" },
+    });
+    expect(repository.updateAdvisorSettings({ unknownKey: true })).toEqual({
+      ok: false,
+      error: { code: "invalid_repository_input" },
+    });
+
+    expect(
+      database.db.select().from(settings).where(eq(settings.scope, "advisor")).get(),
+    ).toBeUndefined();
+  });
+
+  it("accepts a public URL without opt-in at storage", () => {
+    const { repository } = createFixture();
+
+    const updated = repository.updateAdvisorSettings({
+      endpointBaseUrl: "https://api.example-provider.invalid/v1",
+    });
+    expect(updated.ok).toBe(true);
+  });
+
+  it("rejects corrupt persisted rows as invalid_persisted_data", () => {
+    const { repository, database } = createFixture();
+
+    database.db
+      .insert(settings)
+      .values({
+        scope: "advisor",
+        valueJson: JSON.stringify({ requestBudget: "many" }),
+        updatedAt: new Date(Date.UTC(2026, 7, 12, 12, 0)).toISOString(),
+      })
+      .run();
+
+    expect(repository.getAdvisorSettings()).toEqual({
+      ok: false,
+      error: { code: "invalid_persisted_data" },
+    });
+  });
+
+  it("keeps the runner and advisor rows independent", () => {
+    const { repository } = createFixture();
+
+    repository.updateRunnerSettings({ ffufRate: 50 });
+    repository.updateAdvisorSettings({ requestBudget: 5 });
+
+    expect(repository.getRunnerSettings()).toEqual({
+      ok: true,
+      value: {
+        ffufBinaryPath: "/usr/bin/ffuf",
+        ffufWordlistPath: "",
+        ffufRate: 50,
+        ffufThreads: 40,
+        ffufTimeoutSeconds: 10,
+        ffufMaxTimeSeconds: 120,
+      },
+    });
+    expect(repository.getAdvisorSettings()).toEqual({
+      ok: true,
+      value: {
+        endpointBaseUrl: "",
+        modelId: "",
+        apiKeyEnvVar: "",
+        requestBudget: 5,
+        rawResponseVisibility: true,
+        publicEndpointOptIn: false,
+      },
+    });
   });
 });
