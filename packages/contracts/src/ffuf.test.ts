@@ -4,6 +4,7 @@ import {
   FFUF_DEFAULT_MATCH_CODES,
   FFUF_PARSER_VERSION,
   FfufActionOptionsSchema,
+  FfufDiscoveryLaunchRequestSchema,
   FfufDiscoveryLaunchSchema,
   FfufDiscoveryOptionsSchema,
   FfufDiscoveryOutputSchema,
@@ -171,6 +172,52 @@ describe("FfufDiscoveryLaunchSchema", () => {
     ).toBe(false);
     expect(
       FfufDiscoveryLaunchSchema.safeParse({ ...launch, outputJsonPath: "/tmp/x.json" } as unknown as object)
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe("FfufDiscoveryLaunchRequestSchema", () => {
+  const minimal = {
+    expectedEngagementRevision: 1,
+    expectedActiveScopeRevisionId: null,
+    origin: "http://127.0.0.1:3130",
+  } as const;
+
+  it("accepts a minimal launch and an empty wordlist as stored-default markers", () => {
+    expect(FfufDiscoveryLaunchRequestSchema.safeParse({ ...minimal }).success).toBe(true);
+    expect(
+      FfufDiscoveryLaunchRequestSchema.safeParse({ ...minimal, wordlistPath: "" }).success,
+    ).toBe(true);
+    const full = FfufDiscoveryLaunchRequestSchema.safeParse({
+      ...minimal,
+      wordlistPath: "/lists/smoke.txt",
+      rate: 50,
+      threads: 10,
+      timeoutSeconds: 5,
+      maxTimeSeconds: 60,
+      matchStatusCodes: [200],
+    });
+    expect(full.success).toBe(true);
+  });
+
+  it("rejects invalid explicit values and unknown fields", () => {
+    expect(
+      FfufDiscoveryLaunchRequestSchema.safeParse({ ...minimal, origin: "ftp://x/" }).success,
+    ).toBe(false);
+    expect(
+      FfufDiscoveryLaunchRequestSchema.safeParse({ ...minimal, wordlistPath: "../etc/words" }).success,
+    ).toBe(false);
+    expect(
+      FfufDiscoveryLaunchRequestSchema.safeParse({ ...minimal, wordlistPath: "relative.txt" }).success,
+    ).toBe(false);
+    expect(FfufDiscoveryLaunchRequestSchema.safeParse({ ...minimal, rate: 0 }).success).toBe(false);
+    expect(FfufDiscoveryLaunchRequestSchema.safeParse({ ...minimal, threads: 201 }).success).toBe(false);
+    expect(
+      FfufDiscoveryLaunchRequestSchema.safeParse({ ...minimal, matchStatusCodes: [] }).success,
+    ).toBe(false);
+    expect(
+      FfufDiscoveryLaunchRequestSchema.safeParse({ ...minimal, outputJsonPath: "/tmp/x.json" } as unknown as object)
         .success,
     ).toBe(false);
   });

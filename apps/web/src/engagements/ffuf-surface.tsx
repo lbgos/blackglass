@@ -1,8 +1,16 @@
-import type { PersistedAction, SavedScopeRule } from "@blackglass/contracts";
+import {
+  FFUF_MAX_TIME_SECONDS_DEFAULT,
+  FFUF_RATE_DEFAULT,
+  FFUF_THREADS_DEFAULT,
+  FFUF_TIMEOUT_SECONDS_DEFAULT,
+  type PersistedAction,
+  type SavedScopeRule,
+} from "@blackglass/contracts";
 import { Button, LoadingRegion, RecoverableError, Skeleton } from "@blackglass/ui";
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { useRunnerSettingsQuery } from "../settings/runner-settings.js";
 import { WarningCard } from "./action-planner.js";
 import { useCancelActionMutation } from "./action-mutations.js";
 import { actionLifecycleStatusCopy, isTerminalActionState, persistedActionQueryOptions } from "./action-query.js";
@@ -99,13 +107,29 @@ function FfufDiscoveryBody({
 }) {
   const formId = useId();
   const queryClient = useQueryClient();
+  const runnerDefaults = useRunnerSettingsQuery();
   const [origin, setOrigin] = useState("");
   const [wordlistPath, setWordlistPath] = useState("");
-  const [rate, setRate] = useState("100");
-  const [threads, setThreads] = useState("40");
-  const [timeoutSeconds, setTimeoutSeconds] = useState("10");
-  const [maxTimeSeconds, setMaxTimeSeconds] = useState("120");
+  const [rate, setRate] = useState(String(FFUF_RATE_DEFAULT));
+  const [threads, setThreads] = useState(String(FFUF_THREADS_DEFAULT));
+  const [timeoutSeconds, setTimeoutSeconds] = useState(String(FFUF_TIMEOUT_SECONDS_DEFAULT));
+  const [maxTimeSeconds, setMaxTimeSeconds] = useState(String(FFUF_MAX_TIME_SECONDS_DEFAULT));
   const [matchCodes, setMatchCodes] = useState(DEFAULT_MATCH_CODES);
+  // Stored defaults prefill fields the operator has not touched yet; explicit
+  // per-run values always win. A failed settings read keeps shipped defaults.
+  const editedFields = useRef(new Set<string>());
+  const markEdited = (field: string) => {
+    editedFields.current.add(field);
+  };
+  const storedDefaults = runnerDefaults.data;
+  useEffect(() => {
+    if (storedDefaults === undefined) return;
+    if (!editedFields.current.has("wordlistPath")) setWordlistPath(storedDefaults.ffufWordlistPath);
+    if (!editedFields.current.has("rate")) setRate(String(storedDefaults.ffufRate));
+    if (!editedFields.current.has("threads")) setThreads(String(storedDefaults.ffufThreads));
+    if (!editedFields.current.has("timeoutSeconds")) setTimeoutSeconds(String(storedDefaults.ffufTimeoutSeconds));
+    if (!editedFields.current.has("maxTimeSeconds")) setMaxTimeSeconds(String(storedDefaults.ffufMaxTimeSeconds));
+  }, [storedDefaults]);
   const [fieldError, setFieldError] = useState<string | undefined>(undefined);
   const [result, setResult] = useState<PersistedAction | undefined>(undefined);
   const [lastInputs, setLastInputs] = useState<FfufDiscoveryInput | undefined>(undefined);
@@ -224,10 +248,10 @@ function FfufDiscoveryBody({
     (displayAction.action.state === "queued" || displayAction.action.state === "active");
 
   const numericFields = [
-    { id: `${formId}-rate`, label: "Rate", value: rate, onChange: setRate },
-    { id: `${formId}-threads`, label: "Threads", value: threads, onChange: setThreads },
-    { id: `${formId}-timeout`, label: "Timeout s", value: timeoutSeconds, onChange: setTimeoutSeconds },
-    { id: `${formId}-maxtime`, label: "Duration s", value: maxTimeSeconds, onChange: setMaxTimeSeconds },
+    { id: `${formId}-rate`, label: "Rate", value: rate, onChange: setRate, field: "rate" },
+    { id: `${formId}-threads`, label: "Threads", value: threads, onChange: setThreads, field: "threads" },
+    { id: `${formId}-timeout`, label: "Timeout s", value: timeoutSeconds, onChange: setTimeoutSeconds, field: "timeoutSeconds" },
+    { id: `${formId}-maxtime`, label: "Duration s", value: maxTimeSeconds, onChange: setMaxTimeSeconds, field: "maxTimeSeconds" },
   ];
 
   return (
@@ -240,8 +264,8 @@ function FfufDiscoveryBody({
       <form className="grid gap-3" onSubmit={submit}>
         <div className="grid gap-3 sm:grid-cols-2">
           {[
-            { id: `${formId}-origin`, label: "Origin", value: origin, onChange: setOrigin, placeholder: "http://127.0.0.1:8080" },
-            { id: `${formId}-wordlist`, label: "Wordlist path", value: wordlistPath, onChange: setWordlistPath, placeholder: "/wordlists/smoke.txt" },
+            { id: `${formId}-origin`, label: "Origin", value: origin, onChange: setOrigin, placeholder: "http://127.0.0.1:8080", field: "origin" },
+            { id: `${formId}-wordlist`, label: "Wordlist path", value: wordlistPath, onChange: setWordlistPath, placeholder: "/wordlists/smoke.txt", field: "wordlistPath" },
           ].map((field) => (
             <label key={field.id} className="grid gap-1 text-[11px] text-muted-foreground" htmlFor={field.id}>
               <span>{field.label}</span>
@@ -253,7 +277,10 @@ function FfufDiscoveryBody({
                 spellCheck={false}
                 disabled={archived || launch.isPending}
                 className="h-9 w-full rounded-md border border-input bg-transparent px-2.5 font-mono text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onChange={(event) => field.onChange(event.target.value)}
+                onChange={(event) => {
+                  markEdited(field.field);
+                  field.onChange(event.target.value);
+                }}
               />
             </label>
           ))}
@@ -270,7 +297,10 @@ function FfufDiscoveryBody({
                 spellCheck={false}
                 disabled={archived || launch.isPending}
                 className="h-9 w-full rounded-md border border-input bg-transparent px-2.5 font-mono text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onChange={(event) => field.onChange(event.target.value)}
+                onChange={(event) => {
+                  markEdited(field.field);
+                  field.onChange(event.target.value);
+                }}
               />
             </label>
           ))}
@@ -287,6 +317,11 @@ function FfufDiscoveryBody({
             onChange={(event) => setMatchCodes(event.target.value)}
           />
         </label>
+        {runnerDefaults.isError && (
+          <p className="m-0 text-[12px] leading-5 text-muted-foreground">
+            Stored runner defaults are unavailable. Using shipped defaults.
+          </p>
+        )}
         {fieldError && (
           <p className="m-0 text-[13px] text-destructive" role="alert">
             {fieldError}

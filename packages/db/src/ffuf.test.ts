@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { openEngagementDatabase } from "./database.js";
 import { FfufRepository } from "./ffuf.js";
 import { EngagementRepository } from "./repository.js";
+import { SettingsRepository } from "./settings.js";
 
 const fixtures: { directory: string; database: ReturnType<typeof openEngagementDatabase> }[] = [];
 
@@ -107,6 +108,70 @@ describe("planFfufDiscoveryAction", () => {
       source: "engagement_policy",
       reasonCodes: ["risk_tier_t2"],
     });
+  });
+
+  it("falls back to stored runner defaults under explicit values", () => {
+    const { database, repository, engagementId, revision } = fixture();
+    const settingsRepository = new SettingsRepository(database.db);
+    expect(
+      settingsRepository.updateRunnerSettings({
+        ffufWordlistPath: "/lists/default.txt",
+        ffufRate: 50,
+        ffufThreads: 10,
+        ffufTimeoutSeconds: 5,
+        ffufMaxTimeSeconds: 60,
+      }),
+    ).toMatchObject({ ok: true });
+
+    const minimal = {
+      expectedEngagementRevision: revision,
+      expectedActiveScopeRevisionId: null,
+      origin: "http://127.0.0.1:3130",
+    };
+    const planned = repository.planFfufDiscoveryAction(engagementId, minimal);
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    expect(planned.value.action.snapshots[0]?.typedOptions).toMatchObject({
+      ffuf: {
+        wordlistPath: "/lists/default.txt",
+        rate: 50,
+        threads: 10,
+        timeoutSeconds: 5,
+        maxTimeSeconds: 60,
+      },
+    });
+
+    const explicit = repository.planFfufDiscoveryAction(engagementId, {
+      ...minimal,
+      wordlistPath: "/lists/explicit.txt",
+      rate: 200,
+    });
+    expect(explicit.ok).toBe(true);
+    if (!explicit.ok) return;
+    expect(explicit.value.action.snapshots[0]?.typedOptions).toMatchObject({
+      ffuf: { wordlistPath: "/lists/explicit.txt", rate: 200, threads: 10 },
+    });
+
+    const emptyWordlist = repository.planFfufDiscoveryAction(engagementId, {
+      ...minimal,
+      wordlistPath: "",
+    });
+    expect(emptyWordlist.ok).toBe(true);
+    if (!emptyWordlist.ok) return;
+    expect(emptyWordlist.value.action.snapshots[0]?.typedOptions).toMatchObject({
+      ffuf: { wordlistPath: "/lists/default.txt" },
+    });
+  });
+
+  it("rejects a launch with no wordlist anywhere", () => {
+    const { repository, engagementId, revision } = fixture();
+    expect(
+      repository.planFfufDiscoveryAction(engagementId, {
+        expectedEngagementRevision: revision,
+        expectedActiveScopeRevisionId: null,
+        origin: "http://127.0.0.1:3130",
+      }),
+    ).toEqual({ ok: false, error: { code: "invalid_repository_input" } });
   });
 
   it("rejects invalid contracts and archived engagements", () => {

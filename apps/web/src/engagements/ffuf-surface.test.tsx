@@ -126,4 +126,43 @@ describe("EngagementFfufSection", () => {
     expect(await screen.findByText("ffuf results unavailable")).toBeTruthy();
     expect(ENGAGEMENT_FFUF_RESULTS_QUERY_ERROR_MESSAGE).toContain("ffuf results");
   });
+
+  it("prefills stored runner defaults into the launch form", async () => {
+    stubFetch((url) => {
+      if (url.endsWith("/ffuf-results")) return response([]);
+      if (url.endsWith("/settings/runner")) {
+        return response({
+          ffufBinaryPath: "/usr/bin/ffuf",
+          ffufWordlistPath: "/lists/default.txt",
+          ffufRate: 50,
+          ffufThreads: 10,
+          ffufTimeoutSeconds: 5,
+          ffufMaxTimeSeconds: 60,
+        });
+      }
+      return response(detail);
+    });
+    renderSurface();
+    expect(await screen.findByRole("button", { name: "Launch discovery" })).toBeTruthy();
+    expect(await screen.findByDisplayValue("/lists/default.txt")).toBeTruthy();
+    expect((screen.getByLabelText("Rate") as HTMLInputElement).value).toBe("50");
+    expect((screen.getByLabelText("Threads") as HTMLInputElement).value).toBe("10");
+    expect((screen.getByLabelText("Timeout s") as HTMLInputElement).value).toBe("5");
+    expect((screen.getByLabelText("Duration s") as HTMLInputElement).value).toBe("60");
+  });
+
+  it("falls back to shipped defaults when stored settings fail", async () => {
+    stubFetch((url) => {
+      if (url.endsWith("/ffuf-results")) return response([]);
+      if (url.endsWith("/settings/runner")) {
+        return response({ code: "invalid_persisted_data" }, 500);
+      }
+      return response(detail);
+    });
+    renderSurface();
+    expect(await screen.findByRole("button", { name: "Launch discovery" })).toBeTruthy();
+    expect((screen.getByLabelText("Rate") as HTMLInputElement).value).toBe("100");
+    expect((screen.getByLabelText("Threads") as HTMLInputElement).value).toBe("40");
+    expect(await screen.findByText(/Using shipped defaults/)).toBeTruthy();
+  });
 });

@@ -6,6 +6,7 @@ import {
   EngagementRepository,
   FfufRepository,
   OperatorCommandRepository,
+  SettingsRepository,
   openEngagementDatabase,
 } from "@blackglass/db";
 import { afterEach, describe, expect, it } from "vitest";
@@ -44,6 +45,7 @@ async function fixture() {
     engagementRepository,
     operatorCommandRepository,
     ffufRepository: new FfufRepository(database.db),
+    settingsRepository: new SettingsRepository(database.db),
     getDevelopmentStorageReadiness: () => "ready",
   });
   app.addHook("onClose", async () => database.close());
@@ -154,6 +156,84 @@ describe("ffuf discovery routes", () => {
     });
     expect(afterArchive.statusCode).toBe(409);
     expect(afterArchive.json()).toEqual({ code: "engagement_archived" });
+  });
+
+  it("fills absent launch fields from stored runner defaults with explicit values winning", async () => {
+    const { app } = await fixture();
+    const engagement = await createEngagement(app);
+    const base = `/api/v1/engagements/${engagement.id}`;
+
+    const stored = await app.inject({
+      method: "PUT",
+      url: "/api/v1/settings/runner",
+      payload: {
+        ffufWordlistPath: "/lists/default.txt",
+        ffufRate: 50,
+        ffufThreads: 10,
+        ffufTimeoutSeconds: 5,
+        ffufMaxTimeSeconds: 60,
+      },
+    });
+    expect(stored.statusCode).toBe(200);
+
+    const launched = await app.inject({
+      method: "POST",
+      url: `${base}/ffuf-discoveries`,
+      headers: headers(key("ffuf-defaults")),
+      payload: {
+        expectedEngagementRevision: engagement.revision,
+        expectedActiveScopeRevisionId: null,
+        origin: "http://127.0.0.1:3130",
+      },
+    });
+    expect(launched.statusCode).toBe(201);
+    const snapshots = (launched.json() as { action: { snapshots: { typedOptions: unknown }[] } }).action
+      .snapshots;
+    expect(snapshots[0]?.typedOptions).toMatchObject({
+      ffuf: {
+        wordlistPath: "/lists/default.txt",
+        rate: 50,
+        threads: 10,
+        timeoutSeconds: 5,
+        maxTimeSeconds: 60,
+      },
+    });
+
+    const explicit = await app.inject({
+      method: "POST",
+      url: `${base}/ffuf-discoveries`,
+      headers: headers(key("ffuf-explicit-wins")),
+      payload: {
+        expectedEngagementRevision: engagement.revision,
+        expectedActiveScopeRevisionId: null,
+        origin: "http://127.0.0.1:3130",
+        wordlistPath: "/lists/explicit.txt",
+        rate: 200,
+      },
+    });
+    expect(explicit.statusCode).toBe(201);
+    const explicitSnapshots = (explicit.json() as { action: { snapshots: { typedOptions: unknown }[] } })
+      .action.snapshots;
+    expect(explicitSnapshots[0]?.typedOptions).toMatchObject({
+      ffuf: { wordlistPath: "/lists/explicit.txt", rate: 200, threads: 10 },
+    });
+  });
+
+  it("rejects a launch with no wordlist in the request or stored defaults", async () => {
+    const { app } = await fixture();
+    const engagement = await createEngagement(app);
+    const rejected = await app.inject({
+      method: "POST",
+      url: `/api/v1/engagements/${engagement.id}/ffuf-discoveries`,
+      headers: headers(key("ffuf-no-wordlist")),
+      payload: {
+        expectedEngagementRevision: engagement.revision,
+        expectedActiveScopeRevisionId: null,
+        origin: "http://127.0.0.1:3130",
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json()).toEqual({ code: "invalid_request" });
   });
 
   it("returns engagement_not_found for unknown engagements", async () => {

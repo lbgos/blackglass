@@ -4,7 +4,7 @@ import {
   EngagementFfufResultsParamsSchema,
   EngagementFfufResultsResponseSchema,
   EngagementIdParamsSchema,
-  FfufDiscoveryLaunchSchema,
+  FfufDiscoveryLaunchRequestSchema,
   JsonValueSchema,
   commandJsonV1CreateFfufDiscoveryDigest,
   type ActionMutationError,
@@ -101,7 +101,9 @@ export function registerFfufRoutes(
         digest: commandJsonV1CreateFfufDiscoveryDigest,
         mutate: (transaction: EngagementWriteTransaction) => {
           const params = EngagementIdParamsSchema.safeParse(request.params);
-          const body = FfufDiscoveryLaunchSchema.safeParse(request.body);
+          // Partial launch: absent numerics and an absent or empty wordlist
+          // fall back to stored runner defaults inside the plan transaction.
+          const body = FfufDiscoveryLaunchRequestSchema.safeParse(request.body);
           const query = ActionMutationQuerySchema.safeParse(request.query);
           if (!params.success || !query.success) {
             return { status: 400, body: { code: "invalid_request" } };

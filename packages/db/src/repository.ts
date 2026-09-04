@@ -11,7 +11,11 @@ import {
   EngagementWithActiveScopeSchema,
   FINDING_CONTRACT_VERSION,
   FindingSchema,
+  FFUF_DEFAULT_MATCH_CODES,
+  FfufDiscoveryLaunchRequestSchema,
   FfufDiscoveryLaunchSchema,
+  RUNNER_SETTINGS_DEFAULTS,
+  RunnerSettingsSchema,
   ScopeRevisionSchema,
   UpdateEngagementDeadlineRequestSchema,
   UpdateEngagementNotesRequestSchema,
@@ -75,6 +79,7 @@ import {
   engagements,
   findings,
   scopeRevisions,
+  settings,
   type EngagementNotesRow,
   type EngagementRow,
   type FindingRow,
@@ -940,7 +945,49 @@ class TransactionRepository implements EngagementWriteTransaction {
     engagementId: string,
     input: unknown,
   ): RepositoryResult<PersistedAction, ActionRepositoryError> {
-    const parsed = FfufDiscoveryLaunchSchema.safeParse(input);
+    const requested = FfufDiscoveryLaunchRequestSchema.safeParse(input);
+    if (!requested.success) return failed({ code: "invalid_repository_input" });
+    // Stored runner settings are defaults under explicit request values:
+    // absent numerics and an absent or empty wordlist fall back to storage.
+    // Read through this transaction so the plan observes one snapshot.
+    let stored = { ...RUNNER_SETTINGS_DEFAULTS };
+    try {
+      const row = this.client
+        .select()
+        .from(settings)
+        .where(eq(settings.scope, "runner"))
+        .get();
+      if (row !== undefined) {
+        let persisted: unknown;
+        try {
+          persisted = JSON.parse(row.valueJson);
+        } catch {
+          return failed({ code: "invalid_persisted_data" });
+        }
+        const validated = RunnerSettingsSchema.safeParse(persisted);
+        if (!validated.success) return failed({ code: "invalid_persisted_data" });
+        stored = validated.data;
+      }
+    } catch (error) {
+      return failed({
+        code: isStorageBusy(error) ? "storage_busy" : "invalid_persisted_data",
+      });
+    }
+    const request = requested.data;
+    const requestedWordlist = request.wordlistPath?.trim() ?? "";
+    const parsed = FfufDiscoveryLaunchSchema.safeParse({
+      expectedEngagementRevision: request.expectedEngagementRevision,
+      expectedActiveScopeRevisionId: request.expectedActiveScopeRevisionId,
+      origin: request.origin,
+      wordlistPath: requestedWordlist === "" ? stored.ffufWordlistPath : requestedWordlist,
+      rate: request.rate ?? stored.ffufRate,
+      threads: request.threads ?? stored.ffufThreads,
+      timeoutSeconds: request.timeoutSeconds ?? stored.ffufTimeoutSeconds,
+      maxTimeSeconds: request.maxTimeSeconds ?? stored.ffufMaxTimeSeconds,
+      ...(request.matchStatusCodes === undefined
+        ? { matchStatusCodes: [...FFUF_DEFAULT_MATCH_CODES] }
+        : { matchStatusCodes: [...request.matchStatusCodes] }),
+    });
     if (!parsed.success) return failed({ code: "invalid_repository_input" });
     const detail = this.getEngagement(engagementId);
     if (!detail.ok) return detail;

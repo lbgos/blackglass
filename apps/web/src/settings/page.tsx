@@ -1,6 +1,9 @@
 import {
   THEME_MEDIA_QUERY,
   THEME_FAMILIES,
+  LoadingRegion,
+  RecoverableError,
+  Skeleton,
   cn,
   listenForSystemTheme,
   resolveTheme,
@@ -17,6 +20,7 @@ import {
   useAppearancePrefs,
 } from "./appearance.js";
 import { SETTINGS_SECTIONS, type SettingsSectionId } from "./model.js";
+import { useUpdateRunnerSettingsMutation, useRunnerSettingsQuery } from "./runner-settings.js";
 import { useSettingsView } from "./settings-view.js";
 import { useSystemStatusQuery } from "../system-status-query.js";
 
@@ -517,61 +521,237 @@ function PluginsSettingsSection() {
   );
 }
 
+function parseRunnerInt(raw: string, min: number, max: number): number | undefined {
+  if (!/^\d+$/.test(raw.trim())) return undefined;
+  const value = Number.parseInt(raw.trim(), 10);
+  if (!Number.isSafeInteger(value) || value < min || value > max) return undefined;
+  return value;
+}
+
+function isAbsoluteRunnerPath(value: string): boolean {
+  return value.startsWith("/") && !value.includes("\0") && !value.split("/").includes("..");
+}
+
 function RunnerSection() {
+  const settingsQuery = useRunnerSettingsQuery();
+  const updateMutation = useUpdateRunnerSettingsMutation();
+  const [binary, setBinary] = useState("");
+  const [wordlist, setWordlist] = useState("");
+  const [rate, setRate] = useState("");
+  const [threads, setThreads] = useState("");
+  const [timeout, setTimeout] = useState("");
+  const [duration, setDuration] = useState("");
+  const [hydrated, setHydrated] = useState(false);
+  const [fieldError, setFieldError] = useState<string | undefined>(undefined);
+  const [saved, setSaved] = useState(false);
+
+  const stored = settingsQuery.data;
+  useEffect(() => {
+    if (stored === undefined || hydrated) return;
+    setBinary(stored.ffufBinaryPath);
+    setWordlist(stored.ffufWordlistPath);
+    setRate(String(stored.ffufRate));
+    setThreads(String(stored.ffufThreads));
+    setTimeout(String(stored.ffufTimeoutSeconds));
+    setDuration(String(stored.ffufMaxTimeSeconds));
+    setHydrated(true);
+  }, [stored, hydrated]);
+
+  if (settingsQuery.isPending) {
+    return (
+      <LoadingRegion label="Loading runner settings" className="space-y-3">
+        <Skeleton className="h-12 w-full" />
+        <Skeleton className="h-12 w-full" />
+      </LoadingRegion>
+    );
+  }
+
+  if (settingsQuery.isError || stored === undefined) {
+    return (
+      <RecoverableError
+        title="Runner settings unavailable"
+        description="Stored ffuf defaults could not be loaded from the local control plane."
+        onRetry={() => void settingsQuery.refetch()}
+      />
+    );
+  }
+
+  const parsedRate = parseRunnerInt(rate, 1, 10_000);
+  const parsedThreads = parseRunnerInt(threads, 1, 200);
+  const parsedTimeout = parseRunnerInt(timeout, 1, 120);
+  const parsedDuration = parseRunnerInt(duration, 5, 1800);
+  const binaryValid = isAbsoluteRunnerPath(binary.trim());
+  const wordlistValid = wordlist.trim() === "" || isAbsoluteRunnerPath(wordlist.trim());
+
+  const save = () => {
+    updateMutation.reset();
+    setSaved(false);
+    if (!binaryValid) {
+      setFieldError("ffuf binary must be an absolute path without .. segments.");
+      return;
+    }
+    if (!wordlistValid) {
+      setFieldError("Default wordlist must be empty (unset) or an absolute path without .. segments.");
+      return;
+    }
+    if (parsedRate === undefined) {
+      setFieldError("Default rate must be an integer in 1-10000.");
+      return;
+    }
+    if (parsedThreads === undefined) {
+      setFieldError("Default threads must be an integer in 1-200.");
+      return;
+    }
+    if (parsedTimeout === undefined) {
+      setFieldError("Default timeout must be an integer in 1-120 seconds.");
+      return;
+    }
+    if (parsedDuration === undefined) {
+      setFieldError("Default duration must be an integer in 5-1800 seconds.");
+      return;
+    }
+    setFieldError(undefined);
+    updateMutation.mutate(
+      {
+        ffufBinaryPath: binary.trim(),
+        ffufWordlistPath: wordlist.trim(),
+        ffufRate: parsedRate,
+        ffufThreads: parsedThreads,
+        ffufTimeoutSeconds: parsedTimeout,
+        ffufMaxTimeSeconds: parsedDuration,
+      },
+      { onSuccess: () => setSaved(true) },
+    );
+  };
+
+  const textInputClass =
+    "min-h-8 w-60 rounded-lg border border-border bg-accent px-2.5 font-mono text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  const numberInputClass =
+    "min-h-8 w-[88px] rounded-lg border border-border bg-accent px-2.5 font-mono text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
   return (
     <>
+      <p className="mt-0 mb-3 text-[13px] text-muted-foreground">
+        Defaults applied to ffuf launches. Explicit per-run values always win.
+      </p>
       <SetRow
-        description="Unprivileged host runner on this Linux machine."
-        settingId="local-runner"
-        title="Local runner"
+        description="ffuf executable used by the unprivileged host runner."
+        settingId="ffuf-binary"
+        title="ffuf binary"
       >
-        <HealthStatus detail="Not surfaced yet" label="Local runner" tone="neutral" />
-      </SetRow>
-      <SetRow
-        description="How many leased runs the runner may execute at once."
-        settingId="concurrency"
-        title="Concurrency"
-      >
-        <SelectField
-          label="Concurrency"
-          options={[
-            { label: "1", value: "1" },
-            { label: "2", value: "2" },
-            { label: "4", value: "4" },
-          ]}
-          value="2"
+        <input
+          aria-label="ffuf binary"
+          className={textInputClass}
+          value={binary}
+          autoComplete="off"
+          spellCheck={false}
+          type="text"
+          onChange={(event) => {
+            setBinary(event.target.value);
+            setSaved(false);
+          }}
         />
       </SetRow>
       <SetRow
-        description="Bound captured stdout and stderr per run. Overflow is truncated truthfully."
-        settingId="output-limit"
-        title="Output limit"
+        description="Empty means unset: each launch must then provide a wordlist."
+        settingId="ffuf-wordlist"
+        title="Default wordlist"
       >
-        <SelectField
-          label="Output limit"
-          options={[
-            { label: "2 MiB", value: "2 MiB" },
-            { label: "8 MiB", value: "8 MiB" },
-            { label: "32 MiB", value: "32 MiB" },
-          ]}
-          value="8 MiB"
+        <input
+          aria-label="Default wordlist"
+          className={textInputClass}
+          value={wordlist}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="Not set"
+          type="text"
+          onChange={(event) => {
+            setWordlist(event.target.value);
+            setSaved(false);
+          }}
         />
       </SetRow>
-      <SetRow
-        description="Cancel a run after this wall time unless the operator chose unlimited."
-        settingId="timeout"
-        title="Timeout"
-      >
-        <SelectField
-          label="Timeout"
-          options={[
-            { label: "60s", value: "60s" },
-            { label: "120s", value: "120s" },
-            { label: "Unlimited", value: "unlimited" },
-          ]}
-          value="120s"
+      <SetRow description="Requests per second applied when a launch omits a rate." settingId="ffuf-rate" title="Default rate">
+        <input
+          aria-label="Default rate"
+          className={numberInputClass}
+          value={rate}
+          inputMode="numeric"
+          autoComplete="off"
+          type="text"
+          onChange={(event) => {
+            setRate(event.target.value);
+            setSaved(false);
+          }}
         />
       </SetRow>
+      <SetRow description="Worker threads applied when a launch omits threads." settingId="ffuf-threads" title="Default threads">
+        <input
+          aria-label="Default threads"
+          className={numberInputClass}
+          value={threads}
+          inputMode="numeric"
+          autoComplete="off"
+          type="text"
+          onChange={(event) => {
+            setThreads(event.target.value);
+            setSaved(false);
+          }}
+        />
+      </SetRow>
+      <SetRow description="Per-request timeout in seconds applied when a launch omits it." settingId="ffuf-timeout" title="Default timeout">
+        <input
+          aria-label="Default timeout"
+          className={numberInputClass}
+          value={timeout}
+          inputMode="numeric"
+          autoComplete="off"
+          type="text"
+          onChange={(event) => {
+            setTimeout(event.target.value);
+            setSaved(false);
+          }}
+        />
+      </SetRow>
+      <SetRow description="Maximum run time in seconds applied when a launch omits it." settingId="ffuf-duration" title="Default duration">
+        <input
+          aria-label="Default duration"
+          className={numberInputClass}
+          value={duration}
+          inputMode="numeric"
+          autoComplete="off"
+          type="text"
+          onChange={(event) => {
+            setDuration(event.target.value);
+            setSaved(false);
+          }}
+        />
+      </SetRow>
+      {fieldError && (
+        <p className="m-0 mt-2 text-[13px] text-destructive" role="alert">
+          {fieldError}
+        </p>
+      )}
+      {updateMutation.isError && (
+        <p className="m-0 mt-2 text-[13px] text-destructive" role="alert">
+          The runner settings update failed. Check the values and try again.
+        </p>
+      )}
+      {saved && !updateMutation.isPending && (
+        <p className="m-0 mt-2 text-[13px] text-success" role="status">
+          Runner defaults saved.
+        </p>
+      )}
+      <div className="mt-3 flex">
+        <button
+          type="button"
+          className="inline-flex min-h-8 items-center justify-center rounded-lg border border-border px-3 text-[13px] text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+          disabled={updateMutation.isPending}
+          onClick={save}
+        >
+          {updateMutation.isPending ? "Saving" : "Save runner defaults"}
+        </button>
+      </div>
     </>
   );
 }
