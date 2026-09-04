@@ -20,6 +20,7 @@ const activeEngagement = {
   authorizationContext: null,
   autoContinueWarnings: false,
   activeScopeRevisionId: null,
+  deadlineAt: null,
   createdAt: "2026-08-12T12:00:00.000Z",
   updatedAt: "2026-08-12T12:00:00.000Z",
 };

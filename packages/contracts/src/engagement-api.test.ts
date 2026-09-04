@@ -8,6 +8,7 @@ import {
   EngagementRevisionRequestSchema,
   EngagementQueryErrorSchema,
   ScopeRevisionListResponseSchema,
+  UpdateEngagementDeadlineRequestSchema,
 } from "./engagement-api.js";
 
 const engagement = {
@@ -21,6 +22,7 @@ const engagement = {
   authorizationContext: null,
   autoContinueWarnings: false,
   activeScopeRevisionId: null,
+  deadlineAt: null,
   createdAt: "2026-08-12T12:00:00.000Z",
   updatedAt: "2026-08-12T12:00:00.000Z",
 } as const;
@@ -60,6 +62,40 @@ describe("engagement query API contracts", () => {
       EngagementQueryErrorSchema.safeParse({
         code: "invalid_persisted_data",
         path: "/private/data",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("pins the deadline update request: explicit null clears, unknown rejected", () => {
+    expect(
+      UpdateEngagementDeadlineRequestSchema.parse({
+        expectedRevision: 2,
+        deadlineAt: "2026-08-14T12:00:00.000Z",
+      }),
+    ).toEqual({ expectedRevision: 2, deadlineAt: "2026-08-14T12:00:00.000Z" });
+    expect(
+      UpdateEngagementDeadlineRequestSchema.parse({ expectedRevision: 2, deadlineAt: null }),
+    ).toEqual({ expectedRevision: 2, deadlineAt: null });
+    expect(
+      UpdateEngagementDeadlineRequestSchema.safeParse({ expectedRevision: 2 }).success,
+    ).toBe(false);
+    expect(
+      UpdateEngagementDeadlineRequestSchema.safeParse({
+        expectedRevision: 2,
+        deadlineAt: "",
+      }).success,
+    ).toBe(false);
+    expect(
+      UpdateEngagementDeadlineRequestSchema.safeParse({
+        expectedRevision: 2,
+        deadlineAt: "tomorrow",
+      }).success,
+    ).toBe(false);
+    expect(
+      UpdateEngagementDeadlineRequestSchema.safeParse({
+        expectedRevision: 2,
+        deadlineAt: null,
+        extra: true,
       }).success,
     ).toBe(false);
   });

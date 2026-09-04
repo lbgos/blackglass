@@ -3,7 +3,7 @@
 import { ThemeProvider } from "@blackglass/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAppQueryClient } from "../query-client.js";
@@ -20,6 +20,7 @@ const activeEngagement = {
   authorizationContext: null,
   autoContinueWarnings: false,
   activeScopeRevisionId: null,
+  deadlineAt: null,
   createdAt: "2026-08-12T12:00:00.000Z",
   updatedAt: "2026-08-12T12:05:00.000Z",
 };
@@ -207,7 +208,9 @@ describe("saved-scope editor", () => {
 
     expect(await screen.findByRole("heading", { name: "Saved scope unavailable" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "No saved scope yet" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    // The deadline section reports the same failed refresh with its own card.
+    const scopeRegion = screen.getByRole("region", { name: "Saved scope" });
+    expect(within(scopeRegion).getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("shows a distinct empty state when there is no active revision", async () => {

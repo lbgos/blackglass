@@ -162,6 +162,94 @@ describe("engagement persistence", () => {
     ).toEqual({ ok: false, error: { code: "invalid_repository_input" } });
   });
 
+  it("sets, changes, and clears the deadline with optimistic revisions", () => {
+    const { repository } = createFixture();
+    const created = repository.createEngagement({
+      name: "Target lab",
+      kind: "lab",
+      description: null,
+      authorizationContext: null,
+      autoContinueWarnings: false,
+      deadlineAt: "2026-08-12T14:00:00.000Z",
+    });
+    expect(created).toMatchObject({
+      ok: true,
+      value: { revision: 1, deadlineAt: "2026-08-12T14:00:00.000Z" },
+    });
+    if (!created.ok) throw new Error("Fixture create failed");
+    expect(repository.getEngagement(created.value.id)).toMatchObject({
+      ok: true,
+      value: { engagement: { deadlineAt: "2026-08-12T14:00:00.000Z" } },
+    });
+
+    const moved = repository.updateDeadline(
+      created.value.id,
+      1,
+      "2026-08-10T12:00:00.000Z",
+    );
+    expect(moved).toMatchObject({
+      ok: true,
+      value: { revision: 2, deadlineAt: "2026-08-10T12:00:00.000Z" },
+    });
+
+    const cleared = repository.updateDeadline(created.value.id, 2, null);
+    expect(cleared).toMatchObject({
+      ok: true,
+      value: { revision: 3, deadlineAt: null },
+    });
+    expect(repository.listEngagements()).toMatchObject({
+      ok: true,
+      value: [{ deadlineAt: null }],
+    });
+
+    expect(repository.updateDeadline(created.value.id, 2, null)).toEqual({
+      ok: false,
+      error: { code: "revision_conflict", currentRevision: 3 },
+    });
+  });
+
+  it("rejects deadline writes on archived engagements and invalid input", () => {
+    const { repository } = createFixture();
+    expect(
+      repository.createEngagement({
+        name: "Target lab",
+        kind: "lab",
+        description: null,
+        authorizationContext: null,
+        autoContinueWarnings: false,
+        deadlineAt: "",
+      }),
+    ).toEqual({ ok: false, error: { code: "invalid_repository_input" } });
+    expect(
+      repository.createEngagement({
+        name: "Target lab",
+        kind: "lab",
+        description: null,
+        authorizationContext: null,
+        autoContinueWarnings: false,
+        deadlineAt: "not-a-date",
+      }),
+    ).toEqual({ ok: false, error: { code: "invalid_repository_input" } });
+
+    const engagement = createEngagement(repository);
+    expect(
+      repository.updateDeadline(engagement.id, 1, "not-a-date"),
+    ).toEqual({ ok: false, error: { code: "invalid_repository_input" } });
+    expect(repository.updateDeadline(engagement.id, 1, "")).toEqual({
+      ok: false,
+      error: { code: "invalid_repository_input" },
+    });
+
+    expect(repository.archive(engagement.id, 1)).toMatchObject({ ok: true });
+    expect(repository.updateDeadline(engagement.id, 2, null)).toEqual({
+      ok: false,
+      error: { code: "engagement_archived" },
+    });
+    expect(
+      repository.updateDeadline(engagement.id, 2, "2026-08-14T12:00:00.000Z"),
+    ).toEqual({ ok: false, error: { code: "engagement_archived" } });
+  });
+
   it("distinguishes no active scope from an active empty revision", () => {
     const { repository } = createFixture();
     const engagement = createEngagement(repository);

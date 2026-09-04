@@ -13,6 +13,7 @@ import {
   FindingSchema,
   FfufDiscoveryLaunchSchema,
   ScopeRevisionSchema,
+  UpdateEngagementDeadlineRequestSchema,
   UpdateEngagementNotesRequestSchema,
   type AcceptHeartbeatResult,
   type AppendScopeRevisionInput,
@@ -135,6 +136,11 @@ export interface EngagementWriteTransaction {
     engagementId: string,
     expectedRevision: number,
     autoContinueWarnings: boolean,
+  ): RepositoryResult<Engagement>;
+  updateDeadline(
+    engagementId: string,
+    expectedRevision: number,
+    deadlineAt: string | null,
   ): RepositoryResult<Engagement>;
   appendScopeRevision(input: unknown): RepositoryResult<ScopeRevision>;
   getEngagement(
@@ -328,6 +334,7 @@ function engagementFromRow(
     authorizationContext: row.authorizationContext,
     autoContinueWarnings: row.autoContinueWarnings,
     activeScopeRevisionId,
+    deadlineAt: row.deadlineAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   });
@@ -476,6 +483,7 @@ class TransactionRepository implements EngagementWriteTransaction {
       description: parsed.data.description,
       authorizationContext: parsed.data.authorizationContext,
       autoContinueWarnings: parsed.data.autoContinueWarnings,
+      deadlineAt: parsed.data.deadlineAt ?? null,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -570,6 +578,53 @@ class TransactionRepository implements EngagementWriteTransaction {
       {
         ...current.value,
         autoContinueWarnings,
+        revision: expectedRevision + 1,
+        updatedAt,
+      },
+      this.activeScopeId(engagementId),
+    );
+  }
+
+  updateDeadline(
+    engagementId: string,
+    expectedRevision: number,
+    deadlineAt: string | null,
+  ): RepositoryResult<Engagement> {
+    const parsed = UpdateEngagementDeadlineRequestSchema.safeParse({
+      expectedRevision,
+      deadlineAt,
+    });
+    if (!parsed.success) return failed({ code: "invalid_repository_input" });
+    const current = this.currentEngagement(engagementId);
+    if (!current.ok) return current;
+    if (current.value.revision !== expectedRevision) {
+      return failed({
+        code: "revision_conflict",
+        currentRevision: current.value.revision,
+      });
+    }
+    if (current.value.status === "archived") {
+      return failed({ code: "engagement_archived" });
+    }
+    const updatedAt = this.clock().toISOString();
+    this.client
+      .update(engagements)
+      .set({
+        deadlineAt: parsed.data.deadlineAt,
+        revision: expectedRevision + 1,
+        updatedAt,
+      })
+      .where(
+        and(
+          eq(engagements.id, engagementId),
+          eq(engagements.revision, expectedRevision),
+        ),
+      )
+      .run();
+    return engagementFromRow(
+      {
+        ...current.value,
+        deadlineAt: parsed.data.deadlineAt,
         revision: expectedRevision + 1,
         updatedAt,
       },
@@ -1229,6 +1284,19 @@ export class EngagementRepository {
           expectedRevision,
           autoContinueWarnings,
         ),
+      transaction,
+    );
+  }
+
+  updateDeadline(
+    engagementId: string,
+    expectedRevision: number,
+    deadlineAt: string | null,
+    transaction?: EngagementWriteTransaction,
+  ): RepositoryResult<Engagement> {
+    return this.runMutation(
+      (repository) =>
+        repository.updateDeadline(engagementId, expectedRevision, deadlineAt),
       transaction,
     );
   }

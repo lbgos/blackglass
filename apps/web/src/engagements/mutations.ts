@@ -4,6 +4,7 @@ import {
   CreateEngagementRequestSchema,
   EngagementMutationResponseSchema,
   ScopeRevisionMutationResponseSchema,
+  UpdateEngagementDeadlineRequestSchema,
   type CreateEngagementInput,
   type Engagement,
   type EngagementWithActiveScope,
@@ -163,6 +164,21 @@ export async function appendScopeRevisionRequest(
   });
 }
 
+export async function updateDeadlineRequest(
+  engagementId: string,
+  input: { expectedRevision: number; deadlineAt: string | null },
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<Engagement> {
+  const body = UpdateEngagementDeadlineRequestSchema.parse(input);
+  return sendEngagementMutation(`/api/v1/engagements/${engagementId}/deadline`, {
+    body,
+    idempotencyKey,
+    method: "PATCH",
+    ...(signal ? { signal } : {}),
+  });
+}
+
 export function upsertEngagementInCache(queryClient: QueryClient, engagement: Engagement) {
   queryClient.setQueryData<Engagement[]>(ENGAGEMENTS_QUERY_KEY, (current) => {
     if (current === undefined) return [engagement];
@@ -276,6 +292,44 @@ export function useReopenEngagementMutation() {
     onSuccess: (engagement, input) => {
       upsertEngagementInCache(queryClient, engagement);
       keys.current.reset(`reopen:${input.engagementId}:${input.expectedRevision}`);
+      void queryClient.invalidateQueries({
+        queryKey: engagementDetailQueryKey(input.engagementId),
+      });
+    },
+    onError: (error) => handleLifecycleError(queryClient, error),
+  });
+}
+
+export function useUpdateDeadlineMutation() {
+  const queryClient = useQueryClient();
+  const keys = useRef(createIntentKeyHolder());
+
+  return useMutation({
+    mutationFn: (input: {
+      engagementId: string;
+      expectedRevision: number;
+      deadlineAt: string | null;
+    }) => {
+      const body = UpdateEngagementDeadlineRequestSchema.parse({
+        expectedRevision: input.expectedRevision,
+        deadlineAt: input.deadlineAt,
+      });
+      const intent = requestFingerprint({
+        engagementId: input.engagementId,
+        expectedRevision: body.expectedRevision,
+        deadlineAt: body.deadlineAt,
+      });
+      return updateDeadlineRequest(input.engagementId, body, keys.current.keyFor(intent));
+    },
+    onSuccess: (engagement, input) => {
+      upsertEngagementInCache(queryClient, engagement);
+      keys.current.reset(
+        requestFingerprint({
+          engagementId: input.engagementId,
+          expectedRevision: input.expectedRevision,
+          deadlineAt: input.deadlineAt,
+        }),
+      );
       void queryClient.invalidateQueries({
         queryKey: engagementDetailQueryKey(input.engagementId),
       });

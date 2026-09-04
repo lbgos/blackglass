@@ -82,6 +82,7 @@ export const CommandJsonV1CreateEngagementBodyDigestSchema = z.object({
   description: jsonFieldDefaultNull,
   authorizationContext: jsonFieldDefaultNull,
   autoContinueWarnings: jsonField,
+  deadlineAt: jsonField,
 });
 
 export const CommandJsonV1RevisionBodyDigestSchema = z.object({
@@ -91,6 +92,11 @@ export const CommandJsonV1RevisionBodyDigestSchema = z.object({
 export const CommandJsonV1UpdateAutoContinueWarningsBodyDigestSchema = z.object({
   expectedRevision: jsonField,
   autoContinueWarnings: jsonField,
+});
+
+export const CommandJsonV1UpdateDeadlineBodyDigestSchema = z.object({
+  expectedRevision: jsonField,
+  deadlineAt: jsonField,
 });
 
 export const CommandJsonV1AppendScopeRevisionBodyDigestSchema = z.object({
@@ -378,6 +384,12 @@ export const commandJsonV1UpdateAutoContinueWarningsDigest = digestProjection({
   path: CommandJsonV1EngagementIdPathDigestSchema,
   query: CommandJsonV1EmptyObjectDigestSchema,
   body: objectProjection(CommandJsonV1UpdateAutoContinueWarningsBodyDigestSchema),
+});
+
+export const commandJsonV1UpdateDeadlineDigest = digestProjection({
+  path: CommandJsonV1EngagementIdPathDigestSchema,
+  query: CommandJsonV1EmptyObjectDigestSchema,
+  body: objectProjection(CommandJsonV1UpdateDeadlineBodyDigestSchema),
 });
 
 export const commandJsonV1AppendScopeRevisionDigest = digestProjection({

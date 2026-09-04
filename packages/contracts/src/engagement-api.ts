@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   AppendScopeRevisionInputSchema,
   CreateEngagementInputSchema,
+  EngagementDeadlineSchema,
   EngagementSchema,
   EngagementWithActiveScopeSchema,
   ScopeRevisionSchema,
@@ -24,6 +25,11 @@ export const EngagementRevisionRequestSchema = z.strictObject({
 export const UpdateAutoContinueWarningsRequestSchema = z.strictObject({
   expectedRevision: z.number().int().positive(),
   autoContinueWarnings: z.boolean(),
+});
+// Explicit null clears the deadline; the key itself is required.
+export const UpdateEngagementDeadlineRequestSchema = z.strictObject({
+  expectedRevision: z.number().int().positive(),
+  deadlineAt: EngagementDeadlineSchema.nullable(),
 });
 export const AppendScopeRevisionRequestSchema = AppendScopeRevisionInputSchema.omit({
   engagementId: true,

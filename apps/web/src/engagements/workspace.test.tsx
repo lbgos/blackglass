@@ -27,6 +27,7 @@ const activeEngagement = {
   authorizationContext: "RO-2026-08 authorized lab",
   autoContinueWarnings: false,
   activeScopeRevisionId: null,
+  deadlineAt: null,
   createdAt: "2026-08-12T12:00:00.000Z",
   updatedAt: "2026-08-12T12:05:00.000Z",
 };

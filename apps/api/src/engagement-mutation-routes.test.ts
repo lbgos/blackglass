@@ -184,6 +184,119 @@ describe("engagement mutation routes", () => {
     });
   });
 
+  it("creates with a near deadline, moves it past due, clears it, and rejects malformed input", async () => {
+    const { app } = await fixture();
+    const createdResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/engagements",
+      headers: headers(key("deadline-create")),
+      payload: {
+        name: "Target lab",
+        kind: "lab",
+        autoContinueWarnings: false,
+        deadlineAt: "2026-08-12T14:00:00.000Z",
+      },
+    });
+    expect(createdResponse.statusCode).toBe(201);
+    const created = createdResponse.json();
+    expect(created).toMatchObject({ revision: 1, deadlineAt: "2026-08-12T14:00:00.000Z" });
+    const base = `/api/v1/engagements/${created.id}`;
+
+    const pastResponse = await app.inject({
+      method: "PATCH",
+      url: `${base}/deadline`,
+      headers: headers(key("deadline-past")),
+      payload: { expectedRevision: 1, deadlineAt: "2026-08-12T11:00:00.000Z" },
+    });
+    expect(pastResponse.statusCode).toBe(200);
+    expect(pastResponse.json()).toMatchObject({
+      revision: 2,
+      deadlineAt: "2026-08-12T11:00:00.000Z",
+    });
+
+    const clearedResponse = await app.inject({
+      method: "PATCH",
+      url: `${base}/deadline`,
+      headers: headers(key("deadline-clear")),
+      payload: { expectedRevision: 2, deadlineAt: null },
+    });
+    expect(clearedResponse.statusCode).toBe(200);
+    expect(clearedResponse.json()).toMatchObject({ revision: 3, deadlineAt: null });
+    expect((await app.inject({ method: "GET", url: base })).json()).toMatchObject({
+      engagement: { revision: 3, deadlineAt: null },
+    });
+
+    for (const [index, payload] of [
+      { expectedRevision: 3, deadlineAt: "" },
+      { expectedRevision: 3, deadlineAt: "tomorrow" },
+      { expectedRevision: 3, deadlineAt: "2026-08-12T14:00:00.000+02:00" },
+      { expectedRevision: 3 },
+    ].entries()) {
+      expect(
+        await app.inject({
+          method: "PATCH",
+          url: `${base}/deadline`,
+          headers: headers(key(`deadline-bad-${index}`)),
+          payload,
+        }),
+      ).toMatchObject({ statusCode: 400, body: '{"code":"invalid_request"}' });
+    }
+    expect(
+      await app.inject({
+        method: "PATCH",
+        url: `${base}/deadline?ignored=true`,
+        headers: headers(key("deadline-query")),
+        payload: { expectedRevision: 3, deadlineAt: null },
+      }),
+    ).toMatchObject({ statusCode: 400, body: '{"code":"invalid_request"}' });
+  });
+
+  it("rejects deadline writes on archived engagements and stale revisions", async () => {
+    const { app } = await fixture();
+    const created = (
+      await app.inject({
+        method: "POST",
+        url: "/api/v1/engagements",
+        headers: headers(key("deadline-arch-create")),
+        payload: { name: "Target lab", kind: "lab", autoContinueWarnings: false },
+      })
+    ).json();
+    expect(created).toMatchObject({ deadlineAt: null });
+    const base = `/api/v1/engagements/${created.id}`;
+    await app.inject({
+      method: "POST",
+      url: `${base}/archive`,
+      headers: headers(key("deadline-arch-archive")),
+      payload: { expectedRevision: 1 },
+    });
+    expect(
+      await app.inject({
+        method: "PATCH",
+        url: `${base}/deadline`,
+        headers: headers(key("deadline-arch-write")),
+        payload: { expectedRevision: 2, deadlineAt: "2026-08-14T12:00:00.000Z" },
+      }),
+    ).toMatchObject({ statusCode: 409, body: '{"code":"engagement_archived"}' });
+    expect(
+      await app.inject({
+        method: "PATCH",
+        url: `${base}/deadline`,
+        headers: headers(key("deadline-arch-clear")),
+        payload: { expectedRevision: 2, deadlineAt: null },
+      }),
+    ).toMatchObject({ statusCode: 409, body: '{"code":"engagement_archived"}' });
+
+    const missingId = "10000000-0000-4000-8000-000000000099";
+    expect(
+      await app.inject({
+        method: "PATCH",
+        url: `/api/v1/engagements/${missingId}/deadline`,
+        headers: headers(key("deadline-missing")),
+        payload: { expectedRevision: 1, deadlineAt: null },
+      }),
+    ).toMatchObject({ statusCode: 404, body: '{"code":"engagement_not_found"}' });
+  });
+
   it("replays exact stored success after lifecycle changes and conflicts on changed input", async () => {
     const { app } = await fixture();
     const commandKey = key("replay-create");

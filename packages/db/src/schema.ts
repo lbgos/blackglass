@@ -24,6 +24,7 @@ export const engagements = sqliteTable(
     autoContinueWarnings: integer("auto_continue_warnings", {
       mode: "boolean",
     }).notNull(),
+    deadlineAt: text("deadline_at"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
