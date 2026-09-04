@@ -125,6 +125,35 @@ export const FfufDiscoveryLaunchSchema = z.strictObject({
 
 export type FfufDiscoveryLaunch = z.infer<typeof FfufDiscoveryLaunchSchema>;
 
+// Wire format for the launch endpoint. Fields covered by stored runner
+// defaults (wordlist plus rate/threads/timeout/duration) are optional: an
+// absent numeric field, or an absent or empty wordlist, falls back to the
+// stored default when planning. Explicitly provided values are validated
+// here exactly as before, so invalid per-run values still fail fast at the
+// route before any stored default is consulted.
+const OptionalWordlistPathSchema = z
+  .string()
+  .max(1024)
+  .refine(
+    (value) => value === "" || (isAbsolutePath(value) && !hasPathTraversal(value)),
+    { message: "path must be absolute or empty" },
+  )
+  .optional();
+
+export const FfufDiscoveryLaunchRequestSchema = z.strictObject({
+  expectedEngagementRevision: FfufDiscoveryLaunchSchema.shape.expectedEngagementRevision,
+  expectedActiveScopeRevisionId: FfufDiscoveryLaunchSchema.shape.expectedActiveScopeRevisionId,
+  origin: FfufDiscoveryLaunchSchema.shape.origin,
+  wordlistPath: OptionalWordlistPathSchema,
+  rate: z.number().int().min(1).max(10_000).optional(),
+  threads: z.number().int().min(1).max(200).optional(),
+  timeoutSeconds: z.number().int().min(1).max(120).optional(),
+  maxTimeSeconds: z.number().int().min(5).max(1800).optional(),
+  matchStatusCodes: z.array(z.number().int().min(100).max(599)).min(1).optional(),
+});
+
+export type FfufDiscoveryLaunchRequest = z.infer<typeof FfufDiscoveryLaunchRequestSchema>;
+
 /** Raw ffuf -of json output is preserved as tool_raw under this slot. */
 export const FFUF_ARTIFACT_SLOT = "ffuf-json" as const;
 
