@@ -13,6 +13,7 @@ import { partitionEngagements, useEngagementsQuery } from "./engagements/query.j
 import { SettingsBackButton, SettingsNav } from "./settings/sidebar.js";
 import { SettingsViewProvider } from "./settings/settings-view.js";
 import { StageHeader } from "./stage-header.js";
+import { AdvisorStatusCard } from "./advisor-status-card.js";
 import { useSystemStatusQuery } from "./system-status-query.js";
 
 const navigationLinks = [
@@ -24,12 +25,7 @@ const consolePanels: readonly ConsolePanel[] = [
   {
     value: "advisor",
     label: "Advisor",
-    content: (
-      <ConsolePlaceholder
-        title="Advisor"
-        detail="Ask from the current engagement when the advisor is connected. Guidance is not available yet."
-      />
-    ),
+    content: <AdvisorStatusCard />,
   },
   {
     value: "activity",

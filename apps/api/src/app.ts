@@ -43,6 +43,10 @@ import { registerRunnerEvidenceUploadRoutes } from "./runner-evidence-upload-rou
 import { registerHttpProbeRoutes } from "./http-probe-routes.js";
 import { registerReportRoutes } from "./report-routes.js";
 import { registerSettingsRoutes } from "./settings-routes.js";
+import {
+  registerAdvisorStatusRoutes,
+  type AdvisorStatusRouteOptions,
+} from "./advisor-status-routes.js";
 
 interface BuildAppOptions {
   getDevelopmentStorageReadiness: () => Readiness | Promise<Readiness>;
@@ -102,6 +106,7 @@ interface BuildAppOptions {
     | "getAdvisorSettings"
     | "updateAdvisorSettings"
   >;
+  advisorStatus?: Omit<AdvisorStatusRouteOptions, "repository">;
   httpProbeRepository?: Pick<HttpProbeRepository, "listForEngagement">;
   ffufRepository?: Pick<FfufRepository, "listForEngagement">;
   runOutputRepository?: Pick<
@@ -127,6 +132,7 @@ export function buildApp({
   evidenceStore,
   nmapServiceRepository,
   settingsRepository,
+  advisorStatus,
   httpProbeRepository,
   ffufRepository,
   runOutputRepository,
@@ -246,6 +252,7 @@ export function buildApp({
   }
   if (settingsRepository !== undefined) {
     registerSettingsRoutes(app, { repository: settingsRepository });
+    registerAdvisorStatusRoutes(app, { ...advisorStatus, repository: settingsRepository });
   }
   if (httpProbeRepository !== undefined) {
     registerHttpProbeRoutes(app, { repository: httpProbeRepository });

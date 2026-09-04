@@ -27,3 +27,12 @@ export * from "./report.js";
 export * from "./ffuf.js";
 export * from "./http-probe.js";
 export * from "./settings.js";
+export {
+  ADVISOR_STATUS_REASONS,
+  AdvisorStatusReasonSchema,
+  AdvisorStatusSchema,
+  ConnectionTestResultSchema,
+  type AdvisorStatus,
+  type AdvisorStatusReason,
+  type ConnectionTestResult,
+} from "./advisor-status.js";
