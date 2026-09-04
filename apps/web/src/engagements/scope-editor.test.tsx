@@ -121,6 +121,32 @@ function readResponse(
   if (/^\/api\/v1\/engagements\/[^/]+\/http-probes$/.test(url)) return response([]);
   if (/^\/api\/v1\/engagements\/[^/]+\/ffuf-results$/.test(url)) return response([]);
   if (/^\/api\/v1\/engagements\/[^/]+\/findings$/.test(url)) return response([]);
+  const reportMatch = /^\/api\/v1\/engagements\/([^/]+)\/report$/.exec(url);
+  if (reportMatch?.[1] !== undefined) {
+    return response({
+      contractVersion: 1,
+      engagement: {
+        id: engagement.id,
+        name: engagement.name,
+        kind: engagement.kind,
+        status: engagement.status,
+        description: engagement.description,
+        authorizationContext: engagement.authorizationContext,
+        deadlineAt: null,
+        revision: engagement.revision,
+        createdAt: engagement.createdAt,
+        updatedAt: engagement.updatedAt,
+      },
+      findings: [],
+      notesMarkdown: "",
+      notesUpdatedAt: engagement.updatedAt,
+      services: { total: 0, truncated: false, rows: [] },
+      probes: { total: 0, truncated: false, rows: [] },
+      ffufResults: { total: 0, truncated: false, rows: [] },
+      evidenceArtifacts: { total: 0, truncated: false, rows: [] },
+      generatedAt: engagement.updatedAt,
+    });
+  }
   const notesMatch = /^\/api\/v1\/engagements\/([^/]+)\/notes$/.exec(url);
   if (notesMatch?.[1] !== undefined) {
     return response({

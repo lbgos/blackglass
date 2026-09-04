@@ -13,6 +13,7 @@ export const ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE = "The services request fai
 export const ENGAGEMENT_HTTP_PROBES_QUERY_ERROR_MESSAGE = "The probe results request failed.";
 export const ENGAGEMENT_FFUF_RESULTS_QUERY_ERROR_MESSAGE = "The ffuf results request failed.";
 export const FINDINGS_QUERY_ERROR_MESSAGE = "The findings request failed.";
+export const REPORT_QUERY_ERROR_MESSAGE = "The report request failed.";
 export const ENGAGEMENT_MUTATION_ERROR_MESSAGE = "The engagement request failed.";
 export const FINDING_MUTATION_ERROR_MESSAGE = "The findings request failed.";
 
@@ -198,5 +199,12 @@ export class FindingsQueryError extends Error {
   constructor() {
     super(FINDINGS_QUERY_ERROR_MESSAGE);
     this.name = "FindingsQueryError";
+  }
+}
+
+export class ReportQueryError extends Error {
+  constructor() {
+    super(REPORT_QUERY_ERROR_MESSAGE);
+    this.name = "ReportQueryError";
   }
 }

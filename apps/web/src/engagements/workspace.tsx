@@ -20,6 +20,7 @@ import { EngagementDeadlineSection } from "./deadline.js";
 import { EngagementFindingsSection } from "./findings.js";
 import { EngagementFfufSection } from "./ffuf-surface.js";
 import { EngagementNotesSection } from "./notes.js";
+import { EngagementReportSection } from "./report.js";
 import { SavedScopeEditor } from "./scope-editor.js";
 import { EngagementHttpProbesSection } from "./http-probe-surface.js";
 import { EngagementServicesSection } from "./service-surface.js";
@@ -270,6 +271,11 @@ function EngagementDetail({ engagement }: { engagement: Engagement }) {
       <EngagementFindingsSection
         key={`findings-${displayed.id}`}
         archived={displayed.status === "archived"}
+        engagementId={displayed.id}
+      />
+
+      <EngagementReportSection
+        key={`report-${displayed.id}`}
         engagementId={displayed.id}
       />
     </article>
