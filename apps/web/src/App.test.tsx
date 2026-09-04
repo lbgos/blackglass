@@ -59,11 +59,30 @@ function isSystemStatusUrl(input: RequestInfo | URL): boolean {
   return String(input).includes("/api/v1/system/status");
 }
 
+function isAdvisorStatusUrl(input: RequestInfo | URL): boolean {
+  return String(input).includes("/api/v1/advisor/status");
+}
+
+const defaultAdvisorStatus = {
+  configured: false,
+  endpointReachable: null,
+  modelId: "",
+  endpointHost: "",
+  publicEndpoint: false,
+  optIn: false,
+  keyEnvVar: "",
+  keyPresent: false,
+  latencyMs: null,
+  reason: "unconfigured",
+};
+
 function stubWorkspaceFetch(
   statusImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> | Response,
+  advisorImpl: () => unknown = () => defaultAdvisorStatus,
 ) {
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     if (isSystemStatusUrl(input)) return Promise.resolve(statusImpl(input, init));
+    if (isAdvisorStatusUrl(input)) return Promise.resolve(response(advisorImpl()));
     if (String(input).includes("/api/v1/engagements")) return Promise.resolve(response([]));
     return Promise.reject(new Error(`unexpected fetch ${String(input)}`));
   });
@@ -328,6 +347,28 @@ describe("App system readiness", () => {
 
     expect(await screen.findByText("System not ready")).toBeTruthy();
     expect(screen.queryByText("Last known: system ready")).toBeNull();
+  });
+
+  it("shows the advisor connection status in the Advisor tab", async () => {
+    stubWorkspaceFetch(() => response(readyStatus), () => ({
+      configured: true,
+      endpointReachable: true,
+      modelId: "qwen3:8b",
+      endpointHost: "127.0.0.1",
+      publicEndpoint: false,
+      optIn: false,
+      keyEnvVar: "BLACKGLASS_ADVISOR_API_KEY",
+      keyPresent: true,
+      latencyMs: 12,
+      reason: "ok",
+    }));
+
+    await renderApp();
+
+    expect(await screen.findByText("Advisor connected")).toBeTruthy();
+    expect(screen.getByText(/qwen3:8b answered at 127\.0\.0\.1 in 12 ms/)).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Open Advisor settings" });
+    expect(link.getAttribute("href")).toBe("/settings");
   });
 });
 
