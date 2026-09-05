@@ -3,16 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { probeOneUrl, probeUrlsFromSnapshot } from "./http-probe.js";
 
 function response(status: number, headers: [string, string][] = [], body = "") {
-  return {
+  return new Response(body, {
     status,
-    headers,
-    arrayBuffer: async () => {
-      const buf = Buffer.from(body, "utf8");
-      const copy = new Uint8Array(buf.length);
-      copy.set(buf);
-      return copy.buffer as ArrayBuffer;
-    },
-  };
+    headers: Object.fromEntries(headers),
+  });
 }
 
 function snapshotFor(urls: string[]) {
