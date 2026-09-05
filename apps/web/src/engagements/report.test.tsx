@@ -163,19 +163,17 @@ describe("engagement report", () => {
     clickSpy.mockRestore();
   });
 
-  it("downloads markdown from the server endpoint", async () => {
+  it("downloads markdown from the cached bundle without hitting the markdown endpoint", async () => {
     const bundle = bundleFixture();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.endsWith("/report?format=markdown")) {
-          return Promise.resolve(response("# Engagement report: Target lab"));
-        }
-        if (url.endsWith("/report")) return Promise.resolve(response(bundle));
-        return Promise.reject(new Error("unexpected fetch"));
-      }),
-    );
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/report?format=markdown")) {
+        return Promise.reject(new Error("markdown endpoint must not be used for export"));
+      }
+      if (url.endsWith("/report")) return Promise.resolve(response(bundle));
+      return Promise.reject(new Error("unexpected fetch"));
+    });
+    vi.stubGlobal("fetch", fetchMock);
     const clicked: string[] = [];
     const clickSpy = vi
       .spyOn(HTMLAnchorElement.prototype, "click")
@@ -185,6 +183,8 @@ describe("engagement report", () => {
 
     renderSection();
     expect(await screen.findByRole("button", { name: "Download Markdown" })).toBeTruthy();
+    // Preview and export share one bundle-derived snapshot.
+    expect(screen.getByText(/Default credentials on admin panel/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Download Markdown" }));
     await waitFor(() =>
       expect(
@@ -193,6 +193,9 @@ describe("engagement report", () => {
         ),
       ).toBe(true),
     );
+    expect(
+      fetchMock.mock.calls.some(([called]) => String(called).endsWith("/report?format=markdown")),
+    ).toBe(false);
     clickSpy.mockRestore();
   });
 

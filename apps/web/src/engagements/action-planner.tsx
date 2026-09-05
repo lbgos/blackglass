@@ -35,6 +35,7 @@ import {
 } from "./action-targets.js";
 import { engagementMutationMessage, isRevisionConflict } from "./errors.js";
 import { engagementHttpProbesQueryKey, engagementServicesQueryKey, engagementFfufResultsQueryKey, useEngagementDetailQuery } from "./query.js";
+import { reportQueryKey } from "./report-query.js";
 import { useEngagementWorkspace } from "./workspace-context.js";
 
 export function ActionPlanner({
@@ -141,12 +142,13 @@ function PlannerBody({
     const action = polledActionQuery.data;
     if (action === undefined || trackedActionId === undefined) return;
     if (action.action.actionId !== trackedActionId) return;
-    if (action.action.state !== "succeeded") return;
+    if (!isTerminalActionState(action.action.state)) return;
     if (hasInvalidatedServicesRef.current === trackedActionId) return;
     hasInvalidatedServicesRef.current = trackedActionId;
     void queryClient.invalidateQueries({ queryKey: engagementServicesQueryKey(engagementId) });
     void queryClient.invalidateQueries({ queryKey: engagementHttpProbesQueryKey(engagementId) });
     void queryClient.invalidateQueries({ queryKey: engagementFfufResultsQueryKey(engagementId) });
+    void queryClient.invalidateQueries({ queryKey: reportQueryKey(engagementId) });
   }, [engagementId, polledActionQuery.data, queryClient, trackedActionId]);
 
   useEffect(() => {

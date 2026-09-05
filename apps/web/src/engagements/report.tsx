@@ -12,7 +12,6 @@ import {
 import {
   copyTextToClipboard,
   downloadTextFile,
-  fetchReportMarkdown,
   reportJsonFilename,
   reportMarkdownFilename,
   useReportQuery,
@@ -28,7 +27,11 @@ export function EngagementReportSection({
   const hasData = report.data !== undefined;
   const body =
     report.data !== undefined ? (
-      <ReportBody engagementId={engagementId} bundle={report.data} />
+      <ReportBody
+        engagementId={engagementId}
+        bundle={report.data}
+        refreshing={report.isFetching}
+      />
     ) : null;
 
   return (
@@ -82,14 +85,15 @@ function isReportEmpty(bundle: ReportBundle): boolean {
 function ReportBody({
   bundle,
   engagementId,
+  refreshing,
 }: {
   bundle: ReportBundle;
   engagementId: string;
+  refreshing: boolean;
 }) {
   const markdown = engagementReportMarkdown(bundle);
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string | undefined>(undefined);
-  const [downloading, setDownloading] = useState(false);
   const copyTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
@@ -134,17 +138,11 @@ function ReportBody({
 
   const onDownloadMarkdown = () => {
     setActionError(undefined);
-    setDownloading(true);
-    void fetchReportMarkdown(engagementId)
-      .then((text) => {
-        downloadTextFile(reportMarkdownFilename(engagementId), text, "text/markdown");
-      })
-      .catch(() => {
-        setActionError("Download failed. Try again.");
-      })
-      .finally(() => {
-        setDownloading(false);
-      });
+    try {
+      downloadTextFile(reportMarkdownFilename(engagementId), markdown, "text/markdown");
+    } catch {
+      setActionError("Download failed. Try again.");
+    }
   };
 
   return (
@@ -152,6 +150,11 @@ function ReportBody({
       <p className="m-0 text-[12px] text-muted-foreground" aria-live="polite">
         {summary}
       </p>
+      {refreshing ? (
+        <p className="m-0 text-[12px] text-muted-foreground" role="status">
+          Refreshing report…
+        </p>
+      ) : null}
       {empty ? (
         <div className="rounded-[10px] border border-border px-4 py-8 text-center">
           <h3 className="m-0 text-[13px] font-semibold">Nothing to report yet</h3>
@@ -162,19 +165,19 @@ function ReportBody({
         </div>
       ) : null}
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <Button type="button" onClick={onCopy}>
+        <Button type="button" onClick={onCopy} disabled={refreshing}>
           {copied ? "Copied" : "Copy Markdown"}
         </Button>
-        <Button type="button" variant="secondary" onClick={onDownloadJson}>
+        <Button type="button" variant="secondary" onClick={onDownloadJson} disabled={refreshing}>
           Download JSON
         </Button>
         <Button
           type="button"
           variant="secondary"
-          disabled={downloading}
+          disabled={refreshing}
           onClick={onDownloadMarkdown}
         >
-          {downloading ? "Preparing" : "Download Markdown"}
+          Download Markdown
         </Button>
       </div>
       {actionError ? (

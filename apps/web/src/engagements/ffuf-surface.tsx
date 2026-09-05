@@ -23,6 +23,7 @@ import {
   useEngagementDetailQuery,
   useEngagementFfufResultsQuery,
 } from "./query.js";
+import { reportQueryKey } from "./report-query.js";
 
 const DEFAULT_MATCH_CODES = "200, 204, 301, 302, 307, 308, 401, 403";
 
@@ -134,6 +135,7 @@ function FfufDiscoveryBody({
   const [result, setResult] = useState<PersistedAction | undefined>(undefined);
   const [lastInputs, setLastInputs] = useState<FfufDiscoveryInput | undefined>(undefined);
   const [trackedActionId, setTrackedActionId] = useState<string | undefined>(undefined);
+  const hasInvalidatedFfufRef = useRef<string | null>(null);
 
   const launch = useLaunchFfufDiscoveryMutation();
   const cancelAction = useCancelActionMutation();
@@ -152,11 +154,18 @@ function FfufDiscoveryBody({
   const displayAction = trackedActionId !== undefined ? (polledActionQuery.data ?? result) : result;
 
   useEffect(() => {
+    hasInvalidatedFfufRef.current = null;
+  }, [trackedActionId]);
+
+  useEffect(() => {
     const action = polledActionQuery.data;
     if (action === undefined || trackedActionId === undefined) return;
     if (action.action.actionId !== trackedActionId) return;
     if (!isTerminalActionState(action.action.state)) return;
+    if (hasInvalidatedFfufRef.current === trackedActionId) return;
+    hasInvalidatedFfufRef.current = trackedActionId;
     void queryClient.invalidateQueries({ queryKey: engagementFfufResultsQueryKey(engagementId) });
+    void queryClient.invalidateQueries({ queryKey: reportQueryKey(engagementId) });
   }, [engagementId, polledActionQuery.data, queryClient, trackedActionId]);
 
   const mutationError =

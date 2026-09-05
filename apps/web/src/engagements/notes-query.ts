@@ -10,6 +10,7 @@ import {
   EngagementMutationClientError,
   parseEngagementMutationError,
 } from "./errors.js";
+import { reportQueryKey } from "./report-query.js";
 
 export const ENGAGEMENT_NOTES_QUERY_ERROR_MESSAGE = "The notes request failed.";
 
@@ -98,6 +99,7 @@ export function useSaveEngagementNotesMutation(engagementId: string) {
         engagementNotesQueryKey(engagementId),
         notes,
       );
+      void queryClient.invalidateQueries({ queryKey: reportQueryKey(engagementId) });
     },
   });
 }
