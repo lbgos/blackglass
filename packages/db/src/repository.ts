@@ -36,7 +36,7 @@ import {
   type SavedScopeRule,
 } from "@blackglass/contracts";
 import { normalizeScopeRules, normalizeTarget } from "@blackglass/domain";
-import { and, asc, eq, max } from "drizzle-orm";
+import { and, asc, eq, inArray, max } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 
 import type * as schema from "./schema.js";
@@ -77,7 +77,9 @@ import {
   engagementActiveScopes,
   engagementNotes,
   engagements,
+  evidenceArtifacts,
   findings,
+  runs,
   scopeRevisions,
   settings,
   type EngagementNotesRow,
@@ -784,6 +786,23 @@ class TransactionRepository implements EngagementWriteTransaction {
     if (!current.ok) return current;
     if (current.value.status === "archived") {
       return failed({ code: "engagement_archived" });
+    }
+    if (parsed.data.evidenceArtifactIds.length > 0) {
+      const uniqueIds = [...new Set(parsed.data.evidenceArtifactIds)];
+      const owned = this.client
+        .select({ artifactId: evidenceArtifacts.artifactId })
+        .from(evidenceArtifacts)
+        .innerJoin(runs, eq(runs.id, evidenceArtifacts.runId))
+        .where(
+          and(
+            eq(runs.engagementId, engagementId),
+            inArray(evidenceArtifacts.artifactId, uniqueIds),
+          ),
+        )
+        .all();
+      if (owned.length !== uniqueIds.length) {
+        return failed({ code: "invalid_repository_input" });
+      }
     }
     const timestamp = this.clock().toISOString();
     const row = {
