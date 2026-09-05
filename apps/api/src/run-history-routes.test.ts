@@ -470,14 +470,29 @@ describe("run history routes", () => {
     expect(corrupt.json()).toEqual({ code: "invalid_persisted_data" });
 
     let calls = 0;
+    const realBusyRepository = new RunOutputRepository(harness.database.db);
+    const busyRepository: Pick<
+      RunOutputRepository,
+      | "latestTerminalRunForEngagement"
+      | "runForEngagement"
+      | "artifactsForRun"
+      | "listArtifactsForEngagement"
+      | "listRunsForEngagement"
+    > = {
+      latestTerminalRunForEngagement:
+        realBusyRepository.latestTerminalRunForEngagement.bind(realBusyRepository),
+      runForEngagement: realBusyRepository.runForEngagement.bind(realBusyRepository),
+      artifactsForRun: realBusyRepository.artifactsForRun.bind(realBusyRepository),
+      listArtifactsForEngagement:
+        realBusyRepository.listArtifactsForEngagement.bind(realBusyRepository),
+      listRunsForEngagement() {
+        calls += 1;
+        return { ok: false as const, code: "storage_busy" as const };
+      },
+    };
     const busyApp = buildApp({
       engagementRepository: harness.engagementRepository,
-      runOutputRepository: {
-        listRunsForEngagement() {
-          calls += 1;
-          return { ok: false as const, code: "storage_busy" as const };
-        },
-      },
+      runOutputRepository: busyRepository,
       getDevelopmentStorageReadiness: () => "ready",
       logger: false,
     });
@@ -515,14 +530,33 @@ describe("run history routes", () => {
     expect(missingOutput.statusCode).toBe(404);
 
     let calls = 0;
+    const realCountingRepository = new RunOutputRepository(harness.database.db);
+    const countingRepository: Pick<
+      RunOutputRepository,
+      | "latestTerminalRunForEngagement"
+      | "runForEngagement"
+      | "artifactsForRun"
+      | "listArtifactsForEngagement"
+      | "listRunsForEngagement"
+    > = {
+      latestTerminalRunForEngagement:
+        realCountingRepository.latestTerminalRunForEngagement.bind(
+          realCountingRepository,
+        ),
+      runForEngagement:
+        realCountingRepository.runForEngagement.bind(realCountingRepository),
+      artifactsForRun:
+        realCountingRepository.artifactsForRun.bind(realCountingRepository),
+      listArtifactsForEngagement:
+        realCountingRepository.listArtifactsForEngagement.bind(realCountingRepository),
+      listRunsForEngagement() {
+        calls += 1;
+        return { ok: true as const, runs: [] };
+      },
+    };
     const countingApp = buildApp({
       engagementRepository: harness.engagementRepository,
-      runOutputRepository: {
-        listRunsForEngagement() {
-          calls += 1;
-          return { ok: true as const, runs: [] };
-        },
-      },
+      runOutputRepository: countingRepository,
       getDevelopmentStorageReadiness: () => "ready",
       logger: false,
     });
