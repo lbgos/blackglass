@@ -19,7 +19,7 @@ import { buildFfufArgv, buildNmapArgv, ffufOptionsForSnapshot, hasFfufMarker } f
 import { resolveRunnerConfig, type RunnerConfig } from "./config.js";
 import { EvidencePublicationError, publishEvidenceArtifacts, publishFfufArtifacts, publishHttpProbeArtifacts } from "./evidence-client.js";
 import { FFUF_DEFAULT_EXECUTABLE, runFfufDiscovery } from "./ffuf.js";
-import { probeOneUrl, probeUrlsFromSnapshot } from "./http-probe.js";
+import { probeOneUrl, probeUrlsFromSnapshot, ProbeAbortedError } from "./http-probe.js";
 import { getOrCreateOutboxEntry, removeOutboxAtomically } from "./outbox.js";
 import { readFfufJsonSecurely, readNmapXmlSecurely, resolveFfufJsonPath, resolveNmapXmlPath, runSupervisedCommand, verifyExecutable, type ProcessResult } from "./process.js";
 
@@ -581,20 +581,94 @@ export async function runOnce(
 
   const probeUrls = probeUrlsFromSnapshot(acquired.actionSnapshot);
   if (probeUrls !== null) {
+    const httpProbeController = new AbortController();
+    const onOuterAbortHttp = (): void => {
+      try {
+        httpProbeController.abort();
+      } catch {}
+    };
+    if (signal) {
+      if (signal.aborted) {
+        try {
+          httpProbeController.abort();
+        } catch {}
+      } else {
+        signal.addEventListener("abort", onOuterAbortHttp, { once: true });
+      }
+    }
+    let httpFenceCheck: ReturnType<typeof setInterval> | null = setInterval(() => {
+      const nowMonotonic = globalThis.performance.now();
+      if (nowMonotonic >= authorityDeadlineMonotonic - 7000 || hbFailed || signal?.aborted || shutdownAfterStarted) {
+        try {
+          httpProbeController.abort();
+        } catch {}
+        if (httpFenceCheck !== null) {
+          clearInterval(httpFenceCheck);
+          httpFenceCheck = null;
+        }
+      }
+    }, 500);
+    if (typeof (httpFenceCheck as unknown as { unref?: () => void }).unref === "function") {
+      (httpFenceCheck as unknown as { unref: () => void }).unref?.();
+    }
+    if (isAuthorityLost()) {
+      try {
+        httpProbeController.abort();
+      } catch {}
+    }
     const rawArtifacts: Buffer[] = [];
     let probeFailed = false;
+    let probeAborted = false;
     for (const url of probeUrls) {
-      if (signal?.aborted || shutdownAfterStarted) break;
+      if (httpProbeController.signal.aborted || isAuthorityLost()) {
+        probeAborted = true;
+        break;
+      }
       try {
-        const probed = await probeOneUrl(url);
+        const probed = await probeOneUrl(url, { signal: httpProbeController.signal });
         rawArtifacts.push(probed.rawBytes);
-      } catch {
-        probeFailed = true;
+      } catch (e) {
+        if (
+          e instanceof ProbeAbortedError ||
+          e instanceof RunnerShutdownError ||
+          (e as { name?: string })?.name === "AbortError" ||
+          httpProbeController.signal.aborted ||
+          isAuthorityLost()
+        ) {
+          probeAborted = true;
+        } else {
+          probeFailed = true;
+        }
         break;
       }
     }
+    if (httpFenceCheck !== null) {
+      clearInterval(httpFenceCheck);
+      httpFenceCheck = null;
+    }
+    if (signal) signal.removeEventListener("abort", onOuterAbortHttp);
     cleanup();
-    if (signal?.aborted || shutdownAfterStarted || hbFailed) {
+    if (probeAborted || isAuthorityLost()) {
+      // Preserve a fully completed URL set as partial evidence only when the
+      // fence still permits publication. A partial URL subset is discarded to
+      // preserve all-or-nothing run-target correspondence; an expired or
+      // superseded lease is never published.
+      const fenceStillValid =
+        !hbFailed && globalThis.performance.now() < authorityDeadlineMonotonic - 7000;
+      if (rawArtifacts.length === probeUrls.length && rawArtifacts.length > 0 && fenceStillValid) {
+        try {
+          const stdout = Buffer.from(
+            `probed ${String(rawArtifacts.length)} url(s) with http-probe-raw-v1`,
+            "utf8",
+          );
+          await publishHttpProbeArtifacts(config, lease, {
+            stdout,
+            rawArtifacts,
+            isCancelled: true,
+            eventSequence: nextSequence,
+          });
+        } catch {}
+      }
       await completeRun(config, lease, nextSequence, "failed", "runner_lost").catch(() => {});
       if (signal?.aborted) throw new RunnerShutdownError();
       return true;
@@ -602,6 +676,11 @@ export async function runOnce(
     if (probeFailed || rawArtifacts.length !== probeUrls.length) {
       await completeRun(config, lease, nextSequence, "failed", "evidence_publication_failed").catch(() => {});
       throw new EvidencePublicationError("evidence_publication_failed");
+    }
+    if (isAuthorityLost()) {
+      await completeRun(config, lease, nextSequence, "failed", "runner_lost").catch(() => {});
+      if (signal?.aborted) throw new RunnerShutdownError();
+      return true;
     }
     try {
       const stdout = Buffer.from(
