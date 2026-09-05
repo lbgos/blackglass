@@ -252,7 +252,7 @@ describe("engagement notes", () => {
   it("does not block navigation when clean", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      vi.fn((input: RequestInfo | URL) => {
         const url = String(input);
         if (url.includes("/system/status")) return Promise.resolve(response(readyStatus));
         if (url === "/api/v1/engagements") return Promise.resolve(response([activeEngagement]));
