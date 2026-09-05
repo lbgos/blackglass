@@ -11,7 +11,12 @@ import {
   type ResolvedTheme,
   type ThemeFamily,
 } from "@blackglass/ui";
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  ADVISOR_SETTINGS_DEFAULTS,
+  UpdateAdvisorSettingsRequestSchema,
+  type AdvisorStatus,
+} from "@blackglass/contracts";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import {
   GLASS_OPACITY_MAX,
@@ -21,11 +26,23 @@ import {
 } from "./appearance.js";
 import { SETTINGS_SECTIONS, type SettingsSectionId } from "./model.js";
 import { useUpdateRunnerSettingsMutation, useRunnerSettingsQuery } from "./runner-settings.js";
+import {
+  useAdvisorSettingsQuery,
+  useUpdateAdvisorSettingsMutation,
+} from "./advisor-settings.js";
 import { useSettingsView } from "./settings-view.js";
+import { useAdvisorStatusQuery } from "../advisor-status-query.js";
 import { useSystemStatusQuery } from "../system-status-query.js";
 
 const LOCKED_NOTE =
   "Saving preferences arrives with the v0.1 settings store. Values shown are shipped local defaults.";
+
+// Runner and advisor persist through the local control plane, so the locked
+// notice would mislead there. All other sections keep the accurate placeholder.
+const STORED_SECTION_NOTES: Partial<Record<SettingsSectionId, string>> = {
+  runner: "Stored in the local control plane. Explicit per-run values always win.",
+  advisor: "Stored in the local control plane. API keys stay in the environment.",
+};
 
 function SetRow({
   children,
@@ -756,10 +773,175 @@ function RunnerSection() {
   );
 }
 
+function parseAdvisorBudget(raw: string): number | undefined {
+  if (!/^\d+$/.test(raw.trim())) return undefined;
+  const value = Number.parseInt(raw.trim(), 10);
+  if (!Number.isSafeInteger(value) || value < 1 || value > 100) return undefined;
+  return value;
+}
+
+const ADVISOR_ENV_VAR_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
+// Key material must never be stored: any value carrying a secret prefix is
+// rejected before it can reach the backend. The message names no value.
+const ADVISOR_KEY_MATERIAL_PATTERN = /sk-|bearer /i;
+
+function isAdvisorEndpointValue(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed === "") return true;
+  if (trimmed.length > 2048) return false;
+  if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+// Truthful connection copy: the probe only receives HTTP headers and never
+// performs inference, so a success reports the endpoint reachable, never the
+// model verified.
+function advisorTestCopy(status: AdvisorStatus): string {
+  switch (status.reason) {
+    case "ok":
+      return status.latencyMs === null
+        ? `Endpoint reachable at ${status.endpointHost}. Headers-only probe; model output not verified.`
+        : `Endpoint reachable at ${status.endpointHost} in ${status.latencyMs} ms. Headers-only probe; model output not verified.`;
+    case "unconfigured":
+      return "Not configured. Set an endpoint and a model, then save.";
+    case "missing_key_env":
+      return "Name the environment variable holding the API key, then save.";
+    case "key_unset":
+      return status.keyEnvVar === ""
+        ? "Set the configured key variable in the control-plane environment, then test again."
+        : `Set ${status.keyEnvVar} in the control-plane environment, then test again.`;
+    case "public_not_opted_in":
+      return `${status.endpointHost} looks public. Opt in to public endpoints to test it.`;
+    case "unreachable":
+      return `${status.modelId} at ${status.endpointHost} did not answer. Start the endpoint or fix the base URL.`;
+    case "probe_failed":
+      return "The control plane could not test the endpoint. Check the base URL.";
+  }
+}
+
 function AdvisorSection() {
   const { advisorOpen, toggleAdvisor } = useSettingsView();
+  const settingsQuery = useAdvisorSettingsQuery();
+  const updateMutation = useUpdateAdvisorSettingsMutation();
+  const statusQuery = useAdvisorStatusQuery();
+  // Defaults-first: shared-contract values render immediately so the section
+  // chrome never depends on the network; stored values hydrate once on load.
+  const [endpoint, setEndpoint] = useState(ADVISOR_SETTINGS_DEFAULTS.endpointBaseUrl);
+  const [model, setModel] = useState(ADVISOR_SETTINGS_DEFAULTS.modelId);
+  const [keyVar, setKeyVar] = useState(ADVISOR_SETTINGS_DEFAULTS.apiKeyEnvVar);
+  const [budget, setBudget] = useState(String(ADVISOR_SETTINGS_DEFAULTS.requestBudget));
+  const [rawVisible, setRawVisible] = useState(ADVISOR_SETTINGS_DEFAULTS.rawResponseVisibility);
+  const [publicOptIn, setPublicOptIn] = useState(ADVISOR_SETTINGS_DEFAULTS.publicEndpointOptIn);
+  const [hydrated, setHydrated] = useState(false);
+  const [fieldError, setFieldError] = useState<string | undefined>(undefined);
+  const [saved, setSaved] = useState(false);
+  const [tested, setTested] = useState(false);
+  // Only the latest save may report success: a slow earlier response never
+  // overwrites newer typing or newer save feedback.
+  const saveSeq = useRef(0);
+
+  const stored = settingsQuery.data;
+  useEffect(() => {
+    if (stored === undefined || hydrated) return;
+    setEndpoint(stored.endpointBaseUrl);
+    setModel(stored.modelId);
+    setKeyVar(stored.apiKeyEnvVar);
+    setBudget(String(stored.requestBudget));
+    setRawVisible(stored.rawResponseVisibility);
+    setPublicOptIn(stored.publicEndpointOptIn);
+    setHydrated(true);
+  }, [stored, hydrated]);
+
+  const save = () => {
+    updateMutation.reset();
+    setSaved(false);
+    const trimmedEndpoint = endpoint.trim();
+    const trimmedModel = model.trim();
+    const trimmedKeyVar = keyVar.trim();
+    const parsedBudget = parseAdvisorBudget(budget);
+    if (!isAdvisorEndpointValue(endpoint)) {
+      setFieldError("Endpoint must be an http(s) URL or empty (unconfigured).");
+      return;
+    }
+    if (
+      ADVISOR_KEY_MATERIAL_PATTERN.test(endpoint) ||
+      ADVISOR_KEY_MATERIAL_PATTERN.test(model) ||
+      ADVISOR_KEY_MATERIAL_PATTERN.test(keyVar)
+    ) {
+      setFieldError("Key names must not contain key material. Enter the variable name only.");
+      return;
+    }
+    if (trimmedModel.length > 128) {
+      setFieldError("Model id must be at most 128 characters.");
+      return;
+    }
+    if (
+      trimmedKeyVar !== "" &&
+      (trimmedKeyVar.length > 128 || !ADVISOR_ENV_VAR_PATTERN.test(trimmedKeyVar))
+    ) {
+      setFieldError("Key reference must match [A-Z_][A-Z0-9_]* or be empty.");
+      return;
+    }
+    if (parsedBudget === undefined) {
+      setFieldError("Request budget must be an integer in 1-100.");
+      return;
+    }
+    // Shared-contract gate: nothing reaches the backend unless it validates.
+    const checked = UpdateAdvisorSettingsRequestSchema.safeParse({
+      endpointBaseUrl: trimmedEndpoint,
+      modelId: trimmedModel,
+      apiKeyEnvVar: trimmedKeyVar,
+      requestBudget: parsedBudget,
+      rawResponseVisibility: rawVisible,
+      publicEndpointOptIn: publicOptIn,
+    });
+    if (!checked.success) {
+      setFieldError("Stored advisor values are invalid. Check the values and try again.");
+      return;
+    }
+    setFieldError(undefined);
+    saveSeq.current += 1;
+    const seq = saveSeq.current;
+    updateMutation.mutate(checked.data, {
+      onSuccess: () => {
+        if (saveSeq.current === seq) setSaved(true);
+      },
+    });
+  };
+
+  const testConnection = () => {
+    setTested(true);
+    void statusQuery.refetch();
+  };
+
+  const textInputClass =
+    "min-h-8 w-60 rounded-lg border border-border bg-accent px-2.5 font-mono text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  const numberInputClass =
+    "min-h-8 w-[88px] rounded-lg border border-border bg-accent px-2.5 font-mono text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
   return (
     <>
+      <p className="mt-0 mb-3 text-[13px] text-muted-foreground">
+        OpenAI-compatible endpoint and budgets. The API key itself stays in the control-plane
+        environment.
+      </p>
+      {settingsQuery.isPending && (
+        <p className="m-0 mb-3 text-[13px] text-muted-foreground" role="status">
+          Loading stored advisor values.
+        </p>
+      )}
+      {settingsQuery.isError && (
+        <RecoverableError
+          title="Advisor settings unavailable"
+          description="Stored advisor values could not be loaded. Showing shipped defaults."
+          onRetry={() => void settingsQuery.refetch()}
+        />
+      )}
       <SetRow
         description="Operator stays terse. Mentor explains evidence and expected results."
         settingId="advisor-mode"
@@ -791,30 +973,80 @@ function AdvisorSection() {
       {advisorOpen && (
         <div className="mb-2 grid gap-2 pb-2">
           <SetRow
-            description="Placeholder endpoint. No request is sent."
+            description="OpenAI-compatible base URL. Empty means unconfigured."
             settingId="advisor-endpoint-base-url"
             title="Base URL"
           >
-            <PathField label="Model endpoint" placeholder="No model configured yet" />
+            <input
+              aria-label="Model endpoint"
+              className={textInputClass}
+              value={endpoint}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="http://127.0.0.1:11434/v1"
+              type="text"
+              onChange={(event) => {
+                setEndpoint(event.target.value);
+                setSaved(false);
+              }}
+            />
           </SetRow>
-          <SetRow description="Local placeholder. Not a live provider." title="Model id">
-            <PathField label="Model id" placeholder="Not configured yet" />
+          <SetRow
+            description="Model served by the configured endpoint. Empty means unconfigured."
+            settingId="advisor-model-id"
+            title="Model id"
+          >
+            <input
+              aria-label="Model id"
+              className={textInputClass}
+              value={model}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="Not configured yet"
+              type="text"
+              onChange={(event) => {
+                setModel(event.target.value);
+                setSaved(false);
+              }}
+            />
+          </SetRow>
+          <SetRow
+            description="Variable name only. The key value is never stored or shown."
+            settingId="advisor-api-key"
+            title="API key variable"
+          >
+            <input
+              aria-label="API key variable"
+              className={textInputClass}
+              value={keyVar}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="BLACKGLASS_ADVISOR_API_KEY"
+              type="text"
+              onChange={(event) => {
+                setKeyVar(event.target.value);
+                setSaved(false);
+              }}
+            />
           </SetRow>
         </div>
       )}
       <SetRow
-        description="Cap model calls for a single advisor turn."
+        description="Cap model calls for a single advisor turn (1-100)."
         settingId="request-budget"
         title="Request budget"
       >
-        <SelectField
-          label="Request budget"
-          options={[
-            { label: "4", value: "4" },
-            { label: "12", value: "12" },
-            { label: "Unlimited", value: "unlimited" },
-          ]}
-          value="12"
+        <input
+          aria-label="Request budget"
+          className={numberInputClass}
+          value={budget}
+          inputMode="numeric"
+          autoComplete="off"
+          type="text"
+          onChange={(event) => {
+            setBudget(event.target.value);
+            setSaved(false);
+          }}
         />
       </SetRow>
       <SetRow
@@ -822,8 +1054,79 @@ function AdvisorSection() {
         settingId="raw-response"
         title="Raw response visibility"
       >
-        <ToggleSwitch checked label="Raw response visibility" />
+        <ToggleSwitch
+          checked={rawVisible}
+          label="Raw response visibility"
+          locked={false}
+          onCheckedChange={(next) => {
+            setRawVisible(next);
+            setSaved(false);
+          }}
+        />
       </SetRow>
+      <SetRow
+        description="Public endpoints may send prompts beyond the local network. Opt in to test one."
+        settingId="advisor-public-opt-in"
+        title="Public endpoint opt-in"
+      >
+        <ToggleSwitch
+          checked={publicOptIn}
+          label="Public endpoint opt-in"
+          locked={false}
+          onCheckedChange={(next) => {
+            setPublicOptIn(next);
+            setSaved(false);
+          }}
+        />
+      </SetRow>
+      {fieldError && (
+        <p className="m-0 mt-2 text-[13px] text-destructive" role="alert">
+          {fieldError}
+        </p>
+      )}
+      {updateMutation.isError && (
+        <p className="m-0 mt-2 text-[13px] text-destructive" role="alert">
+          The advisor settings update failed. Values kept. Check the values and try again.
+        </p>
+      )}
+      {saved && !updateMutation.isPending && (
+        <p className="m-0 mt-2 text-[13px] text-success" role="status">
+          Advisor settings saved.
+        </p>
+      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="inline-flex min-h-8 items-center justify-center rounded-lg border border-border px-3 text-[13px] text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+          disabled={updateMutation.isPending}
+          onClick={save}
+        >
+          {updateMutation.isPending ? "Saving" : "Save advisor settings"}
+        </button>
+        <button
+          type="button"
+          className="inline-flex min-h-8 items-center justify-center rounded-lg border border-border px-3 text-[13px] text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+          disabled={statusQuery.isFetching}
+          onClick={testConnection}
+        >
+          {statusQuery.isFetching ? "Testing" : "Test connection"}
+        </button>
+      </div>
+      {tested && statusQuery.isFetching && !statusQuery.data && (
+        <p className="m-0 mt-2 text-[13px] text-muted-foreground" role="status">
+          Testing endpoint.
+        </p>
+      )}
+      {tested && statusQuery.isError && (
+        <p className="m-0 mt-2 text-[13px] text-destructive" role="alert">
+          Connection test unavailable. The control plane did not return advisor status.
+        </p>
+      )}
+      {tested && statusQuery.data && (
+        <p className="m-0 mt-2 text-[13px] text-muted-foreground" role="status">
+          {advisorTestCopy(statusQuery.data)}
+        </p>
+      )}
     </>
   );
 }
@@ -968,6 +1271,10 @@ export function SettingsPage() {
         {section === "appearance" ? (
           <p className="mt-0 mb-5.5 text-[13px] text-muted-foreground">
             Choose how Blackglass looks. Use a built-in theme or make your own.
+          </p>
+        ) : STORED_SECTION_NOTES[section] ? (
+          <p className="mt-0 mb-5.5 text-[13px] text-muted-foreground">
+            {STORED_SECTION_NOTES[section]}
           </p>
         ) : (
           <p className="mt-0 mb-5.5 text-[13px] text-muted-foreground">{LOCKED_NOTE}</p>
