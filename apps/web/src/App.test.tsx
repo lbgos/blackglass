@@ -365,10 +365,20 @@ describe("App system readiness", () => {
 
     await renderApp();
 
-    expect(await screen.findByText("Advisor connected")).toBeTruthy();
-    expect(screen.getByText(/qwen3:8b answered at 127\.0\.0\.1 in 12 ms/)).toBeTruthy();
+    expect(await screen.findByText("Advisor endpoint reachable")).toBeTruthy();
+    expect(
+      screen.getByText(/qwen3:8b endpoint at 127\.0\.0\.1 responded in 12 ms/),
+    ).toBeTruthy();
     const link = screen.getByRole("link", { name: "Open Advisor settings" });
-    expect(link.getAttribute("href")).toBe("/settings");
+    expect(link.getAttribute("href")).toBe("/settings?section=advisor");
+  });
+
+  it("lands directly on the Advisor section from the status card link", async () => {
+    stubWorkspaceFetch(() => response(readyStatus));
+    await renderApp("/settings?section=advisor");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Advisor" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save advisor settings" })).toBeTruthy();
   });
 });
 

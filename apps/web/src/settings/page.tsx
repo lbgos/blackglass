@@ -16,7 +16,7 @@ import {
   UpdateAdvisorSettingsRequestSchema,
   type AdvisorStatus,
 } from "@blackglass/contracts";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import {
   GLASS_OPACITY_MAX,
@@ -84,25 +84,27 @@ function ToggleSwitch({
   label,
   locked = true,
   onCheckedChange,
+  disabled = false,
 }: {
   checked: boolean;
   label: string;
   locked?: boolean;
   onCheckedChange?: (checked: boolean) => void;
+  disabled?: boolean;
 }) {
-  const disabled = locked && !onCheckedChange;
+  const controlDisabled = disabled || (locked && !onCheckedChange);
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
-      aria-disabled={disabled || undefined}
+      aria-disabled={controlDisabled || undefined}
       aria-label={label}
-      disabled={disabled || undefined}
+      disabled={controlDisabled || undefined}
       className={cn(
         "flex h-[18px] w-8 shrink-0 items-center rounded-full px-[2px] transition-colors duration-100",
         checked ? "bg-primary" : "bg-foreground/15",
-        disabled ? "cursor-default opacity-55" : "cursor-pointer",
+        controlDisabled ? "cursor-default opacity-55" : "cursor-pointer",
       )}
       onClick={onCheckedChange ? () => onCheckedChange(!checked) : undefined}
     >
@@ -773,13 +775,6 @@ function RunnerSection() {
   );
 }
 
-function parseAdvisorBudget(raw: string): number | undefined {
-  if (!/^\d+$/.test(raw.trim())) return undefined;
-  const value = Number.parseInt(raw.trim(), 10);
-  if (!Number.isSafeInteger(value) || value < 1 || value > 100) return undefined;
-  return value;
-}
-
 const ADVISOR_ENV_VAR_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 // Key material must never be stored: any value carrying a secret prefix is
 // rejected before it can reach the backend. The message names no value.
@@ -829,21 +824,17 @@ function AdvisorSection() {
   const settingsQuery = useAdvisorSettingsQuery();
   const updateMutation = useUpdateAdvisorSettingsMutation();
   const statusQuery = useAdvisorStatusQuery();
-  // Defaults-first: shared-contract values render immediately so the section
-  // chrome never depends on the network; stored values hydrate once on load.
+  // Effective connection fields only: request budget, raw response visibility,
+  // and advisor mode have no turn consumer yet and render as unavailable facts.
   const [endpoint, setEndpoint] = useState(ADVISOR_SETTINGS_DEFAULTS.endpointBaseUrl);
   const [model, setModel] = useState(ADVISOR_SETTINGS_DEFAULTS.modelId);
   const [keyVar, setKeyVar] = useState(ADVISOR_SETTINGS_DEFAULTS.apiKeyEnvVar);
-  const [budget, setBudget] = useState(String(ADVISOR_SETTINGS_DEFAULTS.requestBudget));
-  const [rawVisible, setRawVisible] = useState(ADVISOR_SETTINGS_DEFAULTS.rawResponseVisibility);
   const [publicOptIn, setPublicOptIn] = useState(ADVISOR_SETTINGS_DEFAULTS.publicEndpointOptIn);
   const [hydrated, setHydrated] = useState(false);
   const [fieldError, setFieldError] = useState<string | undefined>(undefined);
   const [saved, setSaved] = useState(false);
   const [tested, setTested] = useState(false);
-  // Only the latest save may report success: a slow earlier response never
-  // overwrites newer typing or newer save feedback.
-  const saveSeq = useRef(0);
+  const [dirty, setDirty] = useState(false);
 
   const stored = settingsQuery.data;
   useEffect(() => {
@@ -851,19 +842,29 @@ function AdvisorSection() {
     setEndpoint(stored.endpointBaseUrl);
     setModel(stored.modelId);
     setKeyVar(stored.apiKeyEnvVar);
-    setBudget(String(stored.requestBudget));
-    setRawVisible(stored.rawResponseVisibility);
     setPublicOptIn(stored.publicEndpointOptIn);
     setHydrated(true);
   }, [stored, hydrated]);
 
+  // Editing unlocks only after the first successful load, so a delayed or
+  // failed GET can never trick the operator into saving defaults over real
+  // stored configuration. Editing also locks during a save, so a slow save
+  // response can never bless newer unsaved typing as saved.
+  const editable = hydrated && !updateMutation.isPending;
+
+  const markEdited = () => {
+    setDirty(true);
+    setTested(false);
+    setSaved(false);
+  };
+
   const save = () => {
+    if (!hydrated) return;
     updateMutation.reset();
     setSaved(false);
     const trimmedEndpoint = endpoint.trim();
     const trimmedModel = model.trim();
     const trimmedKeyVar = keyVar.trim();
-    const parsedBudget = parseAdvisorBudget(budget);
     if (!isAdvisorEndpointValue(endpoint)) {
       setFieldError("Endpoint must be an http(s) URL or empty (unconfigured).");
       return;
@@ -887,17 +888,13 @@ function AdvisorSection() {
       setFieldError("Key reference must match [A-Z_][A-Z0-9_]* or be empty.");
       return;
     }
-    if (parsedBudget === undefined) {
-      setFieldError("Request budget must be an integer in 1-100.");
-      return;
-    }
     // Shared-contract gate: nothing reaches the backend unless it validates.
+    // Only effective fields are sent, so unavailable fields keep their stored
+    // values through the backend partial update.
     const checked = UpdateAdvisorSettingsRequestSchema.safeParse({
       endpointBaseUrl: trimmedEndpoint,
       modelId: trimmedModel,
       apiKeyEnvVar: trimmedKeyVar,
-      requestBudget: parsedBudget,
-      rawResponseVisibility: rawVisible,
       publicEndpointOptIn: publicOptIn,
     });
     if (!checked.success) {
@@ -905,40 +902,39 @@ function AdvisorSection() {
       return;
     }
     setFieldError(undefined);
-    saveSeq.current += 1;
-    const seq = saveSeq.current;
     updateMutation.mutate(checked.data, {
       onSuccess: () => {
-        if (saveSeq.current === seq) setSaved(true);
+        setSaved(true);
+        setDirty(false);
+        setTested(false);
       },
     });
   };
 
   const testConnection = () => {
+    if (dirty || !hydrated) return;
     setTested(true);
     void statusQuery.refetch();
   };
 
   const textInputClass =
-    "min-h-8 w-60 rounded-lg border border-border bg-accent px-2.5 font-mono text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
-  const numberInputClass =
-    "min-h-8 w-[88px] rounded-lg border border-border bg-accent px-2.5 font-mono text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
+    "min-h-8 w-60 rounded-lg border border-border bg-accent px-2.5 font-mono text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-55";
 
   return (
     <>
       <p className="mt-0 mb-3 text-[13px] text-muted-foreground">
-        OpenAI-compatible endpoint and budgets. The API key itself stays in the control-plane
+        OpenAI-compatible endpoint. The API key itself stays in the control-plane
         environment.
       </p>
-      {settingsQuery.isPending && (
+      {!hydrated && settingsQuery.isPending && (
         <p className="m-0 mb-3 text-[13px] text-muted-foreground" role="status">
-          Loading stored advisor values.
+          Loading stored advisor values. Editing unlocks after they load.
         </p>
       )}
-      {settingsQuery.isError && (
+      {!hydrated && settingsQuery.isError && (
         <RecoverableError
           title="Advisor settings unavailable"
-          description="Stored advisor values could not be loaded. Showing shipped defaults."
+          description="Stored advisor values could not be loaded. Editing stays disabled until they load."
           onRetry={() => void settingsQuery.refetch()}
         />
       )}
@@ -947,14 +943,7 @@ function AdvisorSection() {
         settingId="advisor-mode"
         title="Default mode"
       >
-        <SelectField
-          label="Advisor default mode"
-          options={[
-            { label: "Operator", value: "operator" },
-            { label: "Mentor", value: "mentor" },
-          ]}
-          value="operator"
-        />
+        <span className="text-[13px] text-muted-foreground">Not available in this version</span>
       </SetRow>
       <SetRow
         description="OpenAI-compatible base URL. Local and private endpoints are the default path."
@@ -985,9 +974,10 @@ function AdvisorSection() {
               spellCheck={false}
               placeholder="http://127.0.0.1:11434/v1"
               type="text"
+              disabled={!editable}
               onChange={(event) => {
                 setEndpoint(event.target.value);
-                setSaved(false);
+                markEdited();
               }}
             />
           </SetRow>
@@ -1004,9 +994,10 @@ function AdvisorSection() {
               spellCheck={false}
               placeholder="Not configured yet"
               type="text"
+              disabled={!editable}
               onChange={(event) => {
                 setModel(event.target.value);
-                setSaved(false);
+                markEdited();
               }}
             />
           </SetRow>
@@ -1023,46 +1014,28 @@ function AdvisorSection() {
               spellCheck={false}
               placeholder="BLACKGLASS_ADVISOR_API_KEY"
               type="text"
+              disabled={!editable}
               onChange={(event) => {
                 setKeyVar(event.target.value);
-                setSaved(false);
+                markEdited();
               }}
             />
           </SetRow>
         </div>
       )}
       <SetRow
-        description="Cap model calls for a single advisor turn (1-100)."
+        description="Cap model calls for a single advisor turn."
         settingId="request-budget"
         title="Request budget"
       >
-        <input
-          aria-label="Request budget"
-          className={numberInputClass}
-          value={budget}
-          inputMode="numeric"
-          autoComplete="off"
-          type="text"
-          onChange={(event) => {
-            setBudget(event.target.value);
-            setSaved(false);
-          }}
-        />
+        <span className="text-[13px] text-muted-foreground">Not available in this version</span>
       </SetRow>
       <SetRow
         description="Keep the unparsed model payload visible next to structured output."
         settingId="raw-response"
         title="Raw response visibility"
       >
-        <ToggleSwitch
-          checked={rawVisible}
-          label="Raw response visibility"
-          locked={false}
-          onCheckedChange={(next) => {
-            setRawVisible(next);
-            setSaved(false);
-          }}
-        />
+        <span className="text-[13px] text-muted-foreground">Not available in this version</span>
       </SetRow>
       <SetRow
         description="Public endpoints may send prompts beyond the local network. Opt in to test one."
@@ -1073,9 +1046,10 @@ function AdvisorSection() {
           checked={publicOptIn}
           label="Public endpoint opt-in"
           locked={false}
+          disabled={!editable}
           onCheckedChange={(next) => {
             setPublicOptIn(next);
-            setSaved(false);
+            markEdited();
           }}
         />
       </SetRow>
@@ -1098,7 +1072,7 @@ function AdvisorSection() {
         <button
           type="button"
           className="inline-flex min-h-8 items-center justify-center rounded-lg border border-border px-3 text-[13px] text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
-          disabled={updateMutation.isPending}
+          disabled={!editable}
           onClick={save}
         >
           {updateMutation.isPending ? "Saving" : "Save advisor settings"}
@@ -1106,12 +1080,17 @@ function AdvisorSection() {
         <button
           type="button"
           className="inline-flex min-h-8 items-center justify-center rounded-lg border border-border px-3 text-[13px] text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
-          disabled={statusQuery.isFetching}
+          disabled={!hydrated || dirty || statusQuery.isFetching}
           onClick={testConnection}
         >
           {statusQuery.isFetching ? "Testing" : "Test connection"}
         </button>
       </div>
+      {dirty && (
+        <p className="m-0 mt-2 text-[13px] text-muted-foreground" role="status">
+          Unsaved changes. Save first, then test the connection.
+        </p>
+      )}
       {tested && statusQuery.isFetching && !statusQuery.data && (
         <p className="m-0 mt-2 text-[13px] text-muted-foreground" role="status">
           Testing endpoint.

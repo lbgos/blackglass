@@ -35,6 +35,9 @@ export async function fetchAdvisorSettings(signal?: AbortSignal): Promise<Adviso
     if (!result.success) throw new AdvisorSettingsQueryError();
     return result.data;
   } catch (error) {
+    // Cancellation is not a failure: let the abort reach React Query so a
+    // discarded request never surfaces as a network error.
+    if (signal?.aborted) throw error;
     if (error instanceof AdvisorSettingsQueryError) throw error;
     throw new AdvisorSettingsQueryError();
   }
