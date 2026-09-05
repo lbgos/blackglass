@@ -145,18 +145,6 @@ function unreachable(latencyMs: number): ConnectionTestResult {
   return { reachable: false, latencyMs };
 }
 
-// Best-effort release of a probe response body. The probe only needs headers,
-// so every response path cancels without consuming raw bytes.
-async function cancelProbeBody(response: Response | undefined): Promise<void> {
-  const body = response?.body;
-  if (body === null || body === undefined) return;
-  try {
-    await body.cancel();
-  } catch {
-    // Release is best-effort; a locked or already-closed body still resolves.
-  }
-}
-
 // Resolve a hostname to private-only addresses (fail-closed helper). Returns
 // true when every resolved address is private, false when at least one is
 // public, and undefined when resolution itself fails.
@@ -256,6 +244,27 @@ export async function probeAdvisorEndpoint(
     return { expired: false, value: raced.value };
   };
 
+  // Best-effort release of a probe response body. The probe only needs
+  // headers, so every response path cancels without consuming raw bytes. The
+  // cancel attempt is preserved, but the wait is bounded by the shared
+  // deadline: a hanging cancel() reports via the deadline instead of
+  // extending the probe, and rejections are always observed.
+  const cancelProbeBody = async (response: Response | undefined): Promise<void> => {
+    const body = response?.body;
+    if (body === null || body === undefined) return;
+    let cancelWork: Promise<unknown>;
+    try {
+      cancelWork = Promise.resolve(body.cancel());
+    } catch {
+      return;
+    }
+    if (expired || Date.now() >= deadlineAt) {
+      cancelWork.catch(() => {});
+      return;
+    }
+    await Promise.race([cancelWork.catch(() => {}), timeoutPromise]);
+  };
+
   try {
     let origin: URL;
     try {
@@ -299,8 +308,8 @@ export async function probeAdvisorEndpoint(
     ]);
     if (fetchRaced.timedOut || expired) {
       // A late fetch that resolves after the deadline must not leak its body.
-      void fetchWork.then((outcome) => {
-        if (outcome.ok) return cancelProbeBody(outcome.response);
+      void fetchWork.then(async (outcome) => {
+        if (outcome.ok) await cancelProbeBody(outcome.response);
       });
       return finishUnreachable();
     }

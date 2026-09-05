@@ -323,4 +323,26 @@ describe("probeAdvisorEndpoint", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(cancelled).toBe(true);
   });
+
+  it("stays bounded when body cancel never settles", async () => {
+    let cancelAttempted = false;
+    const stream = new ReadableStream({
+      cancel() {
+        cancelAttempted = true;
+        return new Promise<void>(() => {});
+      },
+    });
+    const fetchImpl = vi.fn(async () => new Response(stream, { status: 200 }));
+    const startedAt = Date.now();
+
+    const result = await probeAdvisorEndpoint("http://127.0.0.1:11434/v1", {
+      timeoutMs: 20,
+      network: { fetchImpl },
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(cancelAttempted).toBe(true);
+    expect(result.reachable).toBeDefined();
+  });
 });
