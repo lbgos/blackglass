@@ -87,7 +87,7 @@ describe("AdvisorStatusCard", () => {
 
     expect(await screen.findByText("Advisor is not configured")).toBeTruthy();
     const link = screen.getByRole("link", { name: "Open Advisor settings" });
-    expect(link.getAttribute("href")).toBe("/settings");
+    expect(link.getAttribute("href")).toBe("/settings?section=advisor");
     router.history.destroy();
   });
 
@@ -95,9 +95,12 @@ describe("AdvisorStatusCard", () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(response(connectedStatus))));
     const { router } = await renderCard();
 
-    expect(await screen.findByText("Advisor connected")).toBeTruthy();
-    const detail = await screen.findByText(/qwen3:8b answered at 127\.0\.0\.1 in 12 ms/);
+    expect(await screen.findByText("Advisor endpoint reachable")).toBeTruthy();
+    const detail = await screen.findByText(
+      /qwen3:8b endpoint at 127\.0\.0\.1 responded in 12 ms/,
+    );
     expect(detail.textContent).not.toContain("http");
+    expect(detail.textContent).toContain("model output not verified");
     router.history.destroy();
   });
 
@@ -172,7 +175,7 @@ describe("AdvisorStatusCard", () => {
     fetchMock.mockImplementation(() => Promise.resolve(response(connectedStatus)));
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    expect(await screen.findByText("Advisor connected")).toBeTruthy();
+    expect(await screen.findByText("Advisor endpoint reachable")).toBeTruthy();
     router.history.destroy();
   });
 });

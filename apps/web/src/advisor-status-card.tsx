@@ -8,6 +8,7 @@ function SettingsLink() {
   return (
     <Link
       to="/settings"
+      search={{ section: "advisor" }}
       className="inline-flex min-h-8 items-center rounded-md px-2 text-[13px] font-semibold text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
     >
       Open Advisor settings
@@ -18,12 +19,14 @@ function SettingsLink() {
 function statusCopy(status: AdvisorStatus): { detail: string; title: string } {
   switch (status.reason) {
     case "ok":
+      // The probe only receives HTTP headers and never performs inference:
+      // report the endpoint reachable, never the model verified.
       return {
-        title: "Advisor connected",
+        title: "Advisor endpoint reachable",
         detail:
           status.latencyMs === null
-            ? `${status.modelId} answered at ${status.endpointHost}.`
-            : `${status.modelId} answered at ${status.endpointHost} in ${status.latencyMs} ms.`,
+            ? `${status.modelId} endpoint at ${status.endpointHost} responded. Headers-only probe; model output not verified.`
+            : `${status.modelId} endpoint at ${status.endpointHost} responded in ${status.latencyMs} ms. Headers-only probe; model output not verified.`,
       };
     case "unconfigured":
       return {

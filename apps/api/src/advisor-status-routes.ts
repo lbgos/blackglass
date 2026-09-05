@@ -98,33 +98,28 @@ export function registerAdvisorStatusRoutes(
       endpointParsable = false;
     }
 
-    // No env var name configured: no key to resolve.
-    if (settings.apiKeyEnvVar === "") {
-      return sendStatus({
-        ...base,
-        configured: true,
-        endpointHost,
-        endpointReachable: null,
-        publicEndpoint,
-        reason: "missing_key_env",
-      });
-    }
-
-    // Resolve the key from the environment by NAME ONLY at request time.
-    // The value is checked for presence and then dropped: it is never
-    // stored, never logged, and never echoed. Only present/absent leaves.
-    const environment = options.env ?? process.env;
-    const keyValue = environment[settings.apiKeyEnvVar];
-    const keyPresent = typeof keyValue === "string" && keyValue.length > 0;
-    if (!keyPresent) {
-      return sendStatus({
-        ...base,
-        configured: true,
-        endpointHost,
-        endpointReachable: null,
-        publicEndpoint,
-        reason: "key_unset",
-      });
+    // An empty env var reference means the operator runs without a key: no
+    // auth to resolve, so reachability is tested with keyPresent false. The
+    // probe sends a bare GET with no Authorization header in every case. A
+    // nonempty reference that is unset remains an explicit key_unset failure.
+    let keyPresent = false;
+    if (settings.apiKeyEnvVar !== "") {
+      // Resolve the key from the environment by NAME ONLY at request time.
+      // The value is checked for presence and then dropped: it is never
+      // stored, never logged, and never echoed. Only present/absent leaves.
+      const environment = options.env ?? process.env;
+      const keyValue = environment[settings.apiKeyEnvVar];
+      keyPresent = typeof keyValue === "string" && keyValue.length > 0;
+      if (!keyPresent) {
+        return sendStatus({
+          ...base,
+          configured: true,
+          endpointHost,
+          endpointReachable: null,
+          publicEndpoint,
+          reason: "key_unset",
+        });
+      }
     }
 
     if (!endpointParsable) {
@@ -132,7 +127,7 @@ export function registerAdvisorStatusRoutes(
         ...base,
         configured: true,
         endpointReachable: false,
-        keyPresent: true,
+        keyPresent,
         reason: "probe_failed",
       });
     }
@@ -145,7 +140,7 @@ export function registerAdvisorStatusRoutes(
         configured: true,
         endpointHost,
         endpointReachable: null,
-        keyPresent: true,
+        keyPresent,
         publicEndpoint: true,
         reason: "public_not_opted_in",
       });
@@ -163,7 +158,7 @@ export function registerAdvisorStatusRoutes(
         configured: true,
         endpointHost,
         endpointReachable: false,
-        keyPresent: true,
+        keyPresent,
         publicEndpoint,
         reason: "probe_failed",
       });
@@ -173,7 +168,7 @@ export function registerAdvisorStatusRoutes(
       configured: true,
       endpointHost,
       endpointReachable: outcome.result.reachable,
-      keyPresent: true,
+      keyPresent,
       latencyMs: outcome.result.latencyMs,
       publicEndpoint,
       reason: outcome.result.reachable ? "ok" : "unreachable",
