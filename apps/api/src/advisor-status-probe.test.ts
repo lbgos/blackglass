@@ -227,4 +227,100 @@ describe("probeAdvisorEndpoint", () => {
       reachable: false,
     });
   });
+
+  it("bounds hanging initial DNS within the wall-clock budget", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+    const startedAt = Date.now();
+
+    await expect(
+      probeAdvisorEndpoint("http://model.test/v1", {
+        timeoutMs: 20,
+        network: { fetchImpl, lookupAll: () => new Promise<readonly string[]>(() => {}) },
+      }),
+    ).resolves.toMatchObject({ reachable: false });
+
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("bounds hanging redirect-target DNS within the wall-clock budget", async () => {
+    const fetchImpl = stubFetch(302, "http://internal-redirect.test/v1");
+    const startedAt = Date.now();
+
+    await expect(
+      probeAdvisorEndpoint("http://203.0.113.7:11434/v1", {
+        timeoutMs: 30,
+        network: { fetchImpl, lookupAll: () => new Promise<readonly string[]>(() => {}) },
+      }),
+    ).resolves.toMatchObject({ reachable: false });
+
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("never starts fetch after a late DNS result", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+    const lookupAll = vi.fn(
+      () =>
+        new Promise<readonly string[]>((resolve) => {
+          setTimeout(() => resolve(["93.184.216.34"]), 60);
+        }),
+    );
+
+    await expect(
+      probeAdvisorEndpoint("http://late-dns.test/v1", {
+        timeoutMs: 20,
+        network: { fetchImpl, lookupAll },
+      }),
+    ).resolves.toMatchObject({ reachable: false });
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("bounds a hanging fetch within the wall-clock budget", async () => {
+    const fetchImpl = vi.fn(() => new Promise<Response>(() => {}));
+    const startedAt = Date.now();
+
+    await expect(
+      probeAdvisorEndpoint("http://127.0.0.1:11434/v1", {
+        timeoutMs: 20,
+        network: { fetchImpl },
+      }),
+    ).resolves.toMatchObject({ reachable: false });
+
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the response body on success", async () => {
+    let cancelled = false;
+    const stream = new ReadableStream({ cancel() { cancelled = true; } });
+    const fetchImpl = vi.fn(async () => new Response(stream, { status: 200 }));
+
+    const result = await probeAdvisorEndpoint("http://127.0.0.1:11434/v1", {
+      timeoutMs: 2_000,
+      network: { fetchImpl },
+    });
+
+    expect(result).toMatchObject({ reachable: true });
+    expect(cancelled).toBe(true);
+  });
+
+  it("cancels the response body on a rejected private redirect", async () => {
+    let cancelled = false;
+    const stream = new ReadableStream({ cancel() { cancelled = true; } });
+    const fetchImpl = vi.fn(
+      async () => new Response(stream, { status: 302, headers: { location: "http://10.9.9.9/v1/models" } }),
+    );
+
+    const result = await probeAdvisorEndpoint("http://203.0.113.7:11434/v1", {
+      timeoutMs: 2_000,
+      network: { fetchImpl },
+    });
+
+    expect(result).toMatchObject({ reachable: false });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(cancelled).toBe(true);
+  });
 });

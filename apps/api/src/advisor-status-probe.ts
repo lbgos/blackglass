@@ -145,6 +145,18 @@ function unreachable(latencyMs: number): ConnectionTestResult {
   return { reachable: false, latencyMs };
 }
 
+// Best-effort release of a probe response body. The probe only needs headers,
+// so every response path cancels without consuming raw bytes.
+async function cancelProbeBody(response: Response | undefined): Promise<void> {
+  const body = response?.body;
+  if (body === null || body === undefined) return;
+  try {
+    await body.cancel();
+  } catch {
+    // Release is best-effort; a locked or already-closed body still resolves.
+  }
+}
+
 // Resolve a hostname to private-only addresses (fail-closed helper). Returns
 // true when every resolved address is private, false when at least one is
 // public, and undefined when resolution itself fails.
@@ -184,65 +196,152 @@ export async function probeAdvisorEndpoint(
   options: ProbeAdvisorEndpointOptions = {},
 ): Promise<ConnectionTestResult> {
   const startedAt = Date.now();
-  const timeoutMs = options.timeoutMs ?? ADVISOR_PROBE_TIMEOUT_MS;
+  // One wall-clock budget for the whole probe: initial DNS, fetch, and any
+  // redirect-target DNS. Node dns.lookup promises cannot be cancelled, so a
+  // late DNS result is ignored and never starts a request after the deadline.
+  const budgetMs = Math.max(1, options.timeoutMs ?? ADVISOR_PROBE_TIMEOUT_MS);
+  const deadlineAt = startedAt + budgetMs;
   const fetchImpl = options.network?.fetchImpl ?? fetch;
   const lookupAll = options.network?.lookupAll ?? defaultLookupAll;
+  const fetchController = new AbortController();
 
-  let origin: URL;
-  try {
-    origin = new URL(endpointBaseUrl);
-  } catch {
-    return unreachable(Math.max(0, Date.now() - startedAt));
-  }
-  if (origin.protocol !== "http:" && origin.protocol !== "https:") {
-    return unreachable(Math.max(0, Date.now() - startedAt));
-  }
-
-  const visibility = classifyAdvisorEndpointHost(origin.hostname);
-  if (!isIpLiteral(origin.hostname)) {
-    const resolution = await resolvesToPrivateOnly(origin.hostname, lookupAll);
-    if (resolution === undefined) {
-      return unreachable(Math.max(0, Date.now() - startedAt));
-    }
-    if (visibility === "public" && resolution) {
-      return unreachable(Math.max(0, Date.now() - startedAt));
-    }
-  }
-
-  let response: Response;
-  try {
-    response = await fetchImpl(origin, {
-      method: "GET",
-      redirect: "manual",
-      signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
-    });
-  } catch {
-    return unreachable(Math.max(0, Date.now() - startedAt));
-  }
-
-  if (response.status >= 300 && response.status <= 399) {
-    const location = response.headers.get("location");
-    if (location && redirectEscapesToPrivate(location, origin, visibility)) {
-      return unreachable(Math.max(0, Date.now() - startedAt));
-    }
-    if (location && visibility === "public") {
+  let activeResponse: Response | undefined;
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      expired = true;
       try {
-        const target = new URL(location, origin);
-        if (
-          (target.protocol === "http:" || target.protocol === "https:") &&
-          target.host.toLowerCase() !== origin.host.toLowerCase() &&
-          !isIpLiteral(target.hostname)
-        ) {
-          const resolution = await resolvesToPrivateOnly(target.hostname, lookupAll);
-          if (resolution === undefined || resolution) {
-            return unreachable(Math.max(0, Date.now() - startedAt));
-          }
-        }
+        fetchController.abort();
       } catch {
-        return unreachable(Math.max(0, Date.now() - startedAt));
+        // Abort is best-effort; the deadline race below still reports timeout.
+      }
+      const body = activeResponse?.body;
+      if (body !== null && body !== undefined) {
+        try {
+          const cancelled = body.cancel() as unknown;
+          if (cancelled instanceof Promise) void cancelled.catch(() => {});
+        } catch {
+          // Ignored: authoritative cancel happens on the return paths.
+        }
+      }
+      resolve();
+    }, budgetMs);
+    timer.unref?.();
+  });
+  const clearTimer = (): void => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+  const elapsed = (): number => Math.max(0, Date.now() - startedAt);
+  const finishUnreachable = (): ConnectionTestResult => unreachable(elapsed());
+
+  // Race one DNS lookup against the shared deadline. Never throws: lookup
+  // failures report as undefined so the caller fails closed.
+  const resolveWithBudget = async (
+    hostname: string,
+  ): Promise<{ expired: true } | { expired: false; value: boolean | undefined }> => {
+    if (expired || Date.now() >= deadlineAt) return { expired: true };
+    const work = resolvesToPrivateOnly(hostname, lookupAll).then(
+      (value) => ({ timedOut: false as const, value }),
+      () => ({ timedOut: false as const, value: undefined as boolean | undefined }),
+    );
+    const raced = await Promise.race([
+      work,
+      timeoutPromise.then(() => ({ timedOut: true as const })),
+    ]);
+    if (raced.timedOut || expired) return { expired: true };
+    return { expired: false, value: raced.value };
+  };
+
+  try {
+    let origin: URL;
+    try {
+      origin = new URL(endpointBaseUrl);
+    } catch {
+      return finishUnreachable();
+    }
+    if (origin.protocol !== "http:" && origin.protocol !== "https:") {
+      return finishUnreachable();
+    }
+
+    const visibility = classifyAdvisorEndpointHost(origin.hostname);
+    if (!isIpLiteral(origin.hostname)) {
+      const resolution = await resolveWithBudget(origin.hostname);
+      if (resolution.expired) return finishUnreachable();
+      if (resolution.value === undefined) {
+        return finishUnreachable();
+      }
+      if (visibility === "public" && resolution.value) {
+        return finishUnreachable();
       }
     }
-  }
 
-  return { reachable: true, latencyMs: Math.max(0, Date.now() - startedAt) };
+    if (expired || Date.now() >= deadlineAt) return finishUnreachable();
+
+    const fetchWork: Promise<{ ok: true; response: Response } | { ok: false }> = (async () => {
+      try {
+        const response = await fetchImpl(origin, {
+          method: "GET",
+          redirect: "manual",
+          signal: fetchController.signal,
+        });
+        return { ok: true as const, response };
+      } catch {
+        return { ok: false as const };
+      }
+    })();
+    const fetchRaced = await Promise.race([
+      fetchWork.then((outcome) => ({ timedOut: false as const, outcome })),
+      timeoutPromise.then(() => ({ timedOut: true as const })),
+    ]);
+    if (fetchRaced.timedOut || expired) {
+      // A late fetch that resolves after the deadline must not leak its body.
+      void fetchWork.then((outcome) => {
+        if (outcome.ok) return cancelProbeBody(outcome.response);
+      });
+      return finishUnreachable();
+    }
+    if (!fetchRaced.outcome.ok) return finishUnreachable();
+    const response = fetchRaced.outcome.response;
+    activeResponse = response;
+
+    if (response.status >= 300 && response.status <= 399) {
+      const location = response.headers.get("location");
+      if (location && redirectEscapesToPrivate(location, origin, visibility)) {
+        await cancelProbeBody(response);
+        return finishUnreachable();
+      }
+      if (location && visibility === "public") {
+        try {
+          const target = new URL(location, origin);
+          if (
+            (target.protocol === "http:" || target.protocol === "https:") &&
+            target.host.toLowerCase() !== origin.host.toLowerCase() &&
+            !isIpLiteral(target.hostname)
+          ) {
+            const resolution = await resolveWithBudget(target.hostname);
+            if (resolution.expired) {
+              await cancelProbeBody(response);
+              return finishUnreachable();
+            }
+            if (resolution.value === undefined || resolution.value) {
+              await cancelProbeBody(response);
+              return finishUnreachable();
+            }
+          }
+        } catch {
+          await cancelProbeBody(response);
+          return finishUnreachable();
+        }
+      }
+    }
+
+    await cancelProbeBody(response);
+    return { reachable: true, latencyMs: elapsed() };
+  } finally {
+    clearTimer();
+  }
 }
