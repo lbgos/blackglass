@@ -26,8 +26,7 @@ function SettingsRoutePage() {
 }
 
 export const Route = createFileRoute("/settings")({
-  validateSearch: (search: Record<string, unknown>) => ({
-    section: typeof search.section === "string" ? search.section : undefined,
-  }),
+  validateSearch: (search: Record<string, unknown>): { section?: string } =>
+    typeof search.section === "string" ? { section: search.section } : {},
   component: SettingsRoutePage,
 });
