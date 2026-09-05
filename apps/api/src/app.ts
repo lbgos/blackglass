@@ -38,6 +38,7 @@ import { registerRunnerControlRoutes } from "./runner-routes.js";
 import { registerFfufRoutes } from "./ffuf-routes.js";
 import { registerNmapServiceRoutes } from "./nmap-service-routes.js";
 import { registerRunOutputRoutes } from "./run-output-routes.js";
+import { registerRunHistoryRoutes } from "./run-history-routes.js";
 import { registerRunnerEvidenceGrantRoutes } from "./runner-evidence-grant-routes.js";
 import { registerRunnerEvidenceUploadRoutes } from "./runner-evidence-upload-routes.js";
 import { registerHttpProbeRoutes } from "./http-probe-routes.js";
@@ -115,6 +116,7 @@ interface BuildAppOptions {
     | "runForEngagement"
     | "artifactsForRun"
     | "listArtifactsForEngagement"
+    | "listRunsForEngagement"
   >;
   logger?: FastifyServerOptions["logger"];
   now?: () => Date;
@@ -261,6 +263,11 @@ export function buildApp({
     registerFfufRoutes(app, {
       results: ffufRepository,
       ...(operatorCommandRepository === undefined ? {} : { commands: operatorCommandRepository }),
+    });
+  }
+  if (runOutputRepository !== undefined) {
+    registerRunHistoryRoutes(app, {
+      repository: runOutputRepository,
     });
   }
   if (
