@@ -180,6 +180,23 @@ describe("run history repository", () => {
     for (const state of states) expect(statesSeen.has(state)).toBe(true);
     const retryRows = listed.runs.filter((run) => run.actionId === retryAction);
     expect(retryRows.map((run) => run.attempt).sort()).toEqual([1, 2]);
+    // Exact terminal projection per state: non-terminal rows carry null
+    // terminals, terminal rows carry their kind and reason.
+    const expectedTerminals: Record<string, { kind: string | null; reason: string | null }> = {
+      queued: { kind: null, reason: null },
+      leased: { kind: null, reason: null },
+      running: { kind: null, reason: null },
+      cancel_requested: { kind: null, reason: null },
+      succeeded: { kind: "succeeded", reason: null },
+      failed: { kind: "failed", reason: "operator_cancelled" },
+      cancelled: { kind: "cancelled", reason: "operator_cancelled" },
+    };
+    for (const [index, state] of states.entries()) {
+      const row = listed.runs.find((run) => run.actionId === `action-history-${index}`);
+      expect(row?.state).toBe(state);
+      expect(row?.terminalKind).toBe(expectedTerminals[state]?.kind ?? null);
+      expect(row?.terminalReason).toBe(expectedTerminals[state]?.reason ?? null);
+    }
     harness.database.close();
   });
 
@@ -283,6 +300,67 @@ describe("run history repository", () => {
       .prepare("update runs set created_at = 'not-a-timestamp' where id = ?")
       .run(runA);
     expect(harness.outputs.listRunsForEngagement(first, { limit: 25 })).toEqual({
+      ok: false,
+      code: "invalid_persisted_data",
+    });
+    harness.database.close();
+  });
+
+  it("excludes rows with corrupted run/action ownership from both engagements", () => {
+    const harness = createHarness();
+    const first = createEngagement(harness, "History corrupt ownership A");
+    const second = createEngagement(harness, "History corrupt ownership B");
+    const runA = queueRun(harness, first, "action-corrupt-owner");
+    setRun(harness, runA, {
+      state: "queued",
+      createdAt: "2026-08-09T12:00:00.000Z",
+      updatedAt: "2026-08-09T12:00:00.000Z",
+    });
+    // Sanity: the clean row is visible in its own engagement only.
+    const clean = harness.outputs.listRunsForEngagement(first, { limit: 25 });
+    expect(clean.ok).toBe(true);
+    if (!clean.ok) throw new Error("clean list failed");
+    expect(clean.runs.map((run) => run.id)).toEqual([runA]);
+
+    // Deliberate test-only corruption: move runs.engagement_id apart from
+    // actions.engagement_id with FK enforcement off, then restore it. The
+    // temp database is closed after this test so the corruption never
+    // affects real data.
+    harness.database.sqlite.pragma("foreign_keys = OFF");
+    try {
+      harness.database.sqlite
+        .prepare("update runs set engagement_id = ? where id = ?")
+        .run(second, runA);
+    } finally {
+      harness.database.sqlite.pragma("foreign_keys = ON");
+    }
+    expect(harness.database.sqlite.pragma("foreign_keys", { simple: true })).toBe(1);
+    expect(harness.outputs.listRunsForEngagement(first, { limit: 25 })).toEqual({
+      ok: true,
+      runs: [],
+    });
+    expect(harness.outputs.listRunsForEngagement(second, { limit: 25 })).toEqual({
+      ok: true,
+      runs: [],
+    });
+    harness.database.close();
+  });
+
+  it("maps invalid persisted identifiers to invalid_persisted_data", () => {
+    const harness = createHarness();
+    const engagementId = createEngagement(harness, "History corrupt identifier lab");
+    const runId = queueRun(harness, engagementId, "action-corrupt-id");
+    setRun(harness, runId, {
+      state: "queued",
+      createdAt: "2026-08-09T12:00:00.000Z",
+      updatedAt: "2026-08-09T12:00:00.000Z",
+    });
+    // Test-only corruption of a column with no storage CHECK: the empty
+    // lease id passes SQLite but fails PersistedRunSchema identifier rules.
+    harness.database.sqlite
+      .prepare("update runs set current_lease_id = '' where id = ?")
+      .run(runId);
+    expect(harness.outputs.listRunsForEngagement(engagementId, { limit: 25 })).toEqual({
       ok: false,
       code: "invalid_persisted_data",
     });

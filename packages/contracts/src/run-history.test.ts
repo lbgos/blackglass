@@ -16,6 +16,15 @@ import {
 const ENGAGEMENT_ID = "10000000-0000-4000-8000-000000000001";
 const OTHER_ENGAGEMENT_ID = "10000000-0000-4000-8000-000000000002";
 
+// Browser-compatible base64url encoder for crafting invalid cursors in tests.
+// Mirrors the production encoding without Node-only globals.
+function toBase64Url(payload: unknown): string {
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 function summary(overrides: Record<string, unknown> = {}) {
   return {
     id: "run:action-1:1",
@@ -106,28 +115,22 @@ describe("run history contracts", () => {
     expect(
       decodeRunHistoryCursor(`x`.repeat(RUN_HISTORY_CURSOR_MAX_LENGTH + 1), ENGAGEMENT_ID),
     ).toEqual({ ok: false });
-    const wrongVersion = Buffer.from(
-      JSON.stringify({
-        v: 2,
-        engagementId: ENGAGEMENT_ID,
-        createdAt: "2026-08-09T12:00:00.000Z",
-        id: "run-1",
-      }),
-      "utf8",
-    ).toString("base64url");
+    const wrongVersion = toBase64Url({
+      v: 2,
+      engagementId: ENGAGEMENT_ID,
+      createdAt: "2026-08-09T12:00:00.000Z",
+      id: "run-1",
+    });
     expect(decodeRunHistoryCursor(wrongVersion, ENGAGEMENT_ID)).toEqual({
       ok: false,
     });
-    const extraField = Buffer.from(
-      JSON.stringify({
-        v: 1,
-        engagementId: ENGAGEMENT_ID,
-        createdAt: "2026-08-09T12:00:00.000Z",
-        id: "run-1",
-        extra: true,
-      }),
-      "utf8",
-    ).toString("base64url");
+    const extraField = toBase64Url({
+      v: 1,
+      engagementId: ENGAGEMENT_ID,
+      createdAt: "2026-08-09T12:00:00.000Z",
+      id: "run-1",
+      extra: true,
+    });
     expect(decodeRunHistoryCursor(extraField, ENGAGEMENT_ID)).toEqual({
       ok: false,
     });

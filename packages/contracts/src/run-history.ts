@@ -152,7 +152,7 @@ export function parseRunHistoryQuery(
   for (const key of Object.keys(record)) {
     if (key !== "limit" && key !== "before") return { ok: false };
   }
-  let limit = RUN_HISTORY_DEFAULT_LIMIT;
+  let limit: number = RUN_HISTORY_DEFAULT_LIMIT;
   if ("limit" in record) {
     const raw = record["limit"];
     if (typeof raw !== "string") return { ok: false };

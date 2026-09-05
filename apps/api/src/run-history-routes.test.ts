@@ -210,6 +210,22 @@ describe("run history routes", () => {
     }
     const retryRows = body.runs.filter((run) => run["actionId"] === retryAction);
     expect(retryRows.map((run) => run["attempt"]).sort()).toEqual([1, 2]);
+    // Exact terminal values per state: a swapped mapping must fail.
+    const expectedTerminals: Record<string, { kind: unknown; reason: unknown }> = {
+      queued: { kind: null, reason: null },
+      leased: { kind: null, reason: null },
+      running: { kind: null, reason: null },
+      cancel_requested: { kind: null, reason: null },
+      succeeded: { kind: "succeeded", reason: null },
+      failed: { kind: "failed", reason: "operator_cancelled" },
+      cancelled: { kind: "cancelled", reason: "operator_cancelled" },
+    };
+    for (const [index, state] of states.entries()) {
+      const row = body.runs.find((run) => run["actionId"] === `action-projection-${index}`);
+      expect(row?.["state"]).toBe(state);
+      expect(row?.["terminalKind"]).toBe(expectedTerminals[state]?.kind ?? null);
+      expect(row?.["terminalReason"]).toBe(expectedTerminals[state]?.reason ?? null);
+    }
   });
 
   it("pages timestamp ties across pages and nulls the final cursor", async () => {
@@ -269,6 +285,16 @@ describe("run history routes", () => {
     });
     const firstBody = first.json() as { runs: { id: string }[]; nextCursor: string };
 
+    // Capture the expected second page before any mutation.
+    const secondBefore = await harness.app.inject({
+      method: "GET",
+      url: `/api/v1/engagements/${engagementId}/runs?limit=2&before=${encodeURIComponent(firstBody.nextCursor)}`,
+    });
+    expect(secondBefore.statusCode).toBe(200);
+    const secondBeforeBody = secondBefore.json() as { runs: { id: string }[] };
+    expect(secondBeforeBody.runs).toHaveLength(2);
+    const expectedSecondIds = secondBeforeBody.runs.map((run) => run.id);
+
     const newer = queueRun(harness, engagementId, "action-stable-newer");
     setRun(harness, newer, {
       state: "queued",
@@ -285,9 +311,9 @@ describe("run history routes", () => {
     });
     expect(second.statusCode).toBe(200);
     const secondBody = second.json() as { runs: { id: string }[] };
-    // Live listing: the second page still holds the preexisting rows even
-    // though a newer run arrived and a paged row changed state.
-    expect(secondBody.runs).toHaveLength(2);
+    // Live listing: the second page still holds exactly the preexisting rows
+    // even though a newer run arrived and a paged row changed state.
+    expect(secondBody.runs.map((run) => run.id)).toEqual(expectedSecondIds);
     expect(secondBody.runs.map((run) => run.id)).not.toContain(newer);
   });
 
@@ -382,6 +408,46 @@ describe("run history routes", () => {
       url: `/api/v1/engagements/${engagementId}/runs?limit=100`,
     });
     expect(isolated.json()).toEqual({ runs: [], nextCursor: null });
+  });
+
+  it("excludes rows with corrupted run/action ownership from both engagements", async () => {
+    const harness = await createHarness();
+    const first = createEngagement(harness, "History corrupt ownership A");
+    const second = createEngagement(harness, "History corrupt ownership B");
+    const runId = queueRun(harness, first, "action-corrupt-owner-api");
+    setRun(harness, runId, {
+      state: "queued",
+      createdAt: "2026-08-09T12:00:00.000Z",
+      updatedAt: "2026-08-09T12:00:00.000Z",
+    });
+    const clean = await harness.app.inject({
+      method: "GET",
+      url: `/api/v1/engagements/${first}/runs`,
+    });
+    expect(clean.statusCode).toBe(200);
+    expect((clean.json() as { runs: { id: string }[] }).runs.map((run) => run.id)).toEqual([
+      runId,
+    ]);
+
+    // Deliberate test-only corruption with FK enforcement restored. The temp
+    // database is closed after this test so it never affects real data.
+    harness.database.sqlite.pragma("foreign_keys = OFF");
+    try {
+      harness.database.sqlite
+        .prepare("update runs set engagement_id = ? where id = ?")
+        .run(second, runId);
+    } finally {
+      harness.database.sqlite.pragma("foreign_keys = ON");
+    }
+    expect(harness.database.sqlite.pragma("foreign_keys", { simple: true })).toBe(1);
+    for (const engagementId of [first, second]) {
+      const listed = await harness.app.inject({
+        method: "GET",
+        url: `/api/v1/engagements/${engagementId}/runs`,
+      });
+      expect(listed.statusCode).toBe(200);
+      expect(listed.json()).toEqual({ runs: [], nextCursor: null });
+    }
   });
 
   it("maps corrupt rows to 500 and busy storage to 503", async () => {
