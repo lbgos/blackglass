@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAppQueryClient } from "../query-client.js";
 import { SettingsPage } from "./page.js";
+import type { SettingsSectionId } from "./model.js";
 import { SettingsViewProvider, useSettingsView } from "./settings-view.js";
 
 const stored = {
@@ -25,12 +26,12 @@ function response(payload: unknown, status = 200): Response {
 let queryClient: ReturnType<typeof createAppQueryClient>;
 let fetchMock: ReturnType<typeof vi.fn>;
 
-function renderRunnerSection() {
+function renderSettingsSection(section: SettingsSectionId = "runner") {
   const Switcher = () => {
     const { setSection } = useSettingsView();
     useEffect(() => {
-      setSection("runner");
-    }, [setSection]);
+      setSection(section);
+    }, [setSection, section]);
     return <SettingsPage />;
   };
   return render(
@@ -42,6 +43,10 @@ function renderRunnerSection() {
       </QueryClientProvider>
     </ThemeProvider>,
   );
+}
+
+function renderRunnerSection() {
+  return renderSettingsSection("runner");
 }
 
 beforeEach(() => {
@@ -120,5 +125,56 @@ describe("RunnerSection", () => {
     fetchMock.mockReturnValue(Promise.resolve(response(stored)));
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByLabelText("Default wordlist")).toBeTruthy();
+  });
+
+  it("shows the fixed runner executable and never sends the stored binary path", async () => {
+    fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        return Promise.resolve(response({ ...stored, ...body }));
+      }
+      return Promise.resolve(response(stored));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRunnerSection();
+    // The stored path loads but renders as a fixed fact, not an editable field.
+    expect(await screen.findByText(/Fixed runner executable/)).toBeTruthy();
+    expect(screen.queryByLabelText("ffuf binary")).toBeNull();
+    const rate = screen.getByLabelText("Default rate") as HTMLInputElement;
+    fireEvent.change(rate, { target: { value: "200" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save runner defaults" }));
+    expect(await screen.findByText("Runner defaults saved.")).toBeTruthy();
+    const put = fetchMock.mock.calls.find((call) => (call[1] as RequestInit)?.method === "PUT");
+    expect(put).toBeTruthy();
+    const body = JSON.parse(String((put?.[1] as RequestInit)?.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({ ffufWordlistPath: "/lists/default.txt", ffufRate: 200 });
+    expect("ffufBinaryPath" in body).toBe(false);
+  });
+
+  it("marks unimplemented archiving rows unavailable without editable controls", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(response(stored))));
+    renderSettingsSection("general");
+    expect(await screen.findByRole("heading", { level: 1, name: "General" })).toBeTruthy();
+    expect(screen.getAllByText("Not available in this version")).toHaveLength(2);
+    expect(screen.queryByRole("switch", { name: "Auto-archive reviewed work" })).toBeNull();
+    expect(screen.queryByLabelText("Days before archive")).toBeNull();
+  });
+
+  it("marks update checks unavailable without an editable control", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(response(stored))));
+    renderSettingsSection("plugins");
+    expect(await screen.findByRole("heading", { level: 1, name: "Plugins" })).toBeTruthy();
+    expect(screen.getByText("Not available in this version")).toBeTruthy();
+    expect(screen.queryByRole("switch", { name: "Update checks" })).toBeNull();
+  });
+
+  it("marks retention unavailable while keeping the enforced immutability indicator", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(response(stored))));
+    renderSettingsSection("evidence");
+    expect(await screen.findByRole("heading", { level: 1, name: "Evidence" })).toBeTruthy();
+    expect(screen.getByText("Not available in this version")).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "Retention" })).toBeNull();
+    // Raw-evidence immutability is enforced behavior, so its indicator stays.
+    expect(screen.getByRole("switch", { name: "Immutable raw evidence" })).toBeTruthy();
   });
 });

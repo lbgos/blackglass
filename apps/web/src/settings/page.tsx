@@ -13,6 +13,7 @@ import {
 } from "@blackglass/ui";
 import {
   ADVISOR_SETTINGS_DEFAULTS,
+  FFUF_BINARY_PATH_DEFAULT,
   UpdateAdvisorSettingsRequestSchema,
   type AdvisorStatus,
 } from "@blackglass/contracts";
@@ -246,26 +247,18 @@ function GeneralSection() {
         />
       </SetRow>
       <SetRow
-        description="Move reviewed actions out of the history tail after a set number of days."
+        description="Reviewed-action archiving is not implemented."
         settingId="auto-archive"
         title="Auto-archive reviewed work"
       >
-        <ToggleSwitch checked label="Auto-archive reviewed work" />
+        <span className="text-[13px] text-muted-foreground">Not available in this version</span>
       </SetRow>
       <SetRow
-        description="Reviewed work older than this leaves the default history tail."
+        description="No automatic archiving runs, so no threshold applies."
         settingId="archive-days"
         title="Days before archive"
       >
-        <input
-          aria-label="Days before archive"
-          className="w-[72px] min-h-8 rounded-lg border border-border bg-accent px-2.5 text-[13px] text-foreground opacity-80"
-          defaultValue={14}
-          max={90}
-          min={1}
-          readOnly
-          type="number"
-        />
+        <span className="text-[13px] text-muted-foreground">Not available in this version</span>
       </SetRow>
       <SetRow
         description="Where Blackglass opens after launch. Dashboard stays the operational default."
@@ -288,7 +281,7 @@ function GeneralSection() {
       >
         <LockedButton
           label="Restore defaults"
-          reason="No settings are stored yet. Restore becomes available with the v0.1 settings store."
+          reason="Restore defaults is not available in this version."
         />
       </SetRow>
     </>
@@ -516,11 +509,11 @@ function PluginsSettingsSection() {
         <PathField label="Installed directory" placeholder="Managed by the control plane" />
       </SetRow>
       <SetRow
-        description="Look for newer first-party plugin packages on the local machine."
+        description="No update checks run on the local machine."
         settingId="plugin-updates"
         title="Update checks"
       >
-        <ToggleSwitch checked label="Update checks" />
+        <span className="text-[13px] text-muted-foreground">Not available in this version</span>
       </SetRow>
       <SetRow
         description="Whether disabled plugins stay listed in the action set."
@@ -554,7 +547,6 @@ function isAbsoluteRunnerPath(value: string): boolean {
 function RunnerSection() {
   const settingsQuery = useRunnerSettingsQuery();
   const updateMutation = useUpdateRunnerSettingsMutation();
-  const [binary, setBinary] = useState("");
   const [wordlist, setWordlist] = useState("");
   const [rate, setRate] = useState("");
   const [threads, setThreads] = useState("");
@@ -567,7 +559,6 @@ function RunnerSection() {
   const stored = settingsQuery.data;
   useEffect(() => {
     if (stored === undefined || hydrated) return;
-    setBinary(stored.ffufBinaryPath);
     setWordlist(stored.ffufWordlistPath);
     setRate(String(stored.ffufRate));
     setThreads(String(stored.ffufThreads));
@@ -599,16 +590,11 @@ function RunnerSection() {
   const parsedThreads = parseRunnerInt(threads, 1, 200);
   const parsedTimeout = parseRunnerInt(timeout, 1, 120);
   const parsedDuration = parseRunnerInt(duration, 5, 1800);
-  const binaryValid = isAbsoluteRunnerPath(binary.trim());
   const wordlistValid = wordlist.trim() === "" || isAbsoluteRunnerPath(wordlist.trim());
 
   const save = () => {
     updateMutation.reset();
     setSaved(false);
-    if (!binaryValid) {
-      setFieldError("ffuf binary must be an absolute path without .. segments.");
-      return;
-    }
     if (!wordlistValid) {
       setFieldError("Default wordlist must be empty (unset) or an absolute path without .. segments.");
       return;
@@ -630,9 +616,10 @@ function RunnerSection() {
       return;
     }
     setFieldError(undefined);
+    // The fixed runner executable is not a preference: it is never sent, so
+    // any stored legacy path survives the partial update untouched.
     updateMutation.mutate(
       {
-        ffufBinaryPath: binary.trim(),
         ffufWordlistPath: wordlist.trim(),
         ffufRate: parsedRate,
         ffufThreads: parsedThreads,
@@ -654,22 +641,13 @@ function RunnerSection() {
         Defaults applied to ffuf launches. Explicit per-run values always win.
       </p>
       <SetRow
-        description="ffuf executable used by the unprivileged host runner."
+        description="The runner pins its ffuf executable. A stored path is kept but never used."
         settingId="ffuf-binary"
         title="ffuf binary"
       >
-        <input
-          aria-label="ffuf binary"
-          className={textInputClass}
-          value={binary}
-          autoComplete="off"
-          spellCheck={false}
-          type="text"
-          onChange={(event) => {
-            setBinary(event.target.value);
-            setSaved(false);
-          }}
-        />
+        <span className="font-mono text-xs text-muted-foreground">
+          Fixed runner executable ({FFUF_BINARY_PATH_DEFAULT})
+        </span>
       </SetRow>
       <SetRow
         description="Empty means unset: each launch must then provide a wordlist."
@@ -1121,19 +1099,11 @@ function EvidenceSection() {
         <PathField label="Local storage path" placeholder="Managed by the control plane" />
       </SetRow>
       <SetRow
-        description="How long raw evidence remains before an explicit owner deletion."
+        description="No automatic expiry runs. Removal is an explicit owner operation."
         settingId="retention"
         title="Retention"
       >
-        <SelectField
-          label="Retention"
-          options={[
-            { label: "30 days", value: "30 days" },
-            { label: "90 days", value: "90 days" },
-            { label: "Keep", value: "keep" },
-          ]}
-          value="90 days"
-        />
+        <span className="text-[13px] text-muted-foreground">Not available in this version</span>
       </SetRow>
       <SetRow
         description="Raw artifacts cannot be replaced. Parser updates write new observations."
