@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   canonicalizeJson,
   isOperatorArtifactContentRoute,
+  isOperatorRunHistoryRoute,
   isOperatorRunOutputRoute,
   isRunnerControlRoute,
   parseRunnerAuthorizationHeader,
@@ -241,7 +242,8 @@ export function registerRunnerAuthHook(
       if (
         request.method === "GET" &&
         (isOperatorArtifactContentRoute(request.url) ||
-          isOperatorRunOutputRoute(request.url))
+          isOperatorRunOutputRoute(request.url) ||
+          isOperatorRunHistoryRoute(request.url))
       ) {
         return sendRunnerError(reply, 403, { code: "operator_identity_required" });
       }

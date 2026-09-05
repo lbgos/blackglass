@@ -1,5 +1,5 @@
 import { PersistedRunSchema, type PersistedRun } from "@blackglass/contracts";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, or } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 
 import * as schema from "./schema.js";
@@ -16,6 +16,15 @@ type LatestTerminalResult =
 
 type RunForEngagementResult =
   | { ok: true; run: PersistedRun | undefined }
+  | { ok: false; code: "engagement_not_found" | "storage_busy" | "invalid_persisted_data" };
+
+export interface ListRunsForEngagementOptions {
+  readonly limit: number;
+  readonly before?: { readonly createdAt: string; readonly id: string };
+}
+
+type ListRunsForEngagementResult =
+  | { ok: true; runs: PersistedRun[] }
   | { ok: false; code: "engagement_not_found" | "storage_busy" | "invalid_persisted_data" };
 
 type ArtifactsForRunResult =
@@ -118,6 +127,72 @@ export class RunOutputRepository {
       const parsed = persistedRunFromRow(row.runs);
       if (parsed === undefined) return { ok: false, code: "invalid_persisted_data" };
       return { ok: true, run: parsed };
+    } catch (error) {
+      return { ok: false, code: storageCode(error) };
+    }
+  }
+
+  // Live keyset listing for the run-history endpoint. Newest createdAt
+  // first, stable descending id tie-break, strict tuple comparison below the
+  // cursor. Fetches limit plus one with the same ownership predicate; the
+  // caller slices to limit and issues nextCursor from the last returned row
+  // only when another row exists. No OFFSET, no updatedAt cursor.
+  //
+  // Ownership requires BOTH runs.engagementId and actions.engagementId
+  // through the run-to-action inner join; only run columns are selected so a
+  // mismatched action never leaks a row. Archived engagements stay readable
+  // because only existence is checked.
+  //
+  // Existing indices (run_engagement_id_unique and run_queue_order_idx on
+  // state/createdAt/id) do not exactly cover engagement/createdAt/id
+  // ordering. LIMIT bounds materialization, not scan/sort cost. Accepted
+  // without a migration for this bounded listing.
+  listRunsForEngagement(
+    engagementId: string,
+    options: ListRunsForEngagementOptions,
+  ): ListRunsForEngagementResult {
+    try {
+      const engagement = this.db
+        .select({ id: engagements.id })
+        .from(engagements)
+        .where(eq(engagements.id, engagementId))
+        .get();
+      if (engagement === undefined) {
+        return { ok: false, code: "engagement_not_found" };
+      }
+      const cursor = options.before;
+      const cursorPredicate =
+        cursor === undefined
+          ? undefined
+          : or(
+              lt(runs.createdAt, cursor.createdAt),
+              and(eq(runs.createdAt, cursor.createdAt), lt(runs.id, cursor.id)),
+            );
+      const ownership = and(
+        eq(runs.engagementId, engagementId),
+        eq(actions.engagementId, engagementId),
+      );
+      const rows = this.db
+        .select({ run: runs })
+        .from(runs)
+        .innerJoin(actions, eq(actions.id, runs.actionId))
+        .where(
+          cursorPredicate === undefined
+            ? ownership
+            : and(ownership, cursorPredicate),
+        )
+        .orderBy(desc(runs.createdAt), desc(runs.id))
+        .limit(options.limit + 1)
+        .all();
+      const parsed: PersistedRun[] = [];
+      for (const row of rows) {
+        const run = persistedRunFromRow(row.run);
+        if (run === undefined) {
+          return { ok: false, code: "invalid_persisted_data" };
+        }
+        parsed.push(run);
+      }
+      return { ok: true, runs: parsed };
     } catch (error) {
       return { ok: false, code: storageCode(error) };
     }
