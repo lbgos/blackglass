@@ -27,8 +27,7 @@ export class ProbeAbortedError extends Error {
 export type ProbeResponse = {
   status: number;
   headers: Iterable<readonly [string, string]>;
-  body?: ReadableStream<Uint8Array> | null;
-  arrayBuffer?: () => Promise<ArrayBuffer>;
+  body: ReadableStream<Uint8Array> | null;
 };
 
 export type ProbeFetch = (
@@ -106,7 +105,7 @@ async function disposeResponseBody(
   combinedSignal: AbortSignal,
 ): Promise<void> {
   const body = response.body;
-  if (body === null || body === undefined) return;
+  if (body === null) return;
   await cancelStreamBounded(body, combinedSignal);
 }
 
@@ -167,39 +166,6 @@ async function readBoundedBodyText(
   }
   const body = response.body;
   if (body === null) return { kind: "ok", text: "", tooLarge: false };
-  if (body === undefined) {
-    const arrayBufferFn = response.arrayBuffer;
-    if (typeof arrayBufferFn !== "function") return { kind: "fetch_failed" };
-    let onAbort: (() => void) | null = null;
-    const abortPromise = new Promise<never>((_resolve, reject) => {
-      onAbort = () => reject(new ProbeAbortedError());
-      combinedSignal.addEventListener("abort", onAbort, { once: true });
-    });
-    try {
-      const bufferPromise = arrayBufferFn.call(response);
-      void bufferPromise.catch(() => {});
-      const buffer = (await Promise.race([bufferPromise, abortPromise])) as ArrayBuffer;
-      if (isOuterAborted()) throw new ProbeAbortedError();
-      if (isDeadlineExpired()) return { kind: "timeout" };
-      const buf = Buffer.from(buffer);
-      if (buf.length > HTTP_PROBE_MAX_BODY_BYTES) {
-        return { text: buf.subarray(0, HTTP_PROBE_MAX_BODY_BYTES).toString("utf8"), tooLarge: true, kind: "ok" };
-      }
-      return { text: buf.toString("utf8"), tooLarge: false, kind: "ok" };
-    } catch (e) {
-      if (e instanceof ProbeAbortedError) {
-        if (isOuterAborted()) throw new ProbeAbortedError();
-        return { kind: "timeout" };
-      }
-      if (isOuterAborted()) throw new ProbeAbortedError();
-      if (isDeadlineExpired()) return { kind: "timeout" };
-      const name = (e as { name?: string })?.name;
-      if (name === "TimeoutError") return { kind: "timeout" };
-      return { kind: "fetch_failed" };
-    } finally {
-      if (onAbort !== null) combinedSignal.removeEventListener("abort", onAbort);
-    }
-  }
 
   const reader = body.getReader();
   const retained: Buffer[] = [];
@@ -253,18 +219,23 @@ async function readBoundedBodyText(
         } catch {}
         return { kind: "ok", text: Buffer.concat(retained).toString("utf8"), tooLarge: false };
       }
-      const chunk = Buffer.from(read.value);
-      if (retainedBytes + chunk.length > HTTP_PROBE_MAX_BODY_BYTES) {
+      const raw = read.value;
+      const rawLength = raw.byteLength ?? raw.length;
+      if (retainedBytes + rawLength > HTTP_PROBE_MAX_BODY_BYTES) {
         const needed = HTTP_PROBE_MAX_BODY_BYTES - retainedBytes;
-        if (needed > 0) retained.push(chunk.subarray(0, needed));
+        if (needed > 0) {
+          // Copy only the required slice; never duplicate the full giant
+          // chunk and never retain a subarray view over its backing store.
+          retained.push(Buffer.from(raw.subarray(0, needed)));
+        }
         retainedBytes = HTTP_PROBE_MAX_BODY_BYTES;
         await cancelReaderBounded(reader, combinedSignal);
         if (isOuterAborted()) throw new ProbeAbortedError();
         if (isDeadlineExpired()) return { kind: "timeout" };
         return { kind: "ok", text: Buffer.concat(retained).toString("utf8"), tooLarge: true };
       }
-      retained.push(chunk);
-      retainedBytes += chunk.length;
+      retained.push(Buffer.from(raw));
+      retainedBytes += rawLength;
     }
   } catch (e) {
     if (e instanceof ProbeAbortedError) throw e;
@@ -277,8 +248,9 @@ async function readBoundedBodyText(
 /**
  * Probe one URL with Node built-in fetch only: no rendering, no auth, no
  * crawling. Follows at most HTTP_PROBE_MAX_HOPS redirects manually.
- * Streaming body read retains at most HTTP_PROBE_MAX_BODY_BYTES plus one
- * per-read chunk overhead; redirect bodies are cancelled with a bounded
+ * Streaming body read retains at most HTTP_PROBE_MAX_BODY_BYTES; a single
+ * oversized read copies only the required slice and never duplicates or
+ * retains the full backing store. Redirect bodies are cancelled with a bounded
  * dispose that never hangs past the deadline. The optional signal aborts
  * in-flight fetch/body work promptly; outer abort throws ProbeAbortedError
  * so the runner can complete runner_lost instead of claiming a publication

@@ -199,14 +199,13 @@ describe("runner http probe abort and fence", () => {
         return completeResponse(String(completeBody.terminalKind ?? "succeeded"));
       }
       if (u === "http://127.0.0.1:8080/") {
-        // Body failure: headers ok but arrayBuffer rejects, no body stream.
-        return {
-          status: 200,
-          headers: [] as [string, string][],
-          arrayBuffer: async () => {
-            throw new Error("midstream boom");
+        // Body failure: headers ok but the stream errors mid-body.
+        const errored = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.error(new Error("midstream boom"));
           },
-        } as never;
+        });
+        return new Response(errored, { status: 200 }) as never;
       }
       return apiResponse({ code: "invalid_request" }, 400);
     }) as unknown as typeof fetch;
@@ -250,12 +249,7 @@ describe("runner http probe abort and fence", () => {
         probed.push(u);
         // First probe takes 60ms so the 10ms heartbeat fence fires first.
         if (u === "http://127.0.0.1:8080/") await new Promise((r) => setTimeout(r, 60));
-        return {
-          status: 200,
-          headers: [] as [string, string][],
-          body: null,
-          arrayBuffer: async () => new Uint8Array([60, 62]).buffer as ArrayBuffer,
-        } as never;
+        return new Response("", { status: 200 }) as never;
       }
       return apiResponse({ code: "invalid_request" }, 400);
     }) as unknown as typeof fetch;
@@ -309,12 +303,7 @@ describe("runner http probe abort and fence", () => {
       }
       if (u === "http://127.0.0.1:8080/") {
         await new Promise((r) => setTimeout(r, 200));
-        return {
-          status: 200,
-          headers: [] as [string, string][],
-          body: null,
-          arrayBuffer: async () => new Uint8Array([60, 62]).buffer as ArrayBuffer,
-        } as never;
+        return new Response("", { status: 200 }) as never;
       }
       return apiResponse({ code: "invalid_request" }, 400);
     }) as unknown as typeof fetch;
@@ -371,12 +360,7 @@ describe("runner http probe abort and fence", () => {
           }
           signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
         });
-        return {
-          status: 200,
-          headers: [] as [string, string][],
-          body: null,
-          arrayBuffer: async () => new Uint8Array([60, 62]).buffer as ArrayBuffer,
-        } as never;
+        return new Response("", { status: 200 }) as never;
       }
       return apiResponse({ code: "invalid_request" }, 400);
     }) as unknown as typeof fetch;
