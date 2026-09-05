@@ -108,6 +108,9 @@ export function useEngagementNotesEditor(engagementId: string) {
   const serverMarkdown = query.data?.markdown;
   const [draft, setDraft] = useState<string | undefined>(undefined);
   useEffect(() => {
+    setDraft(undefined);
+  }, [engagementId]);
+  useEffect(() => {
     if (serverMarkdown !== undefined) {
       setDraft((current) => (current === undefined ? serverMarkdown : current));
     }
