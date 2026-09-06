@@ -160,3 +160,13 @@ export function selectEngagementIdFromPathname(pathname: string): string | undef
   const candidate = match?.[1];
   return candidate === undefined || candidate.length === 0 ? undefined : candidate;
 }
+
+// Explicit run selection from the route search (?run=). Only a non-empty
+// string counts; anything else means no selection and keeps the latest-run
+// fallback. Never decodes or validates beyond that: the exact run endpoint
+// below encodes the id and reports an unknown run truthfully.
+export function selectRunIdFromSearch(search: unknown): string | undefined {
+  if (typeof search !== "object" || search === null) return undefined;
+  const run = (search as Record<string, unknown>)["run"];
+  return typeof run === "string" && run.length > 0 ? run : undefined;
+}
