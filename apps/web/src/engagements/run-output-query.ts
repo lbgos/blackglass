@@ -20,8 +20,19 @@ export class NoTerminalRunError extends Error {
   }
 }
 
+export class RunNotFoundError extends Error {
+  constructor() {
+    super("That run is no longer available.");
+    this.name = "RunNotFoundError";
+  }
+}
+
 export function latestRunOutputQueryKey(engagementId: string) {
   return ["engagements", engagementId, "runs", "latest", "output"] as const;
+}
+
+export function runOutputQueryKey(engagementId: string, runId: string) {
+  return ["engagements", engagementId, "runs", runId, "output"] as const;
 }
 
 export async function fetchLatestRunOutput(
@@ -75,6 +86,72 @@ export function latestRunOutputQueryOptions(engagementId: string | undefined) {
 
 export function useLatestRunOutputQuery(engagementId: string | undefined) {
   return useQuery(latestRunOutputQueryOptions(engagementId));
+}
+
+// Selected-run output. Always targets the exact run endpoint; a missing
+// selection disables the query instead of falling back to the newest output.
+export async function fetchRunOutput(
+  engagementId: string,
+  runId: string,
+  signal?: AbortSignal,
+): Promise<RunOutputResponse> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `/api/v1/engagements/${encodeURIComponent(engagementId)}/runs/${encodeURIComponent(runId)}/output`,
+      signal ? { signal } : undefined,
+    );
+  } catch {
+    throw new RunOutputQueryError();
+  }
+  if (response.status === 404) {
+    let code: unknown = undefined;
+    try {
+      code = (await response.json() as { code?: unknown }).code;
+    } catch {
+      throw new RunOutputQueryError();
+    }
+    if (code === "run_not_found") throw new RunNotFoundError();
+    throw new RunOutputQueryError();
+  }
+  if (response.status !== 200) throw new RunOutputQueryError();
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new RunOutputQueryError();
+  }
+  const result = RunOutputResponseSchema.safeParse(payload);
+  if (!result.success) throw new RunOutputQueryError();
+  return result.data;
+}
+
+export function runOutputQueryOptions(
+  engagementId: string | undefined,
+  runId: string | undefined,
+) {
+  const selected =
+    engagementId !== undefined && runId !== undefined && runId.length > 0
+      ? { engagementId, runId }
+      : undefined;
+  return queryOptions({
+    queryKey:
+      selected === undefined
+        ? (["engagements", "runs", "output", "none"] as const)
+        : runOutputQueryKey(selected.engagementId, selected.runId),
+    queryFn:
+      selected === undefined
+        ? skipToken
+        : ({ signal }) => fetchRunOutput(selected.engagementId, selected.runId, signal),
+    retry: false,
+  });
+}
+
+export function useRunOutputQuery(
+  engagementId: string | undefined,
+  runId: string | undefined,
+) {
+  return useQuery(runOutputQueryOptions(engagementId, runId));
 }
 
 export function selectEngagementIdFromPathname(pathname: string): string | undefined {
