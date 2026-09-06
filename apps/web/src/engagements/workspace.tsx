@@ -7,7 +7,7 @@ import {
   Skeleton,
   StaleDataState,
 } from "@blackglass/ui";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 
 import {
   ENGAGEMENT_KIND_LABELS,
@@ -21,12 +21,43 @@ import { EngagementFindingsSection } from "./findings.js";
 import { EngagementFfufSection } from "./ffuf-surface.js";
 import { EngagementNotesSection } from "./notes.js";
 import { EngagementReportSection } from "./report.js";
+import { RunHistoryPanel } from "./run-history-panel.js";
 import { SavedScopeEditor } from "./scope-editor.js";
 import { EngagementHttpProbesSection } from "./http-probe-surface.js";
 import { EngagementServicesSection } from "./service-surface.js";
 import { useEngagementWorkspace } from "./workspace-context.js";
 
-export function EngagementWorkspace({ engagementId }: { engagementId?: string }) {
+// Engagement detail tabs. Tab and selected-run state live in the route search
+// (?tab=, ?run=) so selection survives reload and tab switches. An unknown tab
+// resolves to surface; an arbitrary run id flows only into the existing
+// encoded run-output query with no latest-run fallback. Tab switches use
+// router Links so the merged dirty-notes useBlocker can intercept them.
+export const ENGAGEMENT_TABS = [
+  { id: "surface", label: "Surface" },
+  { id: "runs", label: "Runs" },
+  { id: "notes", label: "Notes" },
+  { id: "findings", label: "Findings" },
+  { id: "report", label: "Report" },
+] as const;
+
+export type EngagementTabId = (typeof ENGAGEMENT_TABS)[number]["id"];
+
+export function resolveEngagementTab(raw: unknown): EngagementTabId {
+  for (const tab of ENGAGEMENT_TABS) {
+    if (tab.id === raw) return tab.id;
+  }
+  return "surface";
+}
+
+export function EngagementWorkspace({
+  engagementId,
+  selectedRunId,
+  tab,
+}: {
+  engagementId?: string | undefined;
+  selectedRunId?: string | undefined;
+  tab?: string | undefined;
+}) {
   const engagements = useEngagementsQuery();
   const { openCreate } = useEngagementWorkspace();
   const hasData = engagements.data !== undefined;
@@ -93,7 +124,7 @@ export function EngagementWorkspace({ engagementId }: { engagementId?: string })
 
   const body =
     selected !== undefined ? (
-      <EngagementDetail engagement={selected} />
+      <EngagementDetail engagement={selected} tab={tab} selectedRunId={selectedRunId} />
     ) : records.length === 0 ? (
       <div>
         <h1 className="mb-5 text-[26px] leading-none font-semibold tracking-[-0.04em]">Engagements</h1>
@@ -188,9 +219,30 @@ function selectDisplayedEngagement(listed: Engagement, detailed: Engagement | un
   return detailed.revision >= listed.revision ? detailed : listed;
 }
 
-function EngagementDetail({ engagement }: { engagement: Engagement }) {
+function EngagementDetail({
+  engagement,
+  selectedRunId,
+  tab,
+}: {
+  engagement: Engagement;
+  selectedRunId?: string | undefined;
+  tab?: string | undefined;
+}) {
   const detail = useEngagementDetailQuery(engagement.id);
   const displayed = selectDisplayedEngagement(engagement, detail.data?.engagement);
+  const activeTab = resolveEngagementTab(tab);
+  const runId = selectedRunId !== undefined && selectedRunId.length > 0 ? selectedRunId : undefined;
+  const navigate = useNavigate();
+  const archived = displayed.status === "archived";
+
+  const selectRun = (nextRunId: string) => {
+    void navigate({
+      to: "/engagements/$engagementId",
+      params: { engagementId: displayed.id },
+      search:
+        nextRunId.length > 0 ? { tab: activeTab, run: nextRunId } : { tab: activeTab },
+    });
+  };
 
   return (
     <article className="min-w-0">
@@ -240,44 +292,89 @@ function EngagementDetail({ engagement }: { engagement: Engagement }) {
         </section>
       ) : null}
 
-      <EngagementDeadlineSection
-        archived={displayed.status === "archived"}
-        engagementId={displayed.id}
-      />
+      <nav aria-label="Engagement sections" className="mt-4 flex flex-wrap gap-1 border-b border-border">
+        {ENGAGEMENT_TABS.map((entry) => {
+          const active = entry.id === activeTab;
+          return (
+            <Link
+              key={entry.id}
+              to="/engagements/$engagementId"
+              params={{ engagementId: displayed.id }}
+              search={
+                runId === undefined ? { tab: entry.id } : { tab: entry.id, run: runId }
+              }
+              aria-current={active ? "page" : undefined}
+              className={`inline-flex min-h-11 items-center rounded-t-[10px] px-3 text-[13px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+              }`}
+            >
+              {entry.label}
+            </Link>
+          );
+        })}
+      </nav>
 
-      <div className="mt-5">
-        <EngagementServicesSection engagementId={displayed.id} />
-      </div>
+      {runId !== undefined ? (
+        <p className="mt-3 mb-0 truncate font-mono text-[11px] text-muted-foreground" title={runId}>
+          Selected run {runId}
+        </p>
+      ) : null}
 
-      <div className="mt-5">
-        <EngagementHttpProbesSection engagementId={displayed.id} />
-      </div>
+      {activeTab === "surface" ? (
+        <div className="mt-5">
+          <EngagementDeadlineSection archived={archived} engagementId={displayed.id} />
 
-      <div className="mt-5">
-        <EngagementFfufSection archived={displayed.status === "archived"} engagementId={displayed.id} />
-      </div>
+          <div className="mt-5">
+            <EngagementServicesSection engagementId={displayed.id} />
+          </div>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <ActionPlanner archived={displayed.status === "archived"} engagementId={displayed.id} />
-        <SavedScopeEditor archived={displayed.status === "archived"} engagementId={displayed.id} />
-      </div>
+          <div className="mt-5">
+            <EngagementHttpProbesSection engagementId={displayed.id} />
+          </div>
 
-      <EngagementNotesSection
-        key={displayed.id}
-        archived={displayed.status === "archived"}
-        engagementId={displayed.id}
-      />
+          <div className="mt-5">
+            <EngagementFfufSection archived={archived} engagementId={displayed.id} />
+          </div>
 
-      <EngagementFindingsSection
-        key={`findings-${displayed.id}`}
-        archived={displayed.status === "archived"}
-        engagementId={displayed.id}
-      />
+          <div className="mt-6 grid gap-6 lg:grid-cols-2">
+            <ActionPlanner archived={archived} engagementId={displayed.id} />
+            <SavedScopeEditor archived={archived} engagementId={displayed.id} />
+          </div>
+        </div>
+      ) : null}
 
-      <EngagementReportSection
-        key={`report-${displayed.id}`}
-        engagementId={displayed.id}
-      />
+      {activeTab === "runs" ? (
+        <div className="mt-5">
+          <RunHistoryPanel
+            engagementId={displayed.id}
+            selectedRunId={runId}
+            onSelect={selectRun}
+          />
+        </div>
+      ) : null}
+
+      {activeTab === "notes" ? (
+        <EngagementNotesSection
+          key={displayed.id}
+          archived={archived}
+          engagementId={displayed.id}
+        />
+      ) : null}
+
+      {activeTab === "findings" ? (
+        <EngagementFindingsSection
+          key={`findings-${displayed.id}`}
+          archived={archived}
+          engagementId={displayed.id}
+        />
+      ) : null}
+
+      {activeTab === "report" ? (
+        <EngagementReportSection
+          key={`report-${displayed.id}`}
+          engagementId={displayed.id}
+        />
+      ) : null}
     </article>
   );
 }
