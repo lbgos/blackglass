@@ -127,12 +127,12 @@ describe("selected run output query", () => {
     await fetchRunOutput("eng-1", "run-old");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/engagements/eng-1/runs/run-old/output",
-      expect.anything(),
+      undefined,
     );
     await fetchLatestRunOutput("eng-1");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/engagements/eng-1/runs/latest/output",
-      expect.anything(),
+      undefined,
     );
 
     expect(runOutputQueryKey("eng-1", "run-old")).toEqual([
@@ -162,7 +162,7 @@ describe("selected run output query", () => {
     await fetchRunOutput("eng/1", "run/old");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/engagements/eng%2F1/runs/run%2Fold/output",
-      expect.anything(),
+      undefined,
     );
   });
 
