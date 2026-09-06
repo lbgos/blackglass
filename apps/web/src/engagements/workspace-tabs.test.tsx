@@ -221,7 +221,9 @@ describe("engagement tabs", () => {
     await renderTabs(`/engagements/${activeEngagement.id}`);
 
     expect(await screen.findByRole("heading", { name: "Attack surface" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Plan action" })).toBeTruthy();
+    // The planner mounts after the engagement-detail query resolves on its own
+    // key, so await it instead of assuming it lands in the same commit.
+    expect(await screen.findByRole("button", { name: "Plan action" })).toBeTruthy();
     expect(
       screen.getByRole("link", { name: "Surface" }).getAttribute("aria-current"),
     ).toBe("page");
@@ -321,7 +323,14 @@ describe("engagement tabs", () => {
     const urls = fetchUrls(fetchMock);
     expect(urls).toContain(`/api/v1/engagements/${activeEngagement.id}/runs/run-old/output`);
     expect(urls.some((entry) => entry.endsWith("/runs/run-new/output"))).toBe(false);
-    expect(screen.getByText(/Selected run/).textContent).toContain("run-old");
+    // The Runs panel header also contains "Selected run output"; match the
+    // common selection line exactly instead.
+    const commonLine = screen.getByText(
+      (_content, element) =>
+        element instanceof HTMLParagraphElement &&
+        element.textContent === "Selected run run-old",
+    );
+    expect(commonLine.getAttribute("title")).toBe("run-old");
   });
 
   it("preserves the selected run across tab switches", async () => {
@@ -353,7 +362,12 @@ describe("engagement tabs", () => {
     fireEvent.click(screen.getByRole("link", { name: "Surface" }));
     expect(await screen.findByRole("heading", { name: "Attack surface" })).toBeTruthy();
     expect((router.state.location.search as Record<string, unknown>)["run"]).toBe("run-old");
-    expect(screen.getByText(/Selected run/).textContent).toContain("run-old");
+    const commonLine = screen.getByText(
+      (_content, element) =>
+        element instanceof HTMLParagraphElement &&
+        element.textContent === "Selected run run-old",
+    );
+    expect(commonLine.getAttribute("title")).toBe("run-old");
 
     fireEvent.click(screen.getByRole("link", { name: "Runs" }));
     const oldest = await screen.findByRole("button", { name: /run-old/ });

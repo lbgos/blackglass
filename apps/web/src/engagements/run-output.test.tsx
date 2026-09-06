@@ -3,7 +3,7 @@
 import { ThemeProvider } from "@blackglass/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAppQueryClient } from "../query-client.js";
@@ -288,10 +288,15 @@ describe("console raw output panel", () => {
     vi.stubGlobal("fetch", fetchMock);
     await renderAt("/engagements/10000000-0000-4000-8000-000000000001?tab=runs&run=run-old");
     fireEvent.click(screen.getByRole("tab", { name: "Raw output" }));
+    // Scope to the console panel: the workspace also shows a "Selected run"
+    // line for the shared selection outside this region.
+    const consolePanel = screen.getByRole("tabpanel", { name: "Raw output" });
     await waitFor(() => {
-      expect(screen.getByTestId("raw-output-stdout").textContent).toContain("exact-old-bytes");
+      expect(within(consolePanel).getByTestId("raw-output-stdout").textContent).toContain(
+        "exact-old-bytes",
+      );
     });
-    expect(screen.getByText(/Selected run run-old/)).toBeTruthy();
+    expect(within(consolePanel).getByText(/Selected run run-old/)).toBeTruthy();
     expect(
       fetchMock.mock.calls.some(([called]) => String(called).endsWith("/runs/latest/output")),
     ).toBe(false);
@@ -350,8 +355,11 @@ describe("console raw output panel", () => {
     vi.stubGlobal("fetch", fetchMock);
     await renderAt("/engagements/10000000-0000-4000-8000-000000000001?tab=surface&run=run-missing");
     fireEvent.click(screen.getByRole("tab", { name: "Raw output" }));
+    const consolePanel = screen.getByRole("tabpanel", { name: "Raw output" });
     await waitFor(() => {
-      expect(screen.getByText(/The selected run is no longer available/)).toBeTruthy();
+      expect(
+        within(consolePanel).getByText(/The selected run is no longer available/),
+      ).toBeTruthy();
     });
     expect(
       fetchMock.mock.calls.some(([called]) => String(called).endsWith("/runs/latest/output")),
