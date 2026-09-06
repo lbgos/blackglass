@@ -47,7 +47,8 @@ export async function fetchRunHistoryPage(
       runHistoryListUrl(engagementId, input),
       signal ? { signal } : undefined,
     );
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw error;
     throw new RunHistoryQueryError();
   }
   if (response.status !== 200) throw new RunHistoryQueryError();
@@ -77,7 +78,11 @@ export function runHistoryInfiniteQueryOptions(
       engagementId === undefined
         ? skipToken
         : ({ pageParam, signal }) =>
-            fetchRunHistoryPage(engagementId, { limit, before: pageParam }, signal),
+            fetchRunHistoryPage(
+              engagementId,
+              pageParam === undefined ? { limit } : { limit, before: pageParam },
+              signal,
+            ),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     retry: false,

@@ -206,10 +206,29 @@ describe("selected run output query", () => {
         throw new Error("GET /api?token=secret failed");
       }),
     );
-    const error = await fetchRunOutput("eng-1", "run-old").catch((cause: Error) => cause);
+    const error: unknown = await fetchRunOutput("eng-1", "run-old").catch(
+      (cause: unknown) => cause,
+    );
     expect(error).toBeInstanceOf(RunOutputQueryError);
+    if (!(error instanceof Error)) throw new Error("Expected an error instance.");
     expect(error.message).not.toContain("secret");
     expect(error.cause).toBeUndefined();
+  });
+
+  it("rethrows cancellation instead of a safe error when the selected query is aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const abortError = new DOMException("The operation was aborted.", "AbortError");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw abortError;
+      }),
+    );
+
+    await expect(fetchRunOutput("eng-1", "run-old", controller.signal)).rejects.toBe(
+      abortError,
+    );
   });
 
   it("never fetches when no run is selected", () => {

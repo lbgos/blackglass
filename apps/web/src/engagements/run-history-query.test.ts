@@ -1,4 +1,8 @@
-import { encodeRunHistoryCursor } from "@blackglass/contracts";
+import {
+  encodeRunHistoryCursor,
+  type RunHistoryResponse,
+  type RunHistorySummary,
+} from "@blackglass/contracts";
 import { skipToken } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -12,7 +16,7 @@ import {
   runHistoryQueryKey,
 } from "./run-history-query.js";
 
-const summary = {
+const summary: RunHistorySummary = {
   id: "run-1",
   actionId: "action-1",
   state: "succeeded",
@@ -23,7 +27,7 @@ const summary = {
   attempt: 1,
 };
 
-function page(nextCursor: string | null = null) {
+function page(nextCursor: string | null = null): RunHistoryResponse {
   return { runs: [summary], nextCursor };
 }
 
@@ -122,10 +126,27 @@ describe("run history query", () => {
         throw new Error("GET /api?token=secret failed at /private/path");
       }),
     );
-    const error = await fetchRunHistoryPage("eng-1").catch((cause: Error) => cause);
+    const error: unknown = await fetchRunHistoryPage("eng-1").catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(RunHistoryQueryError);
+    if (!(error instanceof Error)) throw new Error("Expected an error instance.");
     expect(error.message).toBe(RUN_HISTORY_QUERY_ERROR_MESSAGE);
     expect(error.message).not.toContain("secret");
     expect(error.cause).toBeUndefined();
+  });
+
+  it("rethrows cancellation instead of a safe error when the query is aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const abortError = new DOMException("The operation was aborted.", "AbortError");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw abortError;
+      }),
+    );
+
+    await expect(fetchRunHistoryPage("eng-1", {}, controller.signal)).rejects.toBe(
+      abortError,
+    );
   });
 });

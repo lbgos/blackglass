@@ -101,7 +101,8 @@ export async function fetchRunOutput(
       `/api/v1/engagements/${encodeURIComponent(engagementId)}/runs/${encodeURIComponent(runId)}/output`,
       signal ? { signal } : undefined,
     );
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw error;
     throw new RunOutputQueryError();
   }
   if (response.status === 404) {
