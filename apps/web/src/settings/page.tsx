@@ -11,6 +11,12 @@ import {
   type ResolvedTheme,
   type ThemeFamily,
 } from "@blackglass/ui";
+import {
+  ADVISOR_SETTINGS_DEFAULTS,
+  FFUF_BINARY_PATH_DEFAULT,
+  UpdateAdvisorSettingsRequestSchema,
+  type AdvisorStatus,
+} from "@blackglass/contracts";
 import { useEffect, useState, type ReactNode } from "react";
 
 import {
@@ -21,11 +27,23 @@ import {
 } from "./appearance.js";
 import { SETTINGS_SECTIONS, type SettingsSectionId } from "./model.js";
 import { useUpdateRunnerSettingsMutation, useRunnerSettingsQuery } from "./runner-settings.js";
+import {
+  useAdvisorSettingsQuery,
+  useUpdateAdvisorSettingsMutation,
+} from "./advisor-settings.js";
 import { useSettingsView } from "./settings-view.js";
+import { useAdvisorStatusQuery } from "../advisor-status-query.js";
 import { useSystemStatusQuery } from "../system-status-query.js";
 
 const LOCKED_NOTE =
   "Saving preferences arrives with the v0.1 settings store. Values shown are shipped local defaults.";
+
+// Runner and advisor persist through the local control plane, so the locked
+// notice would mislead there. All other sections keep the accurate placeholder.
+const STORED_SECTION_NOTES: Partial<Record<SettingsSectionId, string>> = {
+  runner: "Stored in the local control plane. Explicit per-run values always win.",
+  advisor: "Stored in the local control plane. API keys stay in the environment.",
+};
 
 function SetRow({
   children,
@@ -67,25 +85,27 @@ function ToggleSwitch({
   label,
   locked = true,
   onCheckedChange,
+  disabled = false,
 }: {
   checked: boolean;
   label: string;
   locked?: boolean;
   onCheckedChange?: (checked: boolean) => void;
+  disabled?: boolean;
 }) {
-  const disabled = locked && !onCheckedChange;
+  const controlDisabled = disabled || (locked && !onCheckedChange);
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
-      aria-disabled={disabled || undefined}
+      aria-disabled={controlDisabled || undefined}
       aria-label={label}
-      disabled={disabled || undefined}
+      disabled={controlDisabled || undefined}
       className={cn(
         "flex h-[18px] w-8 shrink-0 items-center rounded-full px-[2px] transition-colors duration-100",
         checked ? "bg-primary" : "bg-foreground/15",
-        disabled ? "cursor-default opacity-55" : "cursor-pointer",
+        controlDisabled ? "cursor-default opacity-55" : "cursor-pointer",
       )}
       onClick={onCheckedChange ? () => onCheckedChange(!checked) : undefined}
     >
@@ -227,26 +247,18 @@ function GeneralSection() {
         />
       </SetRow>
       <SetRow
-        description="Move reviewed actions out of the history tail after a set number of days."
+        description="Reviewed-action archiving is not implemented."
         settingId="auto-archive"
         title="Auto-archive reviewed work"
       >
-        <ToggleSwitch checked label="Auto-archive reviewed work" />
+        <span className="text-[13px] text-muted-foreground">Not available in this version</span>
       </SetRow>
       <SetRow
-        description="Reviewed work older than this leaves the default history tail."
+        description="No automatic archiving runs, so no threshold applies."
         settingId="archive-days"
         title="Days before archive"
       >
-        <input
-          aria-label="Days before archive"
-          className="w-[72px] min-h-8 rounded-lg border border-border bg-accent px-2.5 text-[13px] text-foreground opacity-80"
-          defaultValue={14}
-          max={90}
-          min={1}
-          readOnly
-          type="number"
-        />
+        <span className="text-[13px] text-muted-foreground">Not available in this version</span>
       </SetRow>
       <SetRow
         description="Where Blackglass opens after launch. Dashboard stays the operational default."
@@ -269,7 +281,7 @@ function GeneralSection() {
       >
         <LockedButton
           label="Restore defaults"
-          reason="No settings are stored yet. Restore becomes available with the v0.1 settings store."
+          reason="Restore defaults is not available in this version."
         />
       </SetRow>
     </>
@@ -497,11 +509,11 @@ function PluginsSettingsSection() {
         <PathField label="Installed directory" placeholder="Managed by the control plane" />
       </SetRow>
       <SetRow
-        description="Look for newer first-party plugin packages on the local machine."
+        description="No update checks run on the local machine."
         settingId="plugin-updates"
         title="Update checks"
       >
-        <ToggleSwitch checked label="Update checks" />
+        <span className="text-[13px] text-muted-foreground">Not available in this version</span>
       </SetRow>
       <SetRow
         description="Whether disabled plugins stay listed in the action set."
@@ -535,7 +547,6 @@ function isAbsoluteRunnerPath(value: string): boolean {
 function RunnerSection() {
   const settingsQuery = useRunnerSettingsQuery();
   const updateMutation = useUpdateRunnerSettingsMutation();
-  const [binary, setBinary] = useState("");
   const [wordlist, setWordlist] = useState("");
   const [rate, setRate] = useState("");
   const [threads, setThreads] = useState("");
@@ -548,7 +559,6 @@ function RunnerSection() {
   const stored = settingsQuery.data;
   useEffect(() => {
     if (stored === undefined || hydrated) return;
-    setBinary(stored.ffufBinaryPath);
     setWordlist(stored.ffufWordlistPath);
     setRate(String(stored.ffufRate));
     setThreads(String(stored.ffufThreads));
@@ -580,16 +590,11 @@ function RunnerSection() {
   const parsedThreads = parseRunnerInt(threads, 1, 200);
   const parsedTimeout = parseRunnerInt(timeout, 1, 120);
   const parsedDuration = parseRunnerInt(duration, 5, 1800);
-  const binaryValid = isAbsoluteRunnerPath(binary.trim());
   const wordlistValid = wordlist.trim() === "" || isAbsoluteRunnerPath(wordlist.trim());
 
   const save = () => {
     updateMutation.reset();
     setSaved(false);
-    if (!binaryValid) {
-      setFieldError("ffuf binary must be an absolute path without .. segments.");
-      return;
-    }
     if (!wordlistValid) {
       setFieldError("Default wordlist must be empty (unset) or an absolute path without .. segments.");
       return;
@@ -611,9 +616,10 @@ function RunnerSection() {
       return;
     }
     setFieldError(undefined);
+    // The fixed runner executable is not a preference: it is never sent, so
+    // any stored legacy path survives the partial update untouched.
     updateMutation.mutate(
       {
-        ffufBinaryPath: binary.trim(),
         ffufWordlistPath: wordlist.trim(),
         ffufRate: parsedRate,
         ffufThreads: parsedThreads,
@@ -635,22 +641,13 @@ function RunnerSection() {
         Defaults applied to ffuf launches. Explicit per-run values always win.
       </p>
       <SetRow
-        description="ffuf executable used by the unprivileged host runner."
+        description="The runner pins its ffuf executable. A stored path is kept but never used."
         settingId="ffuf-binary"
         title="ffuf binary"
       >
-        <input
-          aria-label="ffuf binary"
-          className={textInputClass}
-          value={binary}
-          autoComplete="off"
-          spellCheck={false}
-          type="text"
-          onChange={(event) => {
-            setBinary(event.target.value);
-            setSaved(false);
-          }}
-        />
+        <span className="font-mono text-xs text-muted-foreground">
+          Fixed runner executable ({FFUF_BINARY_PATH_DEFAULT})
+        </span>
       </SetRow>
       <SetRow
         description="Empty means unset: each launch must then provide a wordlist."
@@ -756,23 +753,175 @@ function RunnerSection() {
   );
 }
 
+const ADVISOR_ENV_VAR_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
+// Key material must never be stored: any value carrying a secret prefix is
+// rejected before it can reach the backend. The message names no value.
+const ADVISOR_KEY_MATERIAL_PATTERN = /sk-|bearer /i;
+
+function isAdvisorEndpointValue(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed === "") return true;
+  if (trimmed.length > 2048) return false;
+  if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+// Truthful connection copy: the probe only receives HTTP headers and never
+// performs inference, so a success reports the endpoint reachable, never the
+// model verified.
+function advisorTestCopy(status: AdvisorStatus): string {
+  switch (status.reason) {
+    case "ok":
+      return status.latencyMs === null
+        ? `Endpoint reachable at ${status.endpointHost}. Headers-only probe; model output not verified.`
+        : `Endpoint reachable at ${status.endpointHost} in ${status.latencyMs} ms. Headers-only probe; model output not verified.`;
+    case "unconfigured":
+      return "Not configured. Set an endpoint and a model, then save.";
+    case "missing_key_env":
+      return "Name the environment variable holding the API key, then save.";
+    case "key_unset":
+      return status.keyEnvVar === ""
+        ? "Set the configured key variable in the control-plane environment, then test again."
+        : `Set ${status.keyEnvVar} in the control-plane environment, then test again.`;
+    case "public_not_opted_in":
+      return `${status.endpointHost} looks public. Opt in to public endpoints to test it.`;
+    case "unreachable":
+      return `${status.modelId} at ${status.endpointHost} did not answer. Start the endpoint or fix the base URL.`;
+    case "probe_failed":
+      return "The control plane could not test the endpoint. Check the base URL.";
+  }
+}
+
 function AdvisorSection() {
   const { advisorOpen, toggleAdvisor } = useSettingsView();
+  const settingsQuery = useAdvisorSettingsQuery();
+  const updateMutation = useUpdateAdvisorSettingsMutation();
+  const statusQuery = useAdvisorStatusQuery();
+  // Effective connection fields only: request budget, raw response visibility,
+  // and advisor mode have no turn consumer yet and render as unavailable facts.
+  const [endpoint, setEndpoint] = useState(ADVISOR_SETTINGS_DEFAULTS.endpointBaseUrl);
+  const [model, setModel] = useState(ADVISOR_SETTINGS_DEFAULTS.modelId);
+  const [keyVar, setKeyVar] = useState(ADVISOR_SETTINGS_DEFAULTS.apiKeyEnvVar);
+  const [publicOptIn, setPublicOptIn] = useState(ADVISOR_SETTINGS_DEFAULTS.publicEndpointOptIn);
+  const [hydrated, setHydrated] = useState(false);
+  const [fieldError, setFieldError] = useState<string | undefined>(undefined);
+  const [saved, setSaved] = useState(false);
+  const [tested, setTested] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  const stored = settingsQuery.data;
+  useEffect(() => {
+    if (stored === undefined || hydrated) return;
+    setEndpoint(stored.endpointBaseUrl);
+    setModel(stored.modelId);
+    setKeyVar(stored.apiKeyEnvVar);
+    setPublicOptIn(stored.publicEndpointOptIn);
+    setHydrated(true);
+  }, [stored, hydrated]);
+
+  // Editing unlocks only after the first successful load, so a delayed or
+  // failed GET can never trick the operator into saving defaults over real
+  // stored configuration. Editing also locks during a save, so a slow save
+  // response can never bless newer unsaved typing as saved.
+  const editable = hydrated && !updateMutation.isPending;
+
+  const markEdited = () => {
+    setDirty(true);
+    setTested(false);
+    setSaved(false);
+  };
+
+  const save = () => {
+    if (!hydrated) return;
+    updateMutation.reset();
+    setSaved(false);
+    const trimmedEndpoint = endpoint.trim();
+    const trimmedModel = model.trim();
+    const trimmedKeyVar = keyVar.trim();
+    if (!isAdvisorEndpointValue(endpoint)) {
+      setFieldError("Endpoint must be an http(s) URL or empty (unconfigured).");
+      return;
+    }
+    if (
+      ADVISOR_KEY_MATERIAL_PATTERN.test(endpoint) ||
+      ADVISOR_KEY_MATERIAL_PATTERN.test(model) ||
+      ADVISOR_KEY_MATERIAL_PATTERN.test(keyVar)
+    ) {
+      setFieldError("Key names must not contain key material. Enter the variable name only.");
+      return;
+    }
+    if (trimmedModel.length > 128) {
+      setFieldError("Model id must be at most 128 characters.");
+      return;
+    }
+    if (
+      trimmedKeyVar !== "" &&
+      (trimmedKeyVar.length > 128 || !ADVISOR_ENV_VAR_PATTERN.test(trimmedKeyVar))
+    ) {
+      setFieldError("Key reference must match [A-Z_][A-Z0-9_]* or be empty.");
+      return;
+    }
+    // Shared-contract gate: nothing reaches the backend unless it validates.
+    // Only effective fields are sent, so unavailable fields keep their stored
+    // values through the backend partial update.
+    const checked = UpdateAdvisorSettingsRequestSchema.safeParse({
+      endpointBaseUrl: trimmedEndpoint,
+      modelId: trimmedModel,
+      apiKeyEnvVar: trimmedKeyVar,
+      publicEndpointOptIn: publicOptIn,
+    });
+    if (!checked.success) {
+      setFieldError("Stored advisor values are invalid. Check the values and try again.");
+      return;
+    }
+    setFieldError(undefined);
+    updateMutation.mutate(checked.data, {
+      onSuccess: () => {
+        setSaved(true);
+        setDirty(false);
+        setTested(false);
+      },
+    });
+  };
+
+  const testConnection = () => {
+    if (dirty || !hydrated) return;
+    setTested(true);
+    void statusQuery.refetch();
+  };
+
+  const textInputClass =
+    "min-h-8 w-60 rounded-lg border border-border bg-accent px-2.5 font-mono text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-55";
+
   return (
     <>
+      <p className="mt-0 mb-3 text-[13px] text-muted-foreground">
+        OpenAI-compatible endpoint. The API key itself stays in the control-plane
+        environment.
+      </p>
+      {!hydrated && settingsQuery.isPending && (
+        <p className="m-0 mb-3 text-[13px] text-muted-foreground" role="status">
+          Loading stored advisor values. Editing unlocks after they load.
+        </p>
+      )}
+      {!hydrated && settingsQuery.isError && (
+        <RecoverableError
+          title="Advisor settings unavailable"
+          description="Stored advisor values could not be loaded. Editing stays disabled until they load."
+          onRetry={() => void settingsQuery.refetch()}
+        />
+      )}
       <SetRow
         description="Operator stays terse. Mentor explains evidence and expected results."
         settingId="advisor-mode"
         title="Default mode"
       >
-        <SelectField
-          label="Advisor default mode"
-          options={[
-            { label: "Operator", value: "operator" },
-            { label: "Mentor", value: "mentor" },
-          ]}
-          value="operator"
-        />
+        <span className="text-[13px] text-muted-foreground">Not available in this version</span>
       </SetRow>
       <SetRow
         description="OpenAI-compatible base URL. Local and private endpoints are the default path."
@@ -791,14 +940,64 @@ function AdvisorSection() {
       {advisorOpen && (
         <div className="mb-2 grid gap-2 pb-2">
           <SetRow
-            description="Placeholder endpoint. No request is sent."
+            description="OpenAI-compatible base URL. Empty means unconfigured."
             settingId="advisor-endpoint-base-url"
             title="Base URL"
           >
-            <PathField label="Model endpoint" placeholder="No model configured yet" />
+            <input
+              aria-label="Model endpoint"
+              className={textInputClass}
+              value={endpoint}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="http://127.0.0.1:11434/v1"
+              type="text"
+              disabled={!editable}
+              onChange={(event) => {
+                setEndpoint(event.target.value);
+                markEdited();
+              }}
+            />
           </SetRow>
-          <SetRow description="Local placeholder. Not a live provider." title="Model id">
-            <PathField label="Model id" placeholder="Not configured yet" />
+          <SetRow
+            description="Model served by the configured endpoint. Empty means unconfigured."
+            settingId="advisor-model-id"
+            title="Model id"
+          >
+            <input
+              aria-label="Model id"
+              className={textInputClass}
+              value={model}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="Not configured yet"
+              type="text"
+              disabled={!editable}
+              onChange={(event) => {
+                setModel(event.target.value);
+                markEdited();
+              }}
+            />
+          </SetRow>
+          <SetRow
+            description="Variable name only. The key value is never stored or shown."
+            settingId="advisor-api-key"
+            title="API key variable"
+          >
+            <input
+              aria-label="API key variable"
+              className={textInputClass}
+              value={keyVar}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="BLACKGLASS_ADVISOR_API_KEY"
+              type="text"
+              disabled={!editable}
+              onChange={(event) => {
+                setKeyVar(event.target.value);
+                markEdited();
+              }}
+            />
           </SetRow>
         </div>
       )}
@@ -807,23 +1006,84 @@ function AdvisorSection() {
         settingId="request-budget"
         title="Request budget"
       >
-        <SelectField
-          label="Request budget"
-          options={[
-            { label: "4", value: "4" },
-            { label: "12", value: "12" },
-            { label: "Unlimited", value: "unlimited" },
-          ]}
-          value="12"
-        />
+        <span className="text-[13px] text-muted-foreground">Not available in this version</span>
       </SetRow>
       <SetRow
         description="Keep the unparsed model payload visible next to structured output."
         settingId="raw-response"
         title="Raw response visibility"
       >
-        <ToggleSwitch checked label="Raw response visibility" />
+        <span className="text-[13px] text-muted-foreground">Not available in this version</span>
       </SetRow>
+      <SetRow
+        description="Public endpoints may send prompts beyond the local network. Opt in to test one."
+        settingId="advisor-public-opt-in"
+        title="Public endpoint opt-in"
+      >
+        <ToggleSwitch
+          checked={publicOptIn}
+          label="Public endpoint opt-in"
+          locked={false}
+          disabled={!editable}
+          onCheckedChange={(next) => {
+            setPublicOptIn(next);
+            markEdited();
+          }}
+        />
+      </SetRow>
+      {fieldError && (
+        <p className="m-0 mt-2 text-[13px] text-destructive" role="alert">
+          {fieldError}
+        </p>
+      )}
+      {updateMutation.isError && (
+        <p className="m-0 mt-2 text-[13px] text-destructive" role="alert">
+          The advisor settings update failed. Values kept. Check the values and try again.
+        </p>
+      )}
+      {saved && !updateMutation.isPending && (
+        <p className="m-0 mt-2 text-[13px] text-success" role="status">
+          Advisor settings saved.
+        </p>
+      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="inline-flex min-h-8 items-center justify-center rounded-lg border border-border px-3 text-[13px] text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+          disabled={!editable}
+          onClick={save}
+        >
+          {updateMutation.isPending ? "Saving" : "Save advisor settings"}
+        </button>
+        <button
+          type="button"
+          className="inline-flex min-h-8 items-center justify-center rounded-lg border border-border px-3 text-[13px] text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+          disabled={!hydrated || dirty || statusQuery.isFetching}
+          onClick={testConnection}
+        >
+          {statusQuery.isFetching ? "Testing" : "Test connection"}
+        </button>
+      </div>
+      {dirty && (
+        <p className="m-0 mt-2 text-[13px] text-muted-foreground" role="status">
+          Unsaved changes. Save first, then test the connection.
+        </p>
+      )}
+      {tested && statusQuery.isFetching && !statusQuery.data && (
+        <p className="m-0 mt-2 text-[13px] text-muted-foreground" role="status">
+          Testing endpoint.
+        </p>
+      )}
+      {tested && statusQuery.isError && (
+        <p className="m-0 mt-2 text-[13px] text-destructive" role="alert">
+          Connection test unavailable. The control plane did not return advisor status.
+        </p>
+      )}
+      {tested && statusQuery.data && (
+        <p className="m-0 mt-2 text-[13px] text-muted-foreground" role="status">
+          {advisorTestCopy(statusQuery.data)}
+        </p>
+      )}
     </>
   );
 }
@@ -839,19 +1099,11 @@ function EvidenceSection() {
         <PathField label="Local storage path" placeholder="Managed by the control plane" />
       </SetRow>
       <SetRow
-        description="How long raw evidence remains before an explicit owner deletion."
+        description="No automatic expiry runs. Removal is an explicit owner operation."
         settingId="retention"
         title="Retention"
       >
-        <SelectField
-          label="Retention"
-          options={[
-            { label: "30 days", value: "30 days" },
-            { label: "90 days", value: "90 days" },
-            { label: "Keep", value: "keep" },
-          ]}
-          value="90 days"
-        />
+        <span className="text-[13px] text-muted-foreground">Not available in this version</span>
       </SetRow>
       <SetRow
         description="Raw artifacts cannot be replaced. Parser updates write new observations."
@@ -968,6 +1220,10 @@ export function SettingsPage() {
         {section === "appearance" ? (
           <p className="mt-0 mb-5.5 text-[13px] text-muted-foreground">
             Choose how Blackglass looks. Use a built-in theme or make your own.
+          </p>
+        ) : STORED_SECTION_NOTES[section] ? (
+          <p className="mt-0 mb-5.5 text-[13px] text-muted-foreground">
+            {STORED_SECTION_NOTES[section]}
           </p>
         ) : (
           <p className="mt-0 mb-5.5 text-[13px] text-muted-foreground">{LOCKED_NOTE}</p>

@@ -119,7 +119,7 @@ describe("advisor status routes", () => {
     expect(probe).not.toHaveBeenCalled();
   });
 
-  it("reports missing_key_env when no key env var is named", async () => {
+  it("reports no-auth reachability when no key env var is named", async () => {
     const lab = await startLabListener();
     const probe = vi.fn(async () => ({ reachable: true, latencyMs: 1 }));
     const { app } = await createStatusBackedApp({ probe });
@@ -130,15 +130,44 @@ describe("advisor status routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       configured: true,
-      endpointReachable: null,
+      endpointReachable: true,
       modelId: "lab-model",
       endpointHost: "127.0.0.1",
       publicEndpoint: false,
+      keyEnvVar: "",
       keyPresent: false,
-      reason: "missing_key_env",
+      latencyMs: 1,
+      reason: "ok",
+    });
+    // Reachability only: the probe receives the URL and a timeout, never auth.
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(probe).toHaveBeenCalledWith(lab.url, expect.objectContaining({ timeoutMs: expect.any(Number) }));
+    expect(JSON.stringify(response.json())).not.toContain("authorization");
+  });
+
+  it("reports public_not_opted_in for a no-auth public endpoint without calling the probe", async () => {
+    const probe = vi.fn(async () => ({ reachable: true, latencyMs: 1 }));
+    const { app } = await createStatusBackedApp({ probe });
+    await configureAdvisor(app, {
+      endpointBaseUrl: "http://203.0.113.7:11434/v1",
+      modelId: "lab-model",
+    });
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/advisor/status" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      configured: true,
+      endpointReachable: null,
+      endpointHost: "203.0.113.7",
+      publicEndpoint: true,
+      optIn: false,
+      keyEnvVar: "",
+      keyPresent: false,
+      latencyMs: null,
+      reason: "public_not_opted_in",
     });
     expect(probe).not.toHaveBeenCalled();
-    expect(lab.hits()).toBe(0);
   });
 
   it("reports key_unset when the named variable is empty", async () => {

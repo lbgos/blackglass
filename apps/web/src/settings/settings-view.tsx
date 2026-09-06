@@ -29,6 +29,15 @@ interface SettingsViewContextValue {
 
 const SettingsViewContext = createContext<SettingsViewContextValue | null>(null);
 
+// Search entries that render inside the Advisor Details disclosure. Activating
+// one opens the disclosure; any other hit closes it.
+const ADVISOR_CONNECTION_IDS: ReadonlySet<string> = new Set([
+  "advisor-endpoint",
+  "advisor-endpoint-base-url",
+  "advisor-model-id",
+  "advisor-api-key",
+]);
+
 export function SettingsViewProvider({
   active,
   children,
@@ -70,10 +79,10 @@ export function SettingsViewProvider({
       setQueryState("");
       setActiveHit(0);
       setSection(entry.section);
-      // Only the Model endpoint row lives behind the Details disclosure; set the
-      // exact state so a non-endpoint hit also closes stale details, and do it
+      // Connection rows live behind the Details disclosure; set the exact
+      // state so a non-connection hit also closes stale details, and do it
       // in the same update so the highlight effect can reach the target.
-      setAdvisorOpen(entry.id === "advisor-endpoint");
+      setAdvisorOpen(ADVISOR_CONNECTION_IDS.has(entry.id));
       setHighlightId(entry.id);
       highlightTimer.current = window.setTimeout(() => setHighlightId(null), 1600);
     },
