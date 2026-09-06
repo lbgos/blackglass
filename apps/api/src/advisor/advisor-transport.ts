@@ -26,10 +26,10 @@ import { classifyAdvisorEndpointHost } from "../advisor-status-probe.js";
  */
 
 export const ADVISOR_TRANSPORT_TIMEOUT_MS = 75_000 as const;
-export const ADVISOR_TRANSPORT_RESPONSE_MAX_BYTES = 32 * 1_024 as const;
-export const ADVISOR_TRANSPORT_REQUEST_MAX_BYTES = 64 * 1_024 as const;
+export const ADVISOR_TRANSPORT_RESPONSE_MAX_BYTES = 32_768;
+export const ADVISOR_TRANSPORT_REQUEST_MAX_BYTES = 65_536;
 export const ADVISOR_TRANSPORT_MESSAGES_MAX = 8 as const;
-export const ADVISOR_TRANSPORT_MESSAGE_MAX_BYTES = 32 * 1_024 as const;
+export const ADVISOR_TRANSPORT_MESSAGE_MAX_BYTES = 32_768;
 export const ADVISOR_TRANSPORT_MODEL_MAX_CHARS = 128 as const;
 export const ADVISOR_TRANSPORT_MAX_TOKENS_DEFAULT = 1_024 as const;
 export const ADVISOR_TRANSPORT_MAX_TOKENS_MAX = 4_096 as const;
@@ -225,9 +225,11 @@ function validateTransportInput(input: AdvisorTransportInput):
       return { ok: false, error: "invalid_input" };
     }
   }
+  // Keys travel in an HTTP header: reject controls, CRLF smuggling, spaces,
+  // and non-ASCII before any network. No vendor token shape is assumed.
+  const SAFE_HEADER_VALUE = /^[\x21-\x7E]{1,4096}$/;
   if (input.apiKey !== null &&
-      (typeof input.apiKey !== "string" || input.apiKey.length < 1 ||
-       input.apiKey.length > 4_096)) {
+      (typeof input.apiKey !== "string" || !SAFE_HEADER_VALUE.test(input.apiKey))) {
     return { ok: false, error: "invalid_input" };
   }
   const maxTokens = input.maxTokens ?? ADVISOR_TRANSPORT_MAX_TOKENS_DEFAULT;
@@ -286,7 +288,7 @@ function raceWithDeadline<T>(
 ): Promise<DeadlineOutcome<T>> {
   if (signals.caller?.aborted) return Promise.resolve({ settled: "cancelled" });
   if (signals.timeout.aborted) return Promise.resolve({ settled: "timeout" });
-  return new Promise<DeadlineOutcome<T>>((resolve) => {
+  return new Promise<DeadlineOutcome<T>>((resolve, reject) => {
     let done = false;
     const cleanup = (): void => {
       signals.caller?.removeEventListener("abort", onCallerAbort);
@@ -313,11 +315,11 @@ function raceWithDeadline<T>(
         cleanup();
         resolve({ settled: "work", value });
       },
-      () => {
+      (error: unknown) => {
         if (done) return;
         done = true;
         cleanup();
-        resolve({ settled: "timeout" });
+        reject(error);
       },
     );
   });
@@ -505,6 +507,23 @@ export async function postAdvisorChatCompletion(
     return { ok: false, error: { code: "public_not_opted_in" } };
   }
 
+  // Serialize and bound the request before any DNS: oversized input must not
+  // emit the hostname to a resolver.
+  const body = Buffer.from(
+    JSON.stringify({
+      model,
+      messages: messages.map((message) => ({ role: message.role, content: message.content })),
+      response_format: { type: "json_object" },
+      max_tokens: maxTokens,
+      temperature: 0,
+      stream: false,
+    }),
+    "utf8",
+  );
+  if (body.length > ADVISOR_TRANSPORT_REQUEST_MAX_BYTES) {
+    return { ok: false, error: { code: "request_too_large" } };
+  }
+
   const lookupAll = deps.lookupAll ?? defaultLookupAll;
   let addresses: readonly string[];
   if (isIP(endpoint.hostname) !== 0) {
@@ -533,29 +552,18 @@ export async function postAdvisorChatCompletion(
     addresses = resolved;
   }
 
-  // Every resolved address must agree with the hostname classification.
-  // Mixed answers and public-to-private resolutions fail closed.
-  const unanimous = addresses.every(
-    (address) => classifyAdvisorEndpointHost(address) === hostVisibility,
-  );
+  // Every resolved answer must be an IP literal agreeing with the hostname
+  // classification. Unparsable answers fail closed here so a garbage address
+  // can never reach the socket layer and trigger a second resolution.
+  const unanimous =
+    addresses.length > 0 &&
+    addresses.every(
+      (address) =>
+        isIP(address) !== 0 && classifyAdvisorEndpointHost(address) === hostVisibility,
+    );
   if (!unanimous) return { ok: false, error: { code: "dns_policy_violation" } };
   const target = addresses[0];
   if (target === undefined) return { ok: false, error: { code: "dns_unresolvable" } };
-
-  const body = Buffer.from(
-    JSON.stringify({
-      model,
-      messages: messages.map((message) => ({ role: message.role, content: message.content })),
-      response_format: { type: "json_object" },
-      max_tokens: maxTokens,
-      temperature: 0,
-      stream: false,
-    }),
-    "utf8",
-  );
-  if (body.length > ADVISOR_TRANSPORT_REQUEST_MAX_BYTES) {
-    return { ok: false, error: { code: "request_too_large" } };
-  }
 
   if (caller?.aborted) return { ok: false, error: { code: "cancelled" } };
   const budgetMs = remainingMs();
@@ -568,20 +576,35 @@ export async function postAdvisorChatCompletion(
   };
   if (apiKey !== null) headers.authorization = `Bearer ${apiKey}`;
   const requestFn = deps.requestFn ?? defaultAdvisorTransportRequest;
+  // The caller-owned deadline bounds injected factories too: a factory that
+  // ignores signal and timeout cannot hang past the budget. The orphaned
+  // attempt is observed so it never surfaces as an unhandled rejection;
+  // the default factory additionally destroys its socket on abort.
+  // Caller abort reports cancelled, budget expiry reports provider_timeout.
+  const attempt = requestFn({
+    secure: endpoint.secure,
+    address: target,
+    port: endpoint.port,
+    path: endpoint.path,
+    servername: endpoint.hostname,
+    hostHeader: endpoint.hostHeader,
+    headers,
+    body,
+    timeoutMs: budgetMs,
+    signal: caller,
+  });
   let raw: AdvisorTransportRawResponse;
   try {
-    raw = await requestFn({
-      secure: endpoint.secure,
-      address: target,
-      port: endpoint.port,
-      path: endpoint.path,
-      servername: endpoint.hostname,
-      hostHeader: endpoint.hostHeader,
-      headers,
-      body,
-      timeoutMs: budgetMs,
-      signal: caller,
-    });
+    const raced = await raceWithDeadline(attempt, { caller, timeout });
+    if (raced.settled === "cancelled") {
+      attempt.then(undefined, () => {});
+      return { ok: false, error: { code: "cancelled" } };
+    }
+    if (raced.settled === "timeout") {
+      attempt.then(undefined, () => {});
+      return { ok: false, error: { code: "provider_timeout" } };
+    }
+    raw = raced.value;
   } catch (error) {
     if (error instanceof TransportRequestError) {
       if (error.code === "cancelled") return { ok: false, error: { code: "cancelled" } };
@@ -603,11 +626,11 @@ export async function postAdvisorChatCompletion(
   if (raw.statusCode !== 200) {
     return { ok: false, error: { code: "unexpected_status", statusCode: raw.statusCode } };
   }
+  // Exact MIME essence match: parameters such as charset are allowed, but
+  // lookalikes (application/json-evil) or embedded tokens are rejected.
   const contentType = raw.contentType ?? "";
-  if (
-    !contentType.toLowerCase().includes("application/json") ||
-    contentType.toLowerCase().includes("event-stream")
-  ) {
+  const essence = contentType.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (essence.includes("event-stream") || essence !== "application/json") {
     return { ok: false, error: { code: "invalid_content_type" } };
   }
   let parsed: unknown;

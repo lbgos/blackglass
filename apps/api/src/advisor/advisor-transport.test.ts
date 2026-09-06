@@ -39,6 +39,10 @@ interface LabBehavior {
   headers?: Record<string, string>;
   body?: string;
   delayMs?: number;
+  /** Keep the socket open without responding (cancellation tests). */
+  hang?: boolean;
+  /** Send headers plus a partial body, then destroy the socket. */
+  destroyMidBody?: boolean;
 }
 
 interface LabServer {
@@ -80,6 +84,13 @@ function attachHandler(
   state.hostHeader = Array.isArray(hostHeader) ? hostHeader[0] : hostHeader;
   const socket = request.socket as Partial<TLSSocket> & { servername?: unknown };
   state.servername = typeof socket.servername === "string" ? socket.servername : undefined;
+  if (behavior.hang === true) return;
+  if (behavior.destroyMidBody === true) {
+    response.writeHead(behavior.status, behavior.headers ?? {});
+    response.write((behavior.body ?? "").slice(0, 16));
+    response.destroy();
+    return;
+  }
   const respond = (): void => {
     if (response.destroyed || response.writableEnded) return;
     response.writeHead(behavior.status, behavior.headers ?? {});
@@ -248,6 +259,18 @@ describe("advisor transport input validation", () => {
       expect(dns.calls()).toBe(0);
     }
   });
+
+  it("rejects header-unsafe keys with zero dns", async () => {
+    for (const apiKey of ["has space", "line\r\nbreak: x", "tab\there", "ünïcodé"]) {
+      const dns = countingLookup(["127.0.0.1"]);
+      const result = await postAdvisorChatCompletion(baseInput({ apiKey }), {
+        lookupAll: dns.fn,
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("invalid_input");
+      expect(dns.calls()).toBe(0);
+    }
+  });
 });
 
 describe("advisor transport dns policy", () => {
@@ -294,6 +317,45 @@ describe("advisor transport dns policy", () => {
       { lookupAll: countingLookup(new Error("synthetic dns failure")).fn },
     );
     expect(result).toEqual({ ok: false, error: { code: "dns_unresolvable" } });
+    expect(lab.hits()).toBe(0);
+  });
+
+  it("rejects non-ip dns answers without requesting", async () => {
+    const lab = await startLabHttpServer({
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: completionBody("ok"),
+    });
+    // A garbage answer classifies public, so unanimity alone would pass it
+    // for a public host and send a hostname back to the socket layer.
+    const result = await postAdvisorChatCompletion(
+      baseInput({
+        baseUrl: `http://public-host.invalid:${lab.port()}/v1`,
+        publicOptIn: true,
+      }),
+      { lookupAll: countingLookup(["not-an-ip"]).fn },
+    );
+    expect(result).toEqual({ ok: false, error: { code: "dns_policy_violation" } });
+    expect(lab.hits()).toBe(0);
+  });
+
+  it("times out a hanging resolver without connecting late", async () => {
+    const lab = await startLabHttpServer({
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: completionBody("ok"),
+    });
+    let release!: (addresses: readonly string[]) => void;
+    const gate = new Promise<readonly string[]>((resolve) => {
+      release = resolve;
+    });
+    const result = await postAdvisorChatCompletion(
+      baseInput({ baseUrl: `http://localhost:${lab.port()}/v1`, timeoutMs: 200 }),
+      { lookupAll: () => gate },
+    );
+    expect(result).toEqual({ ok: false, error: { code: "provider_timeout" } });
+    release(["127.0.0.1"]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(lab.hits()).toBe(0);
   });
 
@@ -425,12 +487,13 @@ describe("advisor transport budgets and failures", () => {
     expect(Date.now() - startedAt).toBeLessThan(5_000);
   });
 
-  it("bounds the serialized request before any connection", async () => {
+  it("bounds the serialized request before any connection or dns", async () => {
     const lab = await startLabHttpServer({
       status: 200,
       headers: { "content-type": "application/json" },
       body: completionBody("ok"),
     });
+    const dns = countingLookup(["127.0.0.1"]);
     const result = await postAdvisorChatCompletion(
       baseInput({
         baseUrl: `http://localhost:${lab.port()}/v1`,
@@ -439,9 +502,10 @@ describe("advisor transport budgets and failures", () => {
           content: `evidence-${index}:` + "x".repeat(25_600),
         })),
       }),
-      { lookupAll: loopbackDns() },
+      { lookupAll: dns.fn },
     );
     expect(result).toEqual({ ok: false, error: { code: "request_too_large" } });
+    expect(dns.calls()).toBe(0);
     expect(lab.hits()).toBe(0);
   });
 
@@ -538,5 +602,78 @@ describe("advisor transport budgets and failures", () => {
       );
       expect(result).toEqual({ ok: false, error: { code: "malformed_response" } });
     }
+  });
+
+  it("matches the json essence exactly while allowing parameters", async () => {
+    const parametrized = await startLabHttpServer({
+      status: 200,
+      headers: { "content-type": "Application/JSON; Charset=utf-8" },
+      body: completionBody("ok"),
+    });
+    expect(
+      await postAdvisorChatCompletion(
+        baseInput({ baseUrl: `http://localhost:${parametrized.port()}/v1` }),
+        { lookupAll: loopbackDns() },
+      ),
+    ).toMatchObject({ ok: true });
+
+    for (const contentType of ["application/json-evil", "text/html; token=application/json"]) {
+      const lab = await startLabHttpServer({
+        status: 200,
+        headers: { "content-type": contentType },
+        body: completionBody("ok"),
+      });
+      expect(
+        await postAdvisorChatCompletion(
+          baseInput({ baseUrl: `http://localhost:${lab.port()}/v1` }),
+          { lookupAll: loopbackDns() },
+        ),
+      ).toEqual({ ok: false, error: { code: "invalid_content_type" } });
+    }
+  });
+
+  it("bounds an injected factory that ignores abort and timeout", async () => {
+    const hanging: AdvisorTransportRequestFn = () => new Promise(() => {});
+    const controller = new AbortController();
+    const pending = postAdvisorChatCompletion(baseInput({ baseUrl: "http://127.0.0.1:1/v1" }), {
+      signal: controller.signal,
+      requestFn: hanging,
+    });
+    controller.abort();
+    const startedAt = Date.now();
+    const result = await pending;
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(result).toEqual({ ok: false, error: { code: "cancelled" } });
+  });
+
+  it("reports user cancellation for a stalled body", async () => {
+    const lab = await startLabHttpServer({
+      status: 200,
+      headers: { "content-type": "application/json" },
+      hang: true,
+    });
+    const controller = new AbortController();
+    const pending = postAdvisorChatCompletion(
+      baseInput({ baseUrl: `http://localhost:${lab.port()}/v1` }),
+      { lookupAll: loopbackDns(), signal: controller.signal },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    controller.abort();
+    expect(await pending).toEqual({ ok: false, error: { code: "cancelled" } });
+    expect(lab.hits()).toBe(1);
+  });
+
+  it("reports a socket destroyed mid-body as a connection failure", async () => {
+    const lab = await startLabHttpServer({
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: completionBody("x".repeat(1_000)),
+      destroyMidBody: true,
+    });
+    const result = await postAdvisorChatCompletion(
+      baseInput({ baseUrl: `http://localhost:${lab.port()}/v1` }),
+      { lookupAll: loopbackDns() },
+    );
+    expect(result).toEqual({ ok: false, error: { code: "connection_failed" } });
   });
 });
