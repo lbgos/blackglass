@@ -37,3 +37,4 @@ export {
   type AdvisorStatusReason,
   type ConnectionTestResult,
 } from "./advisor-status.js";
+export * from "./advisor-chat.js";

@@ -43,3 +43,27 @@ export {
   probeUrlsForSnapshot,
   selectProbeHeaders,
 } from "./http-probe.js";
+export {
+  ADVISOR_CONTEXT_MAX_BYTES,
+  ADVISOR_REDACTION_TOKEN,
+  advisorUtf8ByteLength,
+  isAdvisorContextWithinBudget,
+  quoteAdvisorEvidenceBlock,
+  redactAdvisorText,
+  stripAdvisorUrlUserinfo,
+  type AdvisorRedaction,
+} from "./advisor-redact.js";
+export {
+  partitionAdvisorCitations,
+  type AdvisorCitationPartition,
+} from "./advisor-citations.js";
+export {
+  ADVISOR_EXPLANATION_PROMPT_VERSION,
+  ADVISOR_EXPLANATION_SYSTEM_PROMPT,
+  ADVISOR_HISTORY_ENTRY_MAX_CHARS,
+  ADVISOR_HISTORY_MAX_TURNS,
+  buildAdvisorExplanationPrompt,
+  type AdvisorExplanationPrompt,
+  type AdvisorExplanationPromptInput,
+  type AdvisorHistoryTurn,
+} from "./advisor-explanation.js";
