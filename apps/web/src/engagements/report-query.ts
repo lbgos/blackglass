@@ -122,6 +122,9 @@ export function reportQueryOptions(engagementId: string) {
   return queryOptions({
     queryKey: reportQueryKey(engagementId),
     queryFn: ({ signal }) => fetchReportBundle(engagementId, signal),
+    // Global client disables mount refetch; an invalidated inactive report
+    // must still refresh when the operator revisits it.
+    refetchOnMount: true,
   });
 }
 

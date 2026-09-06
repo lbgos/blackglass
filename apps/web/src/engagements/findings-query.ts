@@ -11,6 +11,7 @@ import {
   FindingsQueryError,
   parseFindingMutationError,
 } from "./errors.js";
+import { reportQueryKey } from "./report-query.js";
 
 export function findingsQueryKey(engagementId: string) {
   return ["engagements", engagementId, "findings"] as const;
@@ -122,6 +123,7 @@ export function useCreateFindingMutation(engagementId: string) {
       queryClient.setQueryData<Finding[]>(findingsQueryKey(engagementId), (current) =>
         current === undefined ? [finding] : [...current, finding],
       );
+      void queryClient.invalidateQueries({ queryKey: reportQueryKey(engagementId) });
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: findingsQueryKey(engagementId) });
@@ -143,6 +145,7 @@ export function useFindingTransitionMutation(
           ? [finding]
           : current.map((entry) => (entry.id === finding.id ? finding : entry)),
       );
+      void queryClient.invalidateQueries({ queryKey: reportQueryKey(engagementId) });
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: findingsQueryKey(engagementId) });
