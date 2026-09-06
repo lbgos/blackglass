@@ -1,6 +1,8 @@
 import { Button, LoadingRegion, RecoverableError, Skeleton, StaleDataState } from "@blackglass/ui";
+import { useId } from "react";
 
 import { engagementMutationMessage } from "./errors.js";
+import { useNotesDraftGuard } from "./notes-guard.js";
 import { useEngagementNotesEditor } from "./notes-query.js";
 
 export function EngagementNotesSection({
@@ -13,6 +15,11 @@ export function EngagementNotesSection({
   const { query, save, value, dirty, setDraft } = useEngagementNotesEditor(engagementId);
   const retry = () => void query.refetch();
   const hasData = query.data !== undefined;
+  const guardActive = dirty && !archived && hasData;
+  const draftBlocker = useNotesDraftGuard(guardActive);
+  const blocked = draftBlocker.status === "blocked";
+  const titleId = useId();
+  const copyId = useId();
   const body = (
     <NotesEditorBody
       archived={archived}
@@ -36,6 +43,29 @@ export function EngagementNotesSection({
           One Markdown scratchpad per engagement for creds, flags, and observations.
         </p>
       </header>
+      {blocked ? (
+        <section
+          role="alertdialog"
+          aria-labelledby={titleId}
+          aria-describedby={copyId}
+          className="mb-3 rounded-[10px] border border-border px-3 py-3"
+        >
+          <h3 id={titleId} className="m-0 text-[13px] font-semibold text-foreground">
+            Unsaved notes
+          </h3>
+          <p id={copyId} className="mt-1 mb-0 text-[12px] leading-5 text-muted-foreground">
+            You have unsaved notes. Leaving now will discard them.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button type="button" autoFocus onClick={() => draftBlocker.reset?.()}>
+              Stay
+            </Button>
+            <Button type="button" variant="secondary" onClick={() => draftBlocker.proceed?.()}>
+              Leave
+            </Button>
+          </div>
+        </section>
+      ) : null}
       {!hasData && query.isFetching ? (
         <LoadingRegion label="Loading notes" className="space-y-3">
           <Skeleton className="h-3 w-40" />

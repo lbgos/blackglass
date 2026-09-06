@@ -3,7 +3,7 @@
 import { ThemeProvider } from "@blackglass/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAppQueryClient } from "../query-client.js";
@@ -35,6 +35,27 @@ function response(payload: unknown, status = 200): Response {
   } as Response;
 }
 
+function notesLeakInStorage(snippets: readonly string[]): string | null {
+  const storages = [window.localStorage, window.sessionStorage];
+  for (const storage of storages) {
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key === null) continue;
+      const lowered = key.toLowerCase();
+      if (lowered.includes("note") || lowered.includes("draft") || lowered.includes("markdown")) {
+        return `storage key ${key}`;
+      }
+      const value = storage.getItem(key) ?? "";
+      for (const snippet of snippets) {
+        if (snippet !== "" && value.includes(snippet)) {
+          return `storage key ${key} contains note content`;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 const testQueryClients = new Set<QueryClient>();
 
 async function renderWorkspace(initialEntry: string) {
@@ -42,13 +63,14 @@ async function renderWorkspace(initialEntry: string) {
   await router.load();
   const queryClient = createAppQueryClient();
   testQueryClients.add(queryClient);
-  return render(
+  const view = render(
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
       </QueryClientProvider>
     </ThemeProvider>,
   );
+  return { ...view, router };
 }
 
 beforeEach(() => {
@@ -185,5 +207,278 @@ describe("engagement notes", () => {
 
     expect(await screen.findByText("Storage is busy. Try again.")).toBeTruthy();
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
+  });
+
+  it("blocks in-app navigation when dirty; Stay preserves draft and Leave proceeds", async () => {
+    const puts: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/system/status")) return Promise.resolve(response(readyStatus));
+        if (url === "/api/v1/engagements") return Promise.resolve(response([activeEngagement]));
+        if (url === `/api/v1/engagements/${activeEngagement.id}`) {
+          return Promise.resolve(
+            response({ engagement: activeEngagement, activeScopeRevision: null }),
+          );
+        }
+        if (url.endsWith("/services")) return Promise.resolve(response([]));
+        if (url.endsWith("/notes") && (init?.method === undefined || init.method === "GET")) {
+          return Promise.resolve(
+            response({
+              engagementId: activeEngagement.id,
+              markdown: "",
+              updatedAt: "2026-08-12T12:00:00.000Z",
+            }),
+          );
+        }
+        if (url.endsWith("/notes") && init?.method === "PUT") {
+          puts.push(JSON.parse(String(init.body)));
+          return Promise.resolve(
+            response({
+              engagementId: activeEngagement.id,
+              markdown: "# draft",
+              updatedAt: "2026-08-12T12:01:00.000Z",
+            }),
+          );
+        }
+        return Promise.resolve(response([]));
+      }),
+    );
+
+    const { router } = await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: "# draft" } });
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+
+    void router.navigate({ to: "/engagements" });
+    const dialog = await screen.findByRole("alertdialog", { name: "Unsaved notes" });
+    expect(router.state.location.pathname).toBe(`/engagements/${activeEngagement.id}`);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stay" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(router.state.location.pathname).toBe(`/engagements/${activeEngagement.id}`);
+    expect((screen.getByLabelText("Markdown") as HTMLTextAreaElement).value).toBe("# draft");
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    expect(puts).toEqual([]);
+    expect(notesLeakInStorage(["# draft"])).toBeNull();
+
+    void router.navigate({ to: "/engagements" });
+    const releave = await screen.findByRole("alertdialog", { name: "Unsaved notes" });
+    fireEvent.click(within(releave).getByRole("button", { name: "Leave" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/engagements"));
+    expect(puts).toEqual([]);
+  });
+
+  it("does not block navigation when clean", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/system/status")) return Promise.resolve(response(readyStatus));
+        if (url === "/api/v1/engagements") return Promise.resolve(response([activeEngagement]));
+        if (url === `/api/v1/engagements/${activeEngagement.id}`) {
+          return Promise.resolve(
+            response({ engagement: activeEngagement, activeScopeRevision: null }),
+          );
+        }
+        if (url.endsWith("/services")) return Promise.resolve(response([]));
+        if (url.endsWith("/notes")) {
+          return Promise.resolve(
+            response({
+              engagementId: activeEngagement.id,
+              markdown: "",
+              updatedAt: "2026-08-12T12:00:00.000Z",
+            }),
+          );
+        }
+        return Promise.resolve(response([]));
+      }),
+    );
+
+    const { router } = await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    await screen.findByLabelText("Markdown");
+    expect(screen.getByText("Saved")).toBeTruthy();
+
+    await router.navigate({ to: "/engagements" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/engagements"));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("allows navigation after saving and after reverting to saved", async () => {
+    let stored = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/system/status")) return Promise.resolve(response(readyStatus));
+        if (url === "/api/v1/engagements") return Promise.resolve(response([activeEngagement]));
+        if (url === `/api/v1/engagements/${activeEngagement.id}`) {
+          return Promise.resolve(
+            response({ engagement: activeEngagement, activeScopeRevision: null }),
+          );
+        }
+        if (url.endsWith("/services")) return Promise.resolve(response([]));
+        if (url.endsWith("/notes") && (init?.method === undefined || init.method === "GET")) {
+          return Promise.resolve(
+            response({
+              engagementId: activeEngagement.id,
+              markdown: stored,
+              updatedAt: "2026-08-12T12:00:00.000Z",
+            }),
+          );
+        }
+        if (url.endsWith("/notes") && init?.method === "PUT") {
+          const body = JSON.parse(String(init.body)) as { markdown: string };
+          stored = body.markdown;
+          return Promise.resolve(
+            response({
+              engagementId: activeEngagement.id,
+              markdown: stored,
+              updatedAt: "2026-08-12T12:01:00.000Z",
+            }),
+          );
+        }
+        return Promise.resolve(response([]));
+      }),
+    );
+
+    const { router } = await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
+
+    fireEvent.change(editor, { target: { value: "# temp" } });
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    fireEvent.change(editor, { target: { value: "" } });
+    expect(screen.getByText("Saved")).toBeTruthy();
+    await router.navigate({ to: "/engagements" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/engagements"));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    await router.navigate({
+      to: "/engagements/$engagementId",
+      params: { engagementId: activeEngagement.id },
+    });
+    const backEditor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
+    fireEvent.change(backEditor, { target: { value: "# final" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
+    await waitFor(() => expect(screen.getByText("Saved")).toBeTruthy());
+    await router.navigate({ to: "/engagements" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/engagements"));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("does not transplant a dirty draft when switching engagement", async () => {
+    const secondEngagement = { ...activeEngagement, id: "10000000-0000-4000-8000-000000000002", name: "Second lab" };
+    const stored: Record<string, string> = { [activeEngagement.id]: "", [secondEngagement.id]: "saved second" };
+    const puts: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/system/status")) return Promise.resolve(response(readyStatus));
+        if (url === "/api/v1/engagements") {
+          return Promise.resolve(response([activeEngagement, secondEngagement]));
+        }
+        if (url === `/api/v1/engagements/${activeEngagement.id}`) {
+          return Promise.resolve(
+            response({ engagement: activeEngagement, activeScopeRevision: null }),
+          );
+        }
+        if (url === `/api/v1/engagements/${secondEngagement.id}`) {
+          return Promise.resolve(
+            response({ engagement: secondEngagement, activeScopeRevision: null }),
+          );
+        }
+        if (url.endsWith("/services")) return Promise.resolve(response([]));
+        const notesMatch = /^\/api\/v1\/engagements\/([^/]+)\/notes$/.exec(url);
+        if (notesMatch?.[1] !== undefined) {
+          const id = notesMatch[1];
+          if (init?.method === "PUT") {
+            puts.push(JSON.parse(String(init.body)));
+            stored[id] = (JSON.parse(String(init.body)) as { markdown: string }).markdown;
+          }
+          return Promise.resolve(
+            response({
+              engagementId: id,
+              markdown: stored[id] ?? "",
+              updatedAt: "2026-08-12T12:00:00.000Z",
+            }),
+          );
+        }
+        return Promise.resolve(response([]));
+      }),
+    );
+
+    const { router } = await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: "# first draft" } });
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+
+    void router.navigate({
+      to: "/engagements/$engagementId",
+      params: { engagementId: secondEngagement.id },
+    });
+    const dialog = await screen.findByRole("alertdialog", { name: "Unsaved notes" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Leave" }));
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(`/engagements/${secondEngagement.id}`),
+    );
+
+    const secondEditor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
+    expect(secondEditor.value).toBe("saved second");
+    expect(puts).toEqual([]);
+  });
+
+  it("preserves newer edits made during save and stays dirty", async () => {
+    let resolvePut: (() => void) | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/system/status")) return Promise.resolve(response(readyStatus));
+        if (url === "/api/v1/engagements") return Promise.resolve(response([activeEngagement]));
+        if (url === `/api/v1/engagements/${activeEngagement.id}`) {
+          return Promise.resolve(
+            response({ engagement: activeEngagement, activeScopeRevision: null }),
+          );
+        }
+        if (url.endsWith("/services")) return Promise.resolve(response([]));
+        if (url.endsWith("/notes") && (init?.method === undefined || init.method === "GET")) {
+          return Promise.resolve(
+            response({
+              engagementId: activeEngagement.id,
+              markdown: "",
+              updatedAt: "2026-08-12T12:00:00.000Z",
+            }),
+          );
+        }
+        if (url.endsWith("/notes") && init?.method === "PUT") {
+          const body = JSON.parse(String(init.body)) as { markdown: string };
+          return new Promise<Response>((resolve) => {
+            resolvePut = () =>
+              resolve(
+                response({
+                  engagementId: activeEngagement.id,
+                  markdown: body.markdown,
+                  updatedAt: "2026-08-12T12:01:00.000Z",
+                }),
+              );
+          });
+        }
+        return Promise.resolve(response([]));
+      }),
+    );
+
+    await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: "first" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
+    expect(await screen.findByRole("button", { name: "Saving" })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Markdown"), { target: { value: "second" } });
+    expect(resolvePut).toBeDefined();
+    resolvePut?.();
+    await waitFor(() => expect(screen.getByText("Unsaved changes")).toBeTruthy());
+    expect((screen.getByLabelText("Markdown") as HTMLTextAreaElement).value).toBe("second");
   });
 });
