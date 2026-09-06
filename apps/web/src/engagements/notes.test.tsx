@@ -150,7 +150,7 @@ describe("engagement notes", () => {
       }),
     );
 
-    await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    await renderWorkspace(`/engagements/${activeEngagement.id}?tab=notes`);
 
     const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
     expect(editor.value).toBe("");
@@ -199,7 +199,7 @@ describe("engagement notes", () => {
       }),
     );
 
-    await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    await renderWorkspace(`/engagements/${activeEngagement.id}?tab=notes`);
 
     const editor = await screen.findByLabelText("Markdown");
     fireEvent.change(editor, { target: { value: "# observations" } });
@@ -246,7 +246,7 @@ describe("engagement notes", () => {
       }),
     );
 
-    const { router } = await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    const { router } = await renderWorkspace(`/engagements/${activeEngagement.id}?tab=notes`);
     const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
     fireEvent.change(editor, { target: { value: "# draft" } });
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
@@ -296,7 +296,7 @@ describe("engagement notes", () => {
       }),
     );
 
-    const { router } = await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    const { router } = await renderWorkspace(`/engagements/${activeEngagement.id}?tab=notes`);
     await screen.findByLabelText("Markdown");
     expect(screen.getByText("Saved")).toBeTruthy();
 
@@ -343,7 +343,7 @@ describe("engagement notes", () => {
       }),
     );
 
-    const { router } = await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    const { router } = await renderWorkspace(`/engagements/${activeEngagement.id}?tab=notes`);
     const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
 
     fireEvent.change(editor, { target: { value: "# temp" } });
@@ -357,6 +357,7 @@ describe("engagement notes", () => {
     await router.navigate({
       to: "/engagements/$engagementId",
       params: { engagementId: activeEngagement.id },
+      search: { tab: "notes" },
     });
     const backEditor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
     fireEvent.change(backEditor, { target: { value: "# final" } });
@@ -409,7 +410,7 @@ describe("engagement notes", () => {
       }),
     );
 
-    const { router } = await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    const { router } = await renderWorkspace(`/engagements/${activeEngagement.id}?tab=notes`);
     const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
     fireEvent.change(editor, { target: { value: "# first draft" } });
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
@@ -417,6 +418,7 @@ describe("engagement notes", () => {
     void router.navigate({
       to: "/engagements/$engagementId",
       params: { engagementId: secondEngagement.id },
+      search: { tab: "notes" },
     });
     const dialog = await screen.findByRole("alertdialog", { name: "Unsaved notes" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Leave" }));
@@ -469,7 +471,7 @@ describe("engagement notes", () => {
       }),
     );
 
-    await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    await renderWorkspace(`/engagements/${activeEngagement.id}?tab=notes`);
     const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
     fireEvent.change(editor, { target: { value: "first" } });
     fireEvent.click(screen.getByRole("button", { name: "Save notes" }));

@@ -12,6 +12,7 @@ import {
   runOutputQueryKey,
   runOutputQueryOptions,
   selectEngagementIdFromPathname,
+  selectRunIdFromSearch,
 } from "./run-output-query.js";
 
 afterEach(() => {
@@ -27,6 +28,16 @@ describe("run output query", () => {
     expect(selectEngagementIdFromPathname("/engagements")).toBeUndefined();
     expect(selectEngagementIdFromPathname("/")).toBeUndefined();
     expect(selectEngagementIdFromPathname("/settings")).toBeUndefined();
+  });
+
+  it("selects an explicit run id from the route search", () => {
+    expect(selectRunIdFromSearch({ tab: "runs", run: "run-old" })).toBe("run-old");
+    expect(selectRunIdFromSearch({ tab: "surface" })).toBeUndefined();
+    expect(selectRunIdFromSearch({ run: "" })).toBeUndefined();
+    expect(selectRunIdFromSearch({ run: 7 })).toBeUndefined();
+    expect(selectRunIdFromSearch({})).toBeUndefined();
+    expect(selectRunIdFromSearch(undefined)).toBeUndefined();
+    expect(selectRunIdFromSearch(null)).toBeUndefined();
   });
 
   it("returns exact preserved content for a terminal run", async () => {

@@ -1,4 +1,4 @@
-import { Link, useRouterState } from "@tanstack/react-router";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect } from "react";
 
 import { engagementMutationMessage, isRevisionConflict } from "./engagements/errors.js";
@@ -108,6 +108,8 @@ function EngagementStageActions({ engagementId }: { engagementId: string }) {
   const engagement = engagements.data?.find((item) => item.id === engagementId);
   const archive = useArchiveEngagementMutation();
   const reopen = useReopenEngagementMutation();
+  const navigate = useNavigate();
+  const search = useRouterState({ select: (state) => state.location.search });
   const { requestFocusRuns } = useEngagementWorkspace();
 
   useEffect(() => {
@@ -122,13 +124,30 @@ function EngagementStageActions({ engagementId }: { engagementId: string }) {
   const conflict = isRevisionConflict(error);
   const isActive = engagement.status === "active";
 
+  // New run works from every tab: route to Surface (keeping the common run
+  // selection) and focus the existing planner after it mounts. The navigation
+  // goes through the router so a dirty notes draft still blocks it; Stay keeps
+  // the draft and launches nothing. This starts no execution by itself.
+  const startNewRun = () => {
+    const run = (search as Record<string, unknown>)["run"];
+    void navigate({
+      to: "/engagements/$engagementId",
+      params: { engagementId },
+      search:
+        typeof run === "string" && run.length > 0
+          ? { tab: "surface", run }
+          : { tab: "surface" },
+    });
+    requestFocusRuns();
+  };
+
   return (
     <div className="flex min-w-0 shrink-0 items-center gap-1">
       <DeadlinePill deadlineAt={engagement.deadlineAt} />
       <button
         type="button"
         className="inline-flex h-8 items-center rounded-md px-2 text-[13px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-        onClick={() => requestFocusRuns()}
+        onClick={startNewRun}
       >
         New run
       </button>

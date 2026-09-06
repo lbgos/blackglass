@@ -229,4 +229,132 @@ describe("console raw output panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     expect(screen.getByTestId("raw-output-stdout")).toBeTruthy();
   });
+
+  it("shows the explicitly selected older run labeled as selected", async () => {
+    const selected = {
+      run: {
+        id: "run-old",
+        actionId: "action-1",
+        state: "succeeded",
+        terminalKind: "succeeded",
+        terminalReason: null,
+        updatedAt: "2026-08-09T12:00:00.000Z",
+      },
+      stdout: {
+        present: true,
+        artifactId: "artifact-old",
+        sizeBytes: 15,
+        digest:
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        completeness: "complete",
+        truncated: false,
+        content: "exact-old-bytes",
+      },
+      stderr: { present: false, truncated: false, content: "" },
+    };
+    const latest = {
+      ...selected,
+      run: { ...selected.run, id: "run-new" },
+      stdout: { ...selected.stdout, artifactId: "artifact-new", content: "new-bytes" },
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "/api/v1/engagements") return response(engagementList());
+      if (url === "/api/v1/engagements/10000000-0000-4000-8000-000000000001") {
+        return response(engagementDetail());
+      }
+      if (
+        url ===
+        "/api/v1/engagements/10000000-0000-4000-8000-000000000001/services"
+      ) {
+        return response([]);
+      }
+      if (
+        url ===
+        "/api/v1/engagements/10000000-0000-4000-8000-000000000001/runs/run-old/output"
+      ) {
+        return response(selected);
+      }
+      if (
+        url ===
+        "/api/v1/engagements/10000000-0000-4000-8000-000000000001/runs/latest/output"
+      ) {
+        return response(latest);
+      }
+      if (url === "/api/v1/system/status") {
+        return response({ version: 1, overall: "ready", developmentStorage: "ready" });
+      }
+      return response({ code: "invalid_request" }, 400);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await renderAt("/engagements/10000000-0000-4000-8000-000000000001?tab=runs&run=run-old");
+    fireEvent.click(screen.getByRole("tab", { name: "Raw output" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("raw-output-stdout").textContent).toContain("exact-old-bytes");
+    });
+    expect(screen.getByText(/Selected run run-old/)).toBeTruthy();
+    expect(
+      fetchMock.mock.calls.some(([called]) => String(called).endsWith("/runs/latest/output")),
+    ).toBe(false);
+  });
+
+  it("reports an unknown selected run without silently falling back to latest", async () => {
+    const latest = {
+      run: {
+        id: "run-new",
+        actionId: "action-1",
+        state: "succeeded",
+        terminalKind: "succeeded",
+        terminalReason: null,
+        updatedAt: "2026-08-09T12:00:00.000Z",
+      },
+      stdout: {
+        present: true,
+        artifactId: "artifact-new",
+        sizeBytes: 9,
+        digest:
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        completeness: "complete",
+        truncated: false,
+        content: "new-bytes",
+      },
+      stderr: { present: false, truncated: false, content: "" },
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "/api/v1/engagements") return response(engagementList());
+      if (url === "/api/v1/engagements/10000000-0000-4000-8000-000000000001") {
+        return response(engagementDetail());
+      }
+      if (
+        url ===
+        "/api/v1/engagements/10000000-0000-4000-8000-000000000001/services"
+      ) {
+        return response([]);
+      }
+      if (
+        url ===
+        "/api/v1/engagements/10000000-0000-4000-8000-000000000001/runs/run-missing/output"
+      ) {
+        return response({ code: "run_not_found" }, 404);
+      }
+      if (
+        url ===
+        "/api/v1/engagements/10000000-0000-4000-8000-000000000001/runs/latest/output"
+      ) {
+        return response(latest);
+      }
+      if (url === "/api/v1/system/status") {
+        return response({ version: 1, overall: "ready", developmentStorage: "ready" });
+      }
+      return response({ code: "invalid_request" }, 400);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await renderAt("/engagements/10000000-0000-4000-8000-000000000001?tab=surface&run=run-missing");
+    fireEvent.click(screen.getByRole("tab", { name: "Raw output" }));
+    await waitFor(() => {
+      expect(screen.getByText(/The selected run is no longer available/)).toBeTruthy();
+    });
+    expect(
+      fetchMock.mock.calls.some(([called]) => String(called).endsWith("/runs/latest/output")),
+    ).toBe(false);
+  });
 });

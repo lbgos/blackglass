@@ -4,13 +4,18 @@ import { useRouterState } from "@tanstack/react-router";
 
 import {
   NoTerminalRunError,
+  RunNotFoundError,
   selectEngagementIdFromPathname,
+  selectRunIdFromSearch,
   useLatestRunOutputQuery,
+  useRunOutputQuery,
 } from "./run-output-query.js";
 
 export function RawOutputPanel() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const search = useRouterState({ select: (state) => state.location.search });
   const engagementId = selectEngagementIdFromPathname(pathname);
+  const selectedRunId = selectRunIdFromSearch(search);
   if (engagementId === undefined) {
     return (
       <div>
@@ -21,11 +26,24 @@ export function RawOutputPanel() {
       </div>
     );
   }
-  return <RawOutputBody engagementId={engagementId} />;
+  return <RawOutputBody engagementId={engagementId} selectedRunId={selectedRunId} />;
 }
 
-function RawOutputBody({ engagementId }: { engagementId: string }) {
-  const query = useLatestRunOutputQuery(engagementId);
+// Common selected-run view. With no explicit ?run= selection this keeps the
+// existing latest-terminal-run behavior. With a selection it reuses the exact
+// selected-run query (same key the Runs tab uses, so no extra fetch and no
+// duplicated renderer) and labels the source truthfully. An unknown selected
+// run reports unavailable instead of silently falling back to latest.
+function RawOutputBody({
+  engagementId,
+  selectedRunId,
+}: {
+  engagementId: string;
+  selectedRunId: string | undefined;
+}) {
+  const latest = useLatestRunOutputQuery(selectedRunId === undefined ? engagementId : undefined);
+  const selected = useRunOutputQuery(engagementId, selectedRunId);
+  const query = selectedRunId === undefined ? latest : selected;
   const retry = () => void query.refetch();
   const hasData = query.data !== undefined;
 
@@ -35,6 +53,16 @@ function RawOutputBody({ engagementId }: { engagementId: string }) {
         <Skeleton className="h-3 w-40" />
         <Skeleton className="h-24 w-full" />
       </LoadingRegion>
+    );
+  }
+  if (!hasData && selectedRunId !== undefined && query.error instanceof RunNotFoundError) {
+    return (
+      <div>
+        <p className="m-0 text-[13px] font-semibold">Raw output</p>
+        <p className="mt-1 mb-0 text-[13px] text-muted-foreground">
+          The selected run is no longer available. Pick another run from Run history.
+        </p>
+      </div>
     );
   }
   if (!hasData && query.error instanceof NoTerminalRunError) {
@@ -64,15 +92,23 @@ function RawOutputBody({ engagementId }: { engagementId: string }) {
       </LoadingRegion>
     );
   }
-  return <RawOutputContent output={query.data} onRefresh={retry} />;
+  return (
+    <RawOutputContent
+      output={query.data}
+      onRefresh={retry}
+      source={selectedRunId === undefined ? "latest" : "selected"}
+    />
+  );
 }
 
 function RawOutputContent({
   output,
   onRefresh,
+  source,
 }: {
   output: RunOutputResponse;
   onRefresh: () => void;
+  source: "latest" | "selected";
 }) {
   return (
     <div className="grid gap-3">
@@ -80,7 +116,8 @@ function RawOutputContent({
         <p className="m-0 text-[13px] font-semibold">
           Raw output{" "}
           <span className="font-mono text-[11px] font-normal text-muted-foreground">
-            {output.run.id} · {output.run.state}
+            {source === "selected" ? `Selected run ${output.run.id}` : output.run.id} ·{" "}
+            {output.run.state}
           </span>
         </p>
         <Button type="button" variant="quiet" className="h-7 px-2 text-[12px]" onClick={onRefresh}>

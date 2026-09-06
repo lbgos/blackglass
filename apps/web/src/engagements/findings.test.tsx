@@ -139,7 +139,7 @@ describe("engagement findings", () => {
       }),
     );
 
-    await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    await renderWorkspace(`/engagements/${activeEngagement.id}?tab=findings`);
 
     expect(await screen.findByText("No findings yet")).toBeTruthy();
 
@@ -194,7 +194,7 @@ describe("engagement findings", () => {
       }),
     );
 
-    await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    await renderWorkspace(`/engagements/${activeEngagement.id}?tab=findings`);
 
     fireEvent.click(await screen.findByRole("button", { name: "Resolve" }));
     await waitFor(() =>
@@ -236,7 +236,7 @@ describe("engagement findings", () => {
       }),
     );
 
-    await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    await renderWorkspace(`/engagements/${activeEngagement.id}?tab=findings`);
 
     expect(await screen.findByText("Findings unavailable")).toBeTruthy();
   });

@@ -70,6 +70,9 @@ function stubBaseFetch() {
     if (url.endsWith("/runs/latest/output")) {
       return Promise.resolve(response({ code: "no_terminal_run" }, 404));
     }
+    if (url.endsWith("/runs/run-7/output")) {
+      return Promise.resolve(response({ code: "run_not_found" }, 404));
+    }
     if (init?.method !== undefined && init.method !== "GET") {
       return Promise.resolve(response({ code: "invalid_request" }, 400));
     }

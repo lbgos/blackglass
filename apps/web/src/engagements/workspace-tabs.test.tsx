@@ -434,8 +434,7 @@ describe("engagement tabs", () => {
     expect(backEditor.value).toBe("");
   });
 
-  it("sees invalidated report data on revisit through existing hooks", async () => {
-    let stored = "notes-v1";
+  it("sees invalidated report data on revisit through existing hooks", async () => {    let stored = "notes-v1";
     let reportCalls = 0;
     stubFetch((url, init) => {
       if (url.endsWith(`/engagements/${activeEngagement.id}/report`)) {
@@ -483,5 +482,62 @@ describe("engagement tabs", () => {
     fireEvent.click(screen.getByRole("link", { name: "Report" }));
     expect(await screen.findByText(/notes-v2/)).toBeTruthy();
     expect(reportCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("routes New run to Surface and focuses the planner from another tab", async () => {
+    stubFetch((url, init) => {
+      if (init?.method !== undefined && init.method !== "GET") {
+        return response({ code: "invalid_request" }, 400);
+      }
+      return baseStubResponse(url) ?? response({ code: "invalid_request" }, 400);
+    });
+
+    const { router } = await renderTabs(`/engagements/${activeEngagement.id}?tab=runs`);
+    expect(await screen.findByText("No runs yet")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "New run" }));
+    const targets = await screen.findByLabelText("Targets");
+    expect(document.activeElement).toBe(targets);
+    expect((router.state.location.search as Record<string, unknown>)["tab"]).toBe("surface");
+  });
+
+  it("blocks New run on a dirty draft; Stay launches nothing and keeps the draft", async () => {
+    const fetchMock = stubFetch((url, init) => {
+      if (url.endsWith("/notes") && init?.method === "PUT") {
+        return response({
+          engagementId: activeEngagement.id,
+          markdown: "# draft",
+          updatedAt: "2026-08-12T12:01:00.000Z",
+        });
+      }
+      if (init?.method !== undefined && init.method !== "GET") {
+        return response({ code: "invalid_request" }, 400);
+      }
+      return baseStubResponse(url) ?? response({ code: "invalid_request" }, 400);
+    });
+
+    await renderTabs(`/engagements/${activeEngagement.id}?tab=notes`);
+    const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: "# draft" } });
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "New run" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Unsaved notes" });
+    expect((screen.getByLabelText("Markdown") as HTMLTextAreaElement).value).toBe("# draft");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stay" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect((screen.getByLabelText("Markdown") as HTMLTextAreaElement).value).toBe("# draft");
+    const writes = fetchMock.mock.calls.filter((call) => {
+      const init = call[1] as RequestInit | undefined;
+      return init?.method !== undefined && init.method !== "GET";
+    });
+    expect(writes).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "New run" }));
+    const releave = await screen.findByRole("alertdialog", { name: "Unsaved notes" });
+    fireEvent.click(within(releave).getByRole("button", { name: "Leave" }));
+    const targets = await screen.findByLabelText("Targets");
+    expect(document.activeElement).toBe(targets);
   });
 });
