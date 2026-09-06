@@ -35,6 +35,27 @@ function response(payload: unknown, status = 200): Response {
   } as Response;
 }
 
+function notesLeakInStorage(snippets: readonly string[]): string | null {
+  const storages = [window.localStorage, window.sessionStorage];
+  for (const storage of storages) {
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key === null) continue;
+      const lowered = key.toLowerCase();
+      if (lowered.includes("note") || lowered.includes("draft") || lowered.includes("markdown")) {
+        return `storage key ${key}`;
+      }
+      const value = storage.getItem(key) ?? "";
+      for (const snippet of snippets) {
+        if (snippet !== "" && value.includes(snippet)) {
+          return `storage key ${key} contains note content`;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 const testQueryClients = new Set<QueryClient>();
 
 async function renderWorkspace(initialEntry: string) {
@@ -240,7 +261,7 @@ describe("engagement notes", () => {
     expect((screen.getByLabelText("Markdown") as HTMLTextAreaElement).value).toBe("# draft");
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
     expect(puts).toEqual([]);
-    expect(window.localStorage.length).toBe(0);
+    expect(notesLeakInStorage(["# draft"])).toBeNull();
 
     void router.navigate({ to: "/engagements" });
     const releave = await screen.findByRole("alertdialog", { name: "Unsaved notes" });
@@ -279,6 +300,68 @@ describe("engagement notes", () => {
     await screen.findByLabelText("Markdown");
     expect(screen.getByText("Saved")).toBeTruthy();
 
+    await router.navigate({ to: "/engagements" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/engagements"));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("allows navigation after saving and after reverting to saved", async () => {
+    let stored = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/system/status")) return Promise.resolve(response(readyStatus));
+        if (url === "/api/v1/engagements") return Promise.resolve(response([activeEngagement]));
+        if (url === `/api/v1/engagements/${activeEngagement.id}`) {
+          return Promise.resolve(
+            response({ engagement: activeEngagement, activeScopeRevision: null }),
+          );
+        }
+        if (url.endsWith("/services")) return Promise.resolve(response([]));
+        if (url.endsWith("/notes") && (init?.method === undefined || init.method === "GET")) {
+          return Promise.resolve(
+            response({
+              engagementId: activeEngagement.id,
+              markdown: stored,
+              updatedAt: "2026-08-12T12:00:00.000Z",
+            }),
+          );
+        }
+        if (url.endsWith("/notes") && init?.method === "PUT") {
+          const body = JSON.parse(String(init.body)) as { markdown: string };
+          stored = body.markdown;
+          return Promise.resolve(
+            response({
+              engagementId: activeEngagement.id,
+              markdown: stored,
+              updatedAt: "2026-08-12T12:01:00.000Z",
+            }),
+          );
+        }
+        return Promise.resolve(response([]));
+      }),
+    );
+
+    const { router } = await renderWorkspace(`/engagements/${activeEngagement.id}`);
+    const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
+
+    fireEvent.change(editor, { target: { value: "# temp" } });
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    fireEvent.change(editor, { target: { value: "" } });
+    expect(screen.getByText("Saved")).toBeTruthy();
+    await router.navigate({ to: "/engagements" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/engagements"));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    await router.navigate({
+      to: "/engagements/$engagementId",
+      params: { engagementId: activeEngagement.id },
+    });
+    const backEditor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
+    fireEvent.change(backEditor, { target: { value: "# final" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
+    await waitFor(() => expect(screen.getByText("Saved")).toBeTruthy());
     await router.navigate({ to: "/engagements" });
     await waitFor(() => expect(router.state.location.pathname).toBe("/engagements"));
     expect(screen.queryByRole("alertdialog")).toBeNull();
@@ -390,7 +473,7 @@ describe("engagement notes", () => {
     const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
     fireEvent.change(editor, { target: { value: "first" } });
     fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
-    expect(await screen.findByText("Saving")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Saving" })).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText("Markdown"), { target: { value: "second" } });
     expect(resolvePut).toBeDefined();
