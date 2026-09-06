@@ -59,7 +59,7 @@ const testQueryClients = new Set<QueryClient>();
 
 function renderPanel(props: {
   engagementId?: string;
-  selectedRunId?: string;
+  selectedRunId?: string | undefined;
   onSelect?: (runId: string) => void;
 }) {
   const queryClient = createAppQueryClient();
