@@ -9,7 +9,7 @@ import {
   type Server as HttpsServer,
 } from "node:https";
 import { readFileSync } from "node:fs";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import type { TLSSocket } from "node:tls";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -47,6 +47,8 @@ interface LabBehavior {
 
 interface LabServer {
   hits: () => number;
+  connections: () => number;
+  openSockets: () => number;
   lastAuthorization: () => string | undefined;
   lastHostHeader: () => string | undefined;
   lastServername: () => string | undefined;
@@ -103,6 +105,24 @@ function attachHandler(
   respond();
 }
 
+// TCP-level tracking shared by both lab servers: connections proves a client
+// arrived, openSockets proves cleanup independent of afterEach teardown.
+function trackLabConnections(server: HttpServer | HttpsServer): {
+  connections: () => number;
+  openSockets: () => number;
+} {
+  let connections = 0;
+  const open = new Set<Socket>();
+  server.on("connection", (socket: Socket) => {
+    connections += 1;
+    open.add(socket);
+    socket.on("close", () => {
+      open.delete(socket);
+    });
+  });
+  return { connections: () => connections, openSockets: () => open.size };
+}
+
 async function startLabHttpServer(behavior: LabBehavior): Promise<LabServer> {
   const state = {
     hits: 0,
@@ -111,11 +131,14 @@ async function startLabHttpServer(behavior: LabBehavior): Promise<LabServer> {
     servername: undefined as string | undefined,
   };
   const server = createHttpServer((request, response) => attachHandler(request, response, state, behavior));
+  const tracked = trackLabConnections(server);
   labServers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const port = (server.address() as AddressInfo).port;
   return {
     hits: () => state.hits,
+    connections: tracked.connections,
+    openSockets: tracked.openSockets,
     lastAuthorization: () => state.authorization,
     lastHostHeader: () => state.hostHeader,
     lastServername: () => state.servername,
@@ -138,11 +161,14 @@ async function startLabHttpsServer(behavior: LabBehavior): Promise<LabServer> {
     },
     (request, response) => attachHandler(request, response, state, behavior),
   );
+  const tracked = trackLabConnections(server);
   labServers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const port = (server.address() as AddressInfo).port;
   return {
     hits: () => state.hits,
+    connections: tracked.connections,
+    openSockets: tracked.openSockets,
     lastAuthorization: () => state.authorization,
     lastHostHeader: () => state.hostHeader,
     lastServername: () => state.servername,
@@ -458,14 +484,17 @@ describe("advisor transport success paths", () => {
       headers: { "content-type": "application/json" },
       body: completionBody("must not arrive"),
     });
+    // mismatch.localhost classifies private, so injected loopback DNS passes
+    // policy and a real handshake is attempted against a cert lacking the
+    // name: TCP arrives, HTTP is never served, verification rejects.
     const result = await postAdvisorChatCompletion(
       baseInput({
-        baseUrl: `https://mismatch.invalid:${lab.port()}/v1`,
-        publicOptIn: true,
+        baseUrl: `https://mismatch.localhost:${lab.port()}/v1`,
       }),
       { lookupAll: loopbackDns(), requestFn: withTestCa() },
     );
     expect(result).toEqual({ ok: false, error: { code: "tls_error" } });
+    expect(lab.connections()).toBeGreaterThanOrEqual(1);
     expect(lab.hits()).toBe(0);
   });
 });
@@ -632,6 +661,17 @@ describe("advisor transport budgets and failures", () => {
     }
   });
 
+  it("maps a synchronously throwing factory to connection_failed", async () => {
+    const throwing: AdvisorTransportRequestFn = () => {
+      throw new Error("synthetic sync boom");
+    };
+    const result = await postAdvisorChatCompletion(baseInput({ baseUrl: "http://127.0.0.1:1/v1" }), {
+      requestFn: throwing,
+    });
+    expect(result).toEqual({ ok: false, error: { code: "connection_failed" } });
+    expect(JSON.stringify(result)).not.toContain("synthetic sync boom");
+  });
+
   it("bounds an injected factory that ignores abort and timeout", async () => {
     const hanging: AdvisorTransportRequestFn = () => new Promise(() => {});
     const controller = new AbortController();
@@ -661,6 +701,12 @@ describe("advisor transport budgets and failures", () => {
     controller.abort();
     expect(await pending).toEqual({ ok: false, error: { code: "cancelled" } });
     expect(lab.hits()).toBe(1);
+    // The client socket must close promptly, not linger for afterEach teardown.
+    const startedAt = Date.now();
+    while (lab.openSockets() > 0 && Date.now() - startedAt < 2_000) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(lab.openSockets()).toBe(0);
   });
 
   it("reports a socket destroyed mid-body as a connection failure", async () => {

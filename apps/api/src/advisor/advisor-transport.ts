@@ -581,18 +581,25 @@ export async function postAdvisorChatCompletion(
   // attempt is observed so it never surfaces as an unhandled rejection;
   // the default factory additionally destroys its socket on abort.
   // Caller abort reports cancelled, budget expiry reports provider_timeout.
-  const attempt = requestFn({
-    secure: endpoint.secure,
-    address: target,
-    port: endpoint.port,
-    path: endpoint.path,
-    servername: endpoint.hostname,
-    hostHeader: endpoint.hostHeader,
-    headers,
-    body,
-    timeoutMs: budgetMs,
-    signal: caller,
-  });
+  // A factory throwing synchronously must map like any request failure,
+  // never escape the result contract.
+  let attempt: Promise<AdvisorTransportRawResponse>;
+  try {
+    attempt = requestFn({
+      secure: endpoint.secure,
+      address: target,
+      port: endpoint.port,
+      path: endpoint.path,
+      servername: endpoint.hostname,
+      hostHeader: endpoint.hostHeader,
+      headers,
+      body,
+      timeoutMs: budgetMs,
+      signal: caller,
+    });
+  } catch {
+    return { ok: false, error: { code: "connection_failed" } };
+  }
   let raw: AdvisorTransportRawResponse;
   try {
     const raced = await raceWithDeadline(attempt, { caller, timeout });
