@@ -115,11 +115,23 @@ describe("advisor explanation output", () => {
         uncertainty: "Excerpts do not show the service version.",
       }).abstained,
     ).toBe(true);
+    expect(
+      AdvisorExplanationSchema.parse({
+        profile: "advisor-explanation-v1",
+        answer: "Partial read: only the banner is visible.",
+        citations: [],
+        abstained: true,
+        uncertainty: "Version cannot be determined from the banner alone.",
+      }).answer,
+    ).toContain("Partial read");
   });
 
   it("rejects blank answers, blank abstention uncertainty, and bad citations", () => {
     expect(
       AdvisorExplanationSchema.safeParse({ ...validExplanation(), answer: "  " }).success,
+    ).toBe(false);
+    expect(
+      AdvisorExplanationSchema.safeParse({ ...validExplanation(), citations: [] }).success,
     ).toBe(false);
     expect(
       AdvisorExplanationSchema.safeParse({
@@ -170,6 +182,21 @@ describe("advisor evidence blocks and partitioned citations", () => {
           text: "evidence",
         })),
       ).success,
+    ).toBe(false);
+  });
+
+  it("rejects delimiter-breaking keys and duplicate block ids", () => {
+    for (const id of ["has space", 'a"b', "a<b", "a>b", "line\nbreak"]) {
+      expect(
+        AdvisorEvidenceBlockSchema.safeParse({ kind: "artifact", id, text: "evidence" })
+          .success,
+      ).toBe(false);
+    }
+    expect(
+      AdvisorEvidenceBlockListSchema.safeParse([
+        { kind: "artifact", id: "dup-1", text: "first" },
+        { kind: "service", id: "dup-1", text: "conflicting kind" },
+      ]).success,
     ).toBe(false);
   });
 

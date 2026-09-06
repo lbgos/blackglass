@@ -10,6 +10,10 @@ import type {
  * engagement ownership of the supplied set is verified by the route slice
  * before any model call. Anything unmatched is invalid and must render as
  * inert plain text, never as a link or trust signal.
+ *
+ * Supplied ids are unique per turn by contract (AdvisorEvidenceBlockListSchema
+ * rejects duplicates), so there is no kind conflict to resolve. The first-wins
+ * map below is deterministic defense in depth for pre-validated inputs only.
  */
 
 export interface AdvisorCitationPartition {

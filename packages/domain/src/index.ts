@@ -51,6 +51,7 @@ export {
   quoteAdvisorEvidenceBlock,
   redactAdvisorText,
   stripAdvisorUrlUserinfo,
+  truncateUtf8Bytes,
   type AdvisorRedaction,
 } from "./advisor-redact.js";
 export {
@@ -60,10 +61,11 @@ export {
 export {
   ADVISOR_EXPLANATION_PROMPT_VERSION,
   ADVISOR_EXPLANATION_SYSTEM_PROMPT,
-  ADVISOR_HISTORY_ENTRY_MAX_CHARS,
+  ADVISOR_HISTORY_ENTRY_MAX_BYTES,
   ADVISOR_HISTORY_MAX_TURNS,
   buildAdvisorExplanationPrompt,
   type AdvisorExplanationPrompt,
   type AdvisorExplanationPromptInput,
   type AdvisorHistoryTurn,
+  type AdvisorPromptBuildResult,
 } from "./advisor-explanation.js";

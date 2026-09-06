@@ -75,12 +75,25 @@ export const AdvisorEvidenceKindSchema = z.enum(["artifact", "finding", "service
 
 export type AdvisorEvidenceKind = z.infer<typeof AdvisorEvidenceKindSchema>;
 
+// Strict evidence key charset shared by supplied ids and block ids. Artifact
+// and finding ids reuse their opaque/uuid schemas at selection time; this key
+// also covers service keys (address:port) and probe URLs. Angle brackets,
+// quotes, backslashes, and whitespace are rejected so keys cannot break out
+// of quoted prompt delimiters.
+export const AdvisorEvidenceKeySchema = z
+  .string()
+  .min(1)
+  .max(ADVISOR_CITATION_ID_MAX_CHARS)
+  .regex(/^[A-Za-z0-9\-_.~:/?#[\]@!$&'()*+,;=%]+$/, {
+    message: "must be a bounded evidence key without spaces, quotes, or angle brackets",
+  });
+
 // One evidence item supplied to the model for this turn. Engagement ownership
 // of these ids is verified by the route slice before any model call; these
 // contracts only validate shape and per-turn caps.
 export const AdvisorSuppliedEvidenceIdSchema = z.strictObject({
   kind: AdvisorEvidenceKindSchema,
-  id: z.string().min(1).max(ADVISOR_CITATION_ID_MAX_CHARS),
+  id: AdvisorEvidenceKeySchema,
 });
 
 export type AdvisorSuppliedEvidenceId = z.infer<typeof AdvisorSuppliedEvidenceIdSchema>;
@@ -88,7 +101,7 @@ export type AdvisorSuppliedEvidenceId = z.infer<typeof AdvisorSuppliedEvidenceId
 // One bounded evidence text block quoted as untrusted data in the prompt.
 export const AdvisorEvidenceBlockSchema = z.strictObject({
   kind: AdvisorEvidenceKindSchema,
-  id: z.string().min(1).max(ADVISOR_CITATION_ID_MAX_CHARS),
+  id: AdvisorEvidenceKeySchema,
   text: z
     .string()
     .refine((value) => utf8ByteLength(value) <= ADVISOR_EVIDENCE_TEXT_MAX_BYTES, {
@@ -98,9 +111,16 @@ export const AdvisorEvidenceBlockSchema = z.strictObject({
 
 export type AdvisorEvidenceBlock = z.infer<typeof AdvisorEvidenceBlockSchema>;
 
+// Block ids must be unique per turn so citation partitioning has no
+// first-wins ambiguity: the same id can never carry conflicting kinds.
 export const AdvisorEvidenceBlockListSchema = z
   .array(AdvisorEvidenceBlockSchema)
-  .max(ADVISOR_EVIDENCE_BLOCKS_MAX);
+  .max(ADVISOR_EVIDENCE_BLOCKS_MAX)
+  .superRefine((blocks, context) => {
+    if (!hasUniqueValues(blocks.map((block) => block.id))) {
+      context.addIssue({ code: "custom", message: "duplicate evidence id" });
+    }
+  });
 
 const UniqueCitationIdsSchema = z
   .array(z.string().min(1).max(ADVISOR_CITATION_ID_MAX_CHARS))
@@ -113,8 +133,10 @@ const UniqueCitationIdsSchema = z
 
 // Model output for a read-only explanation. Citations must name supplied
 // evidence only; the partition helper marks anything else invalid and inert.
-// A non-abstained answer must be non-blank; an abstention must state what is
-// uncertain instead of answering.
+// Semantics: a grounded (non-abstained) answer must be non-blank and carry at
+// least one citation. An abstention states what is missing in uncertainty
+// (required, non-blank) and may additionally keep a partial answer explaining
+// the gap; it must not present conclusions as grounded.
 export const AdvisorExplanationSchema = z
   .strictObject({
     profile: z.literal(ADVISOR_EXPLANATION_PROFILE),
@@ -137,6 +159,13 @@ export const AdvisorExplanationSchema = z
         code: "custom",
         message: "answer must be non-blank unless abstained",
         path: ["answer"],
+      });
+    }
+    if (!value.abstained && value.citations.length === 0) {
+      context.addIssue({
+        code: "custom",
+        message: "grounded answers must cite at least one supplied evidence id",
+        path: ["citations"],
       });
     }
     if (value.abstained && value.uncertainty.trim().length === 0) {
