@@ -264,6 +264,9 @@ describe("engagement query routes", () => {
         getEngagement() {
           throw new Error(marker);
         },
+        getFindingForEngagement() {
+          throw new Error(marker);
+        },
         listEngagements() {
           throw new Error(marker);
         },
