@@ -14,6 +14,8 @@ function response(payload: unknown, status = 200): Response {
   } as Response;
 }
 
+const ENGAGEMENT_ID = "10000000-0000-4000-8000-000000000001";
+
 const pendingTurn = {
   id: "10000000-0000-4000-8000-000000000001",
   engagementId: "10000000-0000-4000-8000-000000000002",
@@ -37,7 +39,12 @@ afterEach(() => {
 
 describe("advisor turn history client", () => {
   it("uses a stable key and forwards cursor bounds verbatim", async () => {
-    expect(advisorTurnsQueryKey("eng-1")).toEqual(["engagements", "eng-1", "advisor", "turns"]);
+    expect(advisorTurnsQueryKey(ENGAGEMENT_ID)).toEqual([
+      "engagements",
+      ENGAGEMENT_ID,
+      "advisor",
+      "turns",
+    ]);
     const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
       expect(init?.signal).toBeInstanceOf(AbortSignal);
       return Promise.resolve(
@@ -45,15 +52,19 @@ describe("advisor turn history client", () => {
       );
     });
     vi.stubGlobal("fetch", fetchMock);
-    await fetchAdvisorTurnsPage("eng-1", {
-      limit: 10,
-      before: { createdAt: "2026-01-02T00:00:00.000Z", id: "turn-9" },
-    });
+    await fetchAdvisorTurnsPage(
+      ENGAGEMENT_ID,
+      {
+        limit: 10,
+        before: { createdAt: "2026-01-02T00:00:00.000Z", id: "turn-9" },
+      },
+      new AbortController().signal,
+    );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url] = fetchMock.mock.calls[0] ?? [];
     expect(typeof url).toBe("string");
     const parsed = new URL(String(url), "http://localhost");
-    expect(parsed.pathname).toBe("/api/v1/engagements/eng-1/advisor/turns");
+    expect(parsed.pathname).toBe(`/api/v1/engagements/${ENGAGEMENT_ID}/advisor/turns`);
     expect(parsed.searchParams.get("limit")).toBe("10");
     expect(parsed.searchParams.get("beforeCreatedAt")).toBe("2026-01-02T00:00:00.000Z");
     expect(parsed.searchParams.get("beforeId")).toBe("turn-9");
@@ -61,7 +72,7 @@ describe("advisor turn history client", () => {
 
   it("rejects malformed history payloads", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(response({ turns: [{}] }))));
-    await expect(fetchAdvisorTurnsPage("eng-1")).rejects.toThrow(
+    await expect(fetchAdvisorTurnsPage(ENGAGEMENT_ID)).rejects.toThrow(
       "The advisor history request failed.",
     );
   });
@@ -83,7 +94,7 @@ describe("advisor turn request client", () => {
       return Promise.resolve(response(pendingTurn));
     });
     vi.stubGlobal("fetch", fetchMock);
-    const turn = await requestAdvisorTurn("eng-1", input, "test-key-000000000000000001");
+    const turn = await requestAdvisorTurn(ENGAGEMENT_ID, input, "test-key-000000000000000001");
     expect(turn).toMatchObject({ id: pendingTurn.id, status: "pending" });
     const [, init] = fetchMock.mock.calls[0] ?? [];
     expect(JSON.parse(String((init as RequestInit).body))).toMatchObject({
@@ -96,7 +107,7 @@ describe("advisor turn request client", () => {
       "fetch",
       vi.fn(() => Promise.resolve(response({ code: "turn_in_progress" }, 409))),
     );
-    const error = await requestAdvisorTurn("eng-1", input, "test-key-000000000000000002").catch(
+    const error = await requestAdvisorTurn(ENGAGEMENT_ID, input, "test-key-000000000000000002").catch(
       (failure: unknown) => failure,
     );
     expect(error).toBeInstanceOf(Error);
@@ -108,7 +119,7 @@ describe("advisor turn request client", () => {
       "fetch",
       vi.fn(() => Promise.reject(new TypeError("network down"))),
     );
-    const error = await requestAdvisorTurn("eng-1", input, "test-key-000000000000000003").catch(
+    const error = await requestAdvisorTurn(ENGAGEMENT_ID, input, "test-key-000000000000000003").catch(
       (failure: unknown) => failure,
     );
     expect((error as { code?: unknown }).code).toBe("request_failed");

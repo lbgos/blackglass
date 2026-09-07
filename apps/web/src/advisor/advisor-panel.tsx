@@ -474,7 +474,10 @@ export function AdvisorPanel({
               Previous explanations could not be loaded.
             </p>
           ) : null}
-          {history.data !== undefined && history.isError ? (
+          {/* Background refetch failure with cached data. Suppressed when
+              the failure came from fetchNextPage so only the
+              operation-specific action below shows. */}
+          {history.data !== undefined && history.isError && !history.isFetchNextPageError ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <p className="m-0 text-[12px] text-muted-foreground" role="alert">
                 Showing saved explanations; refresh failed.

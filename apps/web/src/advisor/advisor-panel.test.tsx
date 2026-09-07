@@ -8,8 +8,9 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 
 import { AdvisorPanel } from "./advisor-panel.js";
 import { createAppQueryClient } from "../query-client.js";
@@ -152,15 +153,19 @@ async function renderPanel(
       throw new Error(`Unexpected fetch: ${String(url)}`);
     }),
   );
-  // Mutable archived flag so a test can flip the engagement to archived
-  // and rerender the same mounted panel without losing composer state.
-  const panelProps = { archived: options?.archived ?? false };
+  // State-driven archived flag so a test can flip the engagement to
+  // archived and re-render the same mounted panel without losing
+  // composer state. A plain mutation plus root rerender does not reach
+  // the route component because the router reuses the matched element.
+  let applyArchived: ((value: boolean) => void) | undefined;
   function PanelRoute() {
+    const [archived, setArchived] = useState(options?.archived ?? false);
+    applyArchived = setArchived;
     return (
       <QueryClientProvider client={createAppQueryClient()}>
         <AdvisorPanel
           engagementId={ENGAGEMENT_ID}
-          archived={panelProps.archived}
+          archived={archived}
           excerpts={options?.excerpts ?? ["artifact-1"]}
           findingIds={options?.findingIds ?? []}
           onExcerptsChange={() => {}}
@@ -188,8 +193,9 @@ async function renderPanel(
     router,
     unmount: view.unmount,
     rerenderArchived: (archived: boolean) => {
-      panelProps.archived = archived;
-      view.rerender(<RouterProvider router={router} />);
+      act(() => {
+        applyArchived?.(archived);
+      });
     },
   };
 }
@@ -312,7 +318,7 @@ describe("advisor panel states", () => {
       archived: true,
       history: [succeededTurn()],
     });
-    await screen.findByText("Archived engagements are read-only.");
+    await screen.findByText(/Archived engagements are read-only/);
     expect((screen.getByLabelText(/Question/) as HTMLTextAreaElement).disabled).toBe(true);
     expect(askButton().disabled).toBe(true);
     await screen.findByText("The banner shows HTTP.");
@@ -358,7 +364,7 @@ describe("advisor panel states", () => {
     const { posted } = await renderPanel(() => pendingTurn(), {
       findings: [testFinding(FINDING_ID, "Open banner")],
     });
-    fireEvent.click(screen.getByRole("checkbox", { name: /Open banner/ }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: /Open banner/ }));
     await askQuestion("What does this show?");
     await waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]?.body).toMatchObject({
@@ -444,17 +450,17 @@ describe("advisor panel states", () => {
         if (method === "GET" && url.includes("/advisor/turns")) gets.push(url);
       },
     });
-    // Faithful timer registry: clearInterval really unregisters, so a dead
-    // callback cannot be revived by calling it manually.
+    // Faithful timer registry: clearInterval really unregisters. The
+    // helper below always targets the single live timer instead of a
+    // stale captured id, and size is only asserted outside waitFor
+    // because waitFor itself parks a transient interval while waiting.
     let nextTimerId = 1;
     const liveTimers = new Map<number, () => void>();
-    const registeredIds: number[] = [];
     const setIntervalSpy = vi.spyOn(window, "setInterval").mockImplementation(
       ((callback: () => void): number => {
         const id = nextTimerId;
         nextTimerId += 1;
         liveTimers.set(id, callback);
-        registeredIds.push(id);
         return id;
       }) as unknown as typeof window.setInterval,
     );
@@ -463,36 +469,41 @@ describe("advisor panel states", () => {
         if (id !== undefined) liveTimers.delete(id);
       }) as unknown as typeof window.clearInterval,
     );
+    function soleLiveTimer(): number {
+      const ids = Array.from(liveTimers.keys());
+      expect(ids).toHaveLength(1);
+      const id = ids[0];
+      if (id === undefined) throw new Error("polling interval was not scheduled");
+      return id;
+    }
     try {
       await askQuestion("First question?");
       await screen.findByText("Running…");
-      expect(liveTimers.size).toBe(1);
-      const firstId = registeredIds[0];
-      if (firstId === undefined) throw new Error("polling interval was not scheduled");
+      const firstId = soleLiveTimer();
       const baseline = gets.length;
       for (let round = 0; round < 12; round += 1) {
-        const tick = liveTimers.get(firstId);
+        const tick = liveTimers.get(soleLiveTimer());
         if (tick === undefined) throw new Error("polling interval died before exhaustion");
         tick();
         await waitFor(() => expect(gets.length).toBe(baseline + round + 1));
       }
       // Exhaustion self-clears: the timer unregisters and stops refetching.
-      const lastTick = liveTimers.get(firstId);
+      const lastTick = liveTimers.get(soleLiveTimer());
       if (lastTick === undefined) throw new Error("polling interval died before exhaustion");
       lastTick();
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(liveTimers.has(firstId)).toBe(false);
+      expect(liveTimers.size).toBe(0);
       expect(gets.length).toBe(baseline + 12);
       // A distinct new owned attempt registers a fresh timer with its own
       // budget while the old pending turn is still visible.
       fireEvent.change(questionBox(), { target: { value: "Second question?" } });
       fireEvent.click(button("New attempt"));
       await waitFor(() => expect(posted).toHaveLength(2));
-      await waitFor(() => expect(liveTimers.size).toBe(1));
-      const secondId = registeredIds[registeredIds.length - 1];
-      if (secondId === undefined) throw new Error("replacement interval was not scheduled");
-      expect(secondId).not.toBe(firstId);
       await waitFor(() => expect(gets.length).toBeGreaterThan(baseline + 12));
+      expect(liveTimers.size).toBe(1);
+      const secondId = soleLiveTimer();
+      expect(secondId).not.toBe(firstId);
       const resumed = gets.length;
       const restart = liveTimers.get(secondId);
       if (restart === undefined) throw new Error("replacement interval died immediately");
