@@ -1250,6 +1250,91 @@ export const findings = sqliteTable(
   ],
 );
 
+// Advisor explanation turns (P3a storage/reservation only). No raw provider
+// payload, no mode, no free-form audit: bounded redacted question, derived
+// terminal output or a bounded safe error code, supplied evidence ids, and
+// minimal metadata. Rows are append-only; terminal states never change.
+export const advisorTurns = sqliteTable(
+  "advisor_turns",
+  {
+    id: text("id").primaryKey(),
+    contractVersion: integer("contract_version").notNull(),
+    engagementId: text("engagement_id")
+      .notNull()
+      .references(() => engagements.id, { onDelete: "restrict" }),
+    status: text("status", {
+      enum: ["pending", "succeeded", "parse_error", "provider_error", "cancelled", "expired"],
+    }).notNull(),
+    question: text("question").notNull(),
+    answer: text("answer").notNull(),
+    uncertainty: text("uncertainty").notNull(),
+    citationsJson: text("citations_json").notNull(),
+    suppliedIdsJson: text("supplied_ids_json").notNull(),
+    redactions: integer("redactions").notNull(),
+    modelId: text("model_id").notNull(),
+    errorCode: text("error_code"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check("advisor_turn_contract_version", sql`${table.contractVersion} = 1`),
+    check(
+      "advisor_turn_status",
+      sql`${table.status} in ('pending', 'succeeded', 'parse_error', 'provider_error', 'cancelled', 'expired')`,
+    ),
+    check(
+      "advisor_turn_question_bytes",
+      sql`length(cast(${table.question} as blob)) between 1 and 2000`,
+    ),
+    check(
+      "advisor_turn_answer_bytes",
+      sql`length(cast(${table.answer} as blob)) <= 8000`,
+    ),
+    check(
+      "advisor_turn_uncertainty_bytes",
+      sql`length(cast(${table.uncertainty} as blob)) <= 2000`,
+    ),
+    check(
+      "advisor_turn_citations_json",
+      sql`json_valid(${table.citationsJson}) and length(cast(${table.citationsJson} as blob)) <= 8192`,
+    ),
+    check(
+      "advisor_turn_supplied_ids_json",
+      sql`json_valid(${table.suppliedIdsJson}) and length(cast(${table.suppliedIdsJson} as blob)) <= 8192`,
+    ),
+    check("advisor_turn_redactions", sql`${table.redactions} >= 0`),
+    check(
+      "advisor_turn_model_id",
+      sql`length(${table.modelId}) between 1 and 128`,
+    ),
+    check(
+      "advisor_turn_error_code",
+      sql`${table.errorCode} is null or ${table.errorCode} in ('provider_timeout', 'provider_unreachable', 'provider_response_too_large', 'provider_redirect_rejected', 'provider_parse_error', 'context_too_large')`,
+    ),
+    check(
+      "advisor_turn_idempotency_key",
+      sql`length(${table.idempotencyKey}) between 22 and 128 and ${table.idempotencyKey} not glob '*[^ -~]*'`,
+    ),
+    check(
+      "advisor_turn_request_digest",
+      sql`length(${table.requestDigest}) = 71 and ${table.requestDigest} glob 'sha256:[0-9a-f]*' and ${table.requestDigest} not glob 'sha256:*[^0-9a-f]*'`,
+    ),
+    check("advisor_turn_created_at", sql`length(${table.createdAt}) >= 20`),
+    check("advisor_turn_updated_at", sql`length(${table.updatedAt}) >= 20`),
+    uniqueIndex("advisor_turn_engagement_key_unique").on(
+      table.engagementId,
+      table.idempotencyKey,
+    ),
+    index("advisor_turn_engagement_created_idx").on(
+      table.engagementId,
+      table.createdAt,
+      table.id,
+    ),
+  ],
+);
+
 export const settings = sqliteTable(
   "settings",
   {
@@ -1280,4 +1365,5 @@ export type NmapServiceRow = typeof nmapServices.$inferSelect;
 export type HttpProbeResultRow = typeof httpProbeResults.$inferSelect;
 export type FfufResultRow = typeof ffufResults.$inferSelect;
 export type FindingRow = typeof findings.$inferSelect;
+export type AdvisorTurnRow = typeof advisorTurns.$inferSelect;
 export type SettingsRow = typeof settings.$inferSelect;

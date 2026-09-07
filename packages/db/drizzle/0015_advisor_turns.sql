@@ -1,0 +1,36 @@
+CREATE TABLE `advisor_turns` (
+	`id` text PRIMARY KEY NOT NULL,
+	`contract_version` integer NOT NULL,
+	`engagement_id` text NOT NULL,
+	`status` text NOT NULL,
+	`question` text NOT NULL,
+	`answer` text NOT NULL,
+	`uncertainty` text NOT NULL,
+	`citations_json` text NOT NULL,
+	`supplied_ids_json` text NOT NULL,
+	`redactions` integer NOT NULL,
+	`model_id` text NOT NULL,
+	`error_code` text,
+	`idempotency_key` text NOT NULL,
+	`request_digest` text NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`engagement_id`) REFERENCES `engagements`(`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "advisor_turn_contract_version" CHECK("advisor_turns"."contract_version" = 1),
+	CONSTRAINT "advisor_turn_status" CHECK("advisor_turns"."status" in ('pending', 'succeeded', 'parse_error', 'provider_error', 'cancelled', 'expired')),
+	CONSTRAINT "advisor_turn_question_bytes" CHECK(length(cast("advisor_turns"."question" as blob)) between 1 and 2000),
+	CONSTRAINT "advisor_turn_answer_bytes" CHECK(length(cast("advisor_turns"."answer" as blob)) <= 8000),
+	CONSTRAINT "advisor_turn_uncertainty_bytes" CHECK(length(cast("advisor_turns"."uncertainty" as blob)) <= 2000),
+	CONSTRAINT "advisor_turn_citations_json" CHECK(json_valid("advisor_turns"."citations_json") and length(cast("advisor_turns"."citations_json" as blob)) <= 8192),
+	CONSTRAINT "advisor_turn_supplied_ids_json" CHECK(json_valid("advisor_turns"."supplied_ids_json") and length(cast("advisor_turns"."supplied_ids_json" as blob)) <= 8192),
+	CONSTRAINT "advisor_turn_redactions" CHECK("advisor_turns"."redactions" >= 0),
+	CONSTRAINT "advisor_turn_model_id" CHECK(length("advisor_turns"."model_id") between 1 and 128),
+	CONSTRAINT "advisor_turn_error_code" CHECK("advisor_turns"."error_code" is null or "advisor_turns"."error_code" in ('provider_timeout', 'provider_unreachable', 'provider_response_too_large', 'provider_redirect_rejected', 'provider_parse_error', 'context_too_large')),
+	CONSTRAINT "advisor_turn_idempotency_key" CHECK(length("advisor_turns"."idempotency_key") between 22 and 128 and "advisor_turns"."idempotency_key" not glob '*[^ -~]*'),
+	CONSTRAINT "advisor_turn_request_digest" CHECK(length("advisor_turns"."request_digest") = 71 and "advisor_turns"."request_digest" glob 'sha256:[0-9a-f]*' and "advisor_turns"."request_digest" not glob 'sha256:*[^0-9a-f]*'),
+	CONSTRAINT "advisor_turn_created_at" CHECK(length("advisor_turns"."created_at") >= 20),
+	CONSTRAINT "advisor_turn_updated_at" CHECK(length("advisor_turns"."updated_at") >= 20)
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `advisor_turn_engagement_key_unique` ON `advisor_turns` (`engagement_id`,`idempotency_key`);--> statement-breakpoint
+CREATE INDEX `advisor_turn_engagement_created_idx` ON `advisor_turns` (`engagement_id`,`created_at`,`id`);
