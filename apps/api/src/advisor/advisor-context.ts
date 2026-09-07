@@ -1,86 +1,42 @@
 import {
   CreateAdvisorExplanationRequestSchema,
   type AdvisorSuppliedEvidenceId,
-  type Finding,
 } from "@blackglass/contracts";
-
+import type { EngagementRepository, EvidenceGrantRepository } from "@blackglass/db";
 import {
   ADVISOR_HISTORY_ENTRY_MAX_BYTES,
   ADVISOR_HISTORY_MAX_TURNS,
+  advisorUtf8ByteLength,
   buildAdvisorExplanationPrompt,
+  truncateUtf8Bytes,
   type AdvisorEvidenceBlock,
   type AdvisorExplanationPrompt,
   type AdvisorHistoryTurn,
-} from "./advisor-explanation.js";
-import { advisorUtf8ByteLength, truncateUtf8Bytes } from "./advisor-redact.js";
+} from "@blackglass/domain";
+
+import type { EvidenceStore } from "../evidence/evidence-store.js";
 
 /**
- * Evidence context assembly for read-only explanations. Lives here (not in
- * apps/api) because only this package may call the P1 prompt builder
- * without a new dependency, and frozen CI forbids lockfile changes.
- *
- * Narrow structural dependencies, satisfied by the concrete repositories
- * without importing them (exact route-slice Picks: `Pick<
- * EvidenceGrantRepository, "publishedArtifactForEngagement">`, `Pick<
- * EngagementRepository, "getEngagement" | "getFindingForEngagement">`,
- * `Pick<EvidenceStore, "verifiedExcerpt">`):
- *
- * - membership comes from per-ID scoped lookups that already enforce BOTH
- *   run and action engagement matches; unknown and foreign ids are
- *   identically absent, so no existence oracle exists;
- * - every requested id resolves before ANY store read, so a foreign id
- *   anywhere in the selection means zero bytes leave the store;
- * - success carries only the redacted prompt, validated supplied ids, and
- *   safe bounded metadata, never raw blocks, bytes, questions, or history.
+ * Evidence context assembly for read-only explanations. Orchestrates
+ * repository and store reads, so it lives in the API layer over narrow
+ * Picks of the production types; the domain package keeps only pure
+ * rules. Membership comes from per-ID scoped lookups that already
+ * enforce BOTH run and action engagement matches; unknown and foreign
+ * ids are identically absent, so no existence oracle exists. Every
+ * requested id resolves before ANY store read, so a foreign id anywhere
+ * in the selection means zero bytes leave the store. Success carries
+ * only the redacted prompt, validated supplied ids, and safe bounded
+ * metadata, never raw blocks, bytes, questions, or history.
  */
 
 export const ADVISOR_EXCERPT_MAX_BYTES = 4_096 as const;
 export const ADVISOR_FINDING_TEXT_MAX_BYTES = 2_000 as const;
 export const ADVISOR_HISTORY_TURNS_MAX = ADVISOR_HISTORY_MAX_TURNS;
 
-export interface AdvisorContextArtifactRecord {
-  readonly artifactId: string;
-  readonly sizeBytes: number;
-  readonly digest: string;
-}
-
-export interface AdvisorContextExcerptReady {
-  readonly status: "ready";
-  readonly totalBytes: number;
-  readonly truncated: boolean;
-  readonly content: Uint8Array;
-}
-
-export type AdvisorContextExcerptResult =
-  | AdvisorContextExcerptReady
-  | { readonly status: "missing" }
-  | { readonly status: "corrupt"; readonly code: string };
-
-type RepositoryFailure = { readonly ok: false; readonly error: { readonly code: string } };
-
 export interface AdvisorContextDeps {
-  readonly engagements: {
-    getEngagement(engagementId: string):
-      | { readonly ok: true; readonly value: unknown }
-      | RepositoryFailure;
-    getFindingForEngagement(engagementId: string, findingId: string):
-      | { readonly ok: true; readonly value: Pick<Finding, "id" | "title" | "body"> }
-      | RepositoryFailure;
-  };
-  readonly artifacts: {
-    publishedArtifactForEngagement(input: {
-      readonly engagementId: string;
-      readonly artifactId: string;
-    }): AdvisorContextArtifactRecord | undefined;
-  };
-  readonly excerpts: {
-    verifiedExcerpt(input: {
-      readonly artifactId: string;
-      readonly expectedSizeBytes: number;
-      readonly expectedDigest: string;
-      readonly maxBytes: number;
-    }): Promise<AdvisorContextExcerptResult>;
-  };
+  readonly engagements: Pick<EngagementRepository, "getEngagement" | "getFindingForEngagement">;
+  readonly artifacts: Pick<EvidenceGrantRepository, "publishedArtifactForEngagement">;
+  readonly excerpts: Pick<EvidenceStore, "verifiedExcerpt">;
 }
 
 export interface AssembleAdvisorContextInput {
@@ -180,13 +136,13 @@ export async function assembleAdvisorContext(
 
     // Resolve every requested id before any store read: a single unknown or
     // foreign id anywhere fails the whole assembly with zero bytes read.
-    const records: AdvisorContextArtifactRecord[] = [];
+    const records = [];
     for (const artifactId of excerptArtifactIds) {
       const record = deps.artifacts.publishedArtifactForEngagement({ engagementId, artifactId });
       if (record === undefined) return failed("unknown_artifact");
       records.push(record);
     }
-    const findings: Pick<Finding, "id" | "title" | "body">[] = [];
+    const findings = [];
     for (const findingId of findingIds) {
       const found = deps.engagements.getFindingForEngagement(engagementId, findingId);
       if (!found.ok) {

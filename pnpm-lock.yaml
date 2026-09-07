@@ -16,6 +16,9 @@ importers:
       '@blackglass/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@blackglass/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@blackglass/evidence-native':
         specifier: workspace:*
         version: link:../../packages/evidence-native
