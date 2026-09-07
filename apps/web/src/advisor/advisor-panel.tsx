@@ -99,6 +99,7 @@ export function AdvisorPanel({
   const [question, setQuestion] = useState("");
   const [lastAttempt, setLastAttempt] = useState<Attempt | null>(null);
   const [lastError, setLastError] = useState<AdvisorTurnRequestError | null>(null);
+  const [pollCycle, setPollCycle] = useState(0);
   const keyRef = useRef<{ key: string; fingerprint: string } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
@@ -134,24 +135,19 @@ export function AdvisorPanel({
     };
   }, []);
 
-  useEffect(() => {
-    pollRounds.current = 0;
-  }, [engagementId]);
-
   const turns = history.data?.pages.flatMap((page) => page.turns) ?? [];
   const visiblePending = turns.some((turn) => turn.status === "pending");
 
   // Bounded reconciliation for visible pending turns: refetch history on
   // an interval, stop after a finite number of rounds. Never re-POSTs.
-  // A settled cycle restarts the budget here (refetches never re-run this
-  // effect while pending stays visible), and each owned attempt restarts
-  // it in send(), so a new pending turn always gets a full budget while
-  // one continuously visible pending turn can never poll forever.
+  // The budget resets only when this effect re-runs: pending appears, the
+  // engagement changes, or an explicit owned attempt bumps pollCycle in
+  // send(). Refetches never re-run it, so one continuously visible pending
+  // turn can never poll forever, while every new attempt gets a fresh
+  // interval with a full budget.
   useEffect(() => {
-    if (!visiblePending) {
-      pollRounds.current = 0;
-      return;
-    }
+    pollRounds.current = 0;
+    if (!visiblePending) return;
     const timer = window.setInterval(() => {
       if (pollRounds.current >= PENDING_POLL_MAX_ROUNDS) {
         window.clearInterval(timer);
@@ -161,7 +157,7 @@ export function AdvisorPanel({
       void historyRef.current.refetch();
     }, PENDING_POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [visiblePending, engagementId]);
+  }, [visiblePending, engagementId, pollCycle]);
 
   const normalizedQuestion = question.trim();
   const questionBytes = utf8Length(normalizedQuestion);
@@ -191,9 +187,10 @@ export function AdvisorPanel({
 
   function send(input: RequestAdvisorTurnInput, idempotencyKey: string) {
     if (archived) return;
-    // A distinct new owned attempt gets its own bounded poll budget, even
-    // when a previous cycle exhausted it.
-    pollRounds.current = 0;
+    // Recreate the reconciliation interval with a full budget, even when a
+    // previous cycle exhausted and self-cleared it while pending is still
+    // visible. Refetches alone never restart it.
+    setPollCycle((cycle) => cycle + 1);
     abortRef.current?.abort();
     window.clearTimeout(conflictTimer.current);
     conflictTimer.current = undefined;

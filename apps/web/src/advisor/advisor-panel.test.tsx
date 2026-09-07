@@ -438,45 +438,69 @@ describe("advisor panel states", () => {
 
   it("gives a distinct new attempt its own poll budget after exhaustion", async () => {
     const gets: string[] = [];
-    const intervals: Array<() => void> = [];
+    const { posted } = await renderPanel(() => pendingTurn(), {
+      history: [],
+      onRequest: (url, method) => {
+        if (method === "GET" && url.includes("/advisor/turns")) gets.push(url);
+      },
+    });
+    // Faithful timer registry: clearInterval really unregisters, so a dead
+    // callback cannot be revived by calling it manually.
+    let nextTimerId = 1;
+    const liveTimers = new Map<number, () => void>();
+    const registeredIds: number[] = [];
     const setIntervalSpy = vi.spyOn(window, "setInterval").mockImplementation(
       ((callback: () => void): number => {
-        intervals.push(callback);
-        return intervals.length;
+        const id = nextTimerId;
+        nextTimerId += 1;
+        liveTimers.set(id, callback);
+        registeredIds.push(id);
+        return id;
       }) as unknown as typeof window.setInterval,
     );
+    const clearIntervalSpy = vi.spyOn(window, "clearInterval").mockImplementation(
+      ((id?: number): void => {
+        if (id !== undefined) liveTimers.delete(id);
+      }) as unknown as typeof window.clearInterval,
+    );
     try {
-      const { posted } = await renderPanel(() => pendingTurn(), {
-        history: [],
-        onRequest: (url, method) => {
-          if (method === "GET" && url.includes("/advisor/turns")) gets.push(url);
-        },
-      });
       await askQuestion("First question?");
       await screen.findByText("Running…");
-      const poll = intervals[intervals.length - 1];
-      expect(poll).not.toBeUndefined();
-      if (poll === undefined) throw new Error("polling interval was not scheduled");
+      expect(liveTimers.size).toBe(1);
+      const firstId = registeredIds[0];
+      if (firstId === undefined) throw new Error("polling interval was not scheduled");
       const baseline = gets.length;
       for (let round = 0; round < 12; round += 1) {
-        poll();
+        const tick = liveTimers.get(firstId);
+        if (tick === undefined) throw new Error("polling interval died before exhaustion");
+        tick();
         await waitFor(() => expect(gets.length).toBe(baseline + round + 1));
       }
-      // Budget exhausted: further ticks must not refetch.
-      poll();
-      poll();
+      // Exhaustion self-clears: the timer unregisters and stops refetching.
+      const lastTick = liveTimers.get(firstId);
+      if (lastTick === undefined) throw new Error("polling interval died before exhaustion");
+      lastTick();
       await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(liveTimers.has(firstId)).toBe(false);
       expect(gets.length).toBe(baseline + 12);
-      // A distinct new owned attempt restarts the budget.
+      // A distinct new owned attempt registers a fresh timer with its own
+      // budget while the old pending turn is still visible.
       fireEvent.change(questionBox(), { target: { value: "Second question?" } });
       fireEvent.click(button("New attempt"));
       await waitFor(() => expect(posted).toHaveLength(2));
+      await waitFor(() => expect(liveTimers.size).toBe(1));
+      const secondId = registeredIds[registeredIds.length - 1];
+      if (secondId === undefined) throw new Error("replacement interval was not scheduled");
+      expect(secondId).not.toBe(firstId);
       await waitFor(() => expect(gets.length).toBeGreaterThan(baseline + 12));
       const resumed = gets.length;
-      poll();
+      const restart = liveTimers.get(secondId);
+      if (restart === undefined) throw new Error("replacement interval died immediately");
+      restart();
       await waitFor(() => expect(gets.length).toBe(resumed + 1));
     } finally {
       setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
     }
   });
 
