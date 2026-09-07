@@ -277,7 +277,8 @@ export class AdvisorTurnsRepository {
             stale.map((row) => row.id),
           ),
         ),
-      );
+      )
+      .run();
     return stale.length;
   }
 
@@ -473,7 +474,8 @@ export class AdvisorTurnsRepository {
             if (row.status === "pending") {
               tx.update(advisorTurns)
                 .set({ status: "cancelled", updatedAt: stampedAt })
-                .where(eq(advisorTurns.id, row.id));
+                .where(eq(advisorTurns.id, row.id))
+                .run();
             }
             return failed("engagement_archived");
           }
@@ -483,12 +485,13 @@ export class AdvisorTurnsRepository {
           if (row.status === "pending" && row.createdAt < cutoffIso) {
             tx.update(advisorTurns)
               .set({ status: "expired", updatedAt: stampedAt })
-              .where(eq(advisorTurns.id, row.id));
+              .where(eq(advisorTurns.id, row.id))
+              .run();
             return failed("turn_expired");
           }
           if (row.status === "expired") return failed("turn_expired");
           if (row.status !== "pending") return failed("turn_not_pending");
-          tx.update(advisorTurns)
+          const completed = tx.update(advisorTurns)
             .set({
               status: completion.status,
               answer,
@@ -505,7 +508,9 @@ export class AdvisorTurnsRepository {
                 eq(advisorTurns.requestDigest, input.requestDigest),
                 eq(advisorTurns.status, "pending"),
               ),
-            );
+            )
+            .run();
+          if (completed.changes !== 1) return failed("turn_not_pending");
           const updated = tx
             .select()
             .from(advisorTurns)

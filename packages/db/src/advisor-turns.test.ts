@@ -286,6 +286,42 @@ describe("advisor turn completion", () => {
     expect(replayed.value.turn.status).toBe("pending");
   });
 
+  it("roundtrips an abstention without deriving new semantics", () => {
+    const { fixture, turnId } = reservedTurn();
+    const completed = fixture.turns.completeTurn({
+      engagementId: fixture.engagementId,
+      turnId,
+      requestDigest: DIGEST_A,
+      completion: {
+        status: "succeeded",
+        explanation: explanation({
+          answer: "",
+          citations: [],
+          abstained: true,
+          uncertainty: "Excerpts do not show the version.",
+        }),
+        redactions: 1,
+      },
+    });
+    expect(completed.ok).toBe(true);
+    if (!completed.ok) return;
+    expect(completed.value.turn).toMatchObject({
+      status: "succeeded",
+      answer: "",
+      uncertainty: "Excerpts do not show the version.",
+      citations: [],
+      errorCode: null,
+    });
+    const listed = fixture.turns.listTurns(fixture.engagementId);
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) return;
+    expect(listed.value.turns[0]).toMatchObject({
+      status: "succeeded",
+      answer: "",
+      uncertainty: "Excerpts do not show the version.",
+    });
+  });
+
   it("stores bounded error codes without output", () => {
     const { fixture, turnId } = reservedTurn();
     const completed = fixture.turns.completeTurn({
@@ -402,6 +438,39 @@ describe("advisor turn completion", () => {
     if (!listed.ok) return;
     expect(listed.value.turns).toHaveLength(1);
     expect(listed.value.turns[0]).toMatchObject({ status: "cancelled", answer: "" });
+  });
+
+  it("leaves archived terminal rows untouched while reporting archived", () => {
+    const { fixture, turnId } = reservedTurn();
+    const completed = fixture.turns.completeTurn({
+      engagementId: fixture.engagementId,
+      turnId,
+      requestDigest: DIGEST_A,
+      completion: { status: "succeeded", explanation: explanation(), redactions: 0 },
+    });
+    expect(completed.ok).toBe(true);
+    if (!completed.ok) return;
+    const detail = fixture.engagements.getEngagement(fixture.engagementId);
+    expect(detail.ok).toBe(true);
+    if (!detail.ok) return;
+    expect(
+      fixture.engagements.archive(fixture.engagementId, detail.value.engagement.revision).ok,
+    ).toBe(true);
+    expect(
+      fixture.turns.completeTurn({
+        engagementId: fixture.engagementId,
+        turnId,
+        requestDigest: DIGEST_A,
+        completion: { status: "cancelled" },
+      }),
+    ).toEqual({ ok: false, error: { code: "engagement_archived" } });
+    const listed = fixture.turns.listTurns(fixture.engagementId);
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) return;
+    expect(listed.value.turns[0]).toMatchObject({
+      status: "succeeded",
+      answer: "The banner shows an HTTP service.",
+    });
   });
 });
 
