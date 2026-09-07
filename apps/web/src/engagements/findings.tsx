@@ -308,6 +308,7 @@ function FindingRow({
               <input
                 type="checkbox"
                 checked={selectedForAdvisor === true}
+                disabled={archived}
                 onChange={onToggleAdvisor}
                 aria-label={`Select finding ${finding.title} for advisor`}
                 className="mt-0.5 shrink-0 accent-primary"

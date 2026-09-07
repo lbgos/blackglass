@@ -4,32 +4,18 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
   createRootRoute,
+  createRoute,
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AdvisorPanel } from "./advisor-panel.js";
 import { createAppQueryClient } from "../query-client.js";
 
 const ENGAGEMENT_ID = "10000000-0000-4000-8000-000000000001";
 const TURN_ID = "10000000-0000-4000-8000-000000000002";
-
-function finding(id: string, title: string) {
-  return {
-    contractVersion: 1,
-    id,
-    engagementId: ENGAGEMENT_ID,
-    title,
-    severity: "medium",
-    status: "open",
-    body: "",
-    evidenceArtifactIds: [],
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  };
-}
 
 function pendingTurn() {
   return {
@@ -88,7 +74,7 @@ interface PostedCall {
   body: unknown;
 }
 
-function renderPanel(
+async function renderPanel(
   post: (call: PostedCall) => unknown,
   options?: {
     archived?: boolean;
@@ -97,6 +83,9 @@ function renderPanel(
     status?: unknown;
     findings?: unknown[];
     history?: unknown[];
+    historyPages?: unknown[][];
+    failPagedFetch?: boolean;
+    onRequest?: (url: string, method: string) => void;
   },
 ) {
   const posted: PostedCall[] = [];
@@ -107,6 +96,7 @@ function renderPanel(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       const method = init?.method ?? "GET";
+      options?.onRequest?.(String(url), method);
       if (method === "POST") {
         const headers = new Headers(init?.headers);
         const call = {
@@ -115,7 +105,7 @@ function renderPanel(
           body: JSON.parse(String(init?.body ?? "null")) as unknown,
         };
         posted.push(call);
-        const turn = post(call);
+        const turn = await post(call);
         stored.unshift(turn);
         return response(turn);
       }
@@ -126,33 +116,97 @@ function renderPanel(
         return response(options?.findings ?? []);
       }
       if (String(url).includes("/advisor/turns")) {
+        if (options?.historyPages !== undefined) {
+          const parsed = new URL(String(url), "http://localhost");
+          const beforeId = parsed.searchParams.get("beforeId");
+          const pages = options.historyPages;
+          let index = 0;
+          if (beforeId !== null) {
+            const found = pages.findIndex((page) =>
+              page.some(
+                (turn) =>
+                  typeof turn === "object" &&
+                  turn !== null &&
+                  (turn as { id?: unknown }).id === beforeId,
+              ),
+            );
+            if (found === -1) return response({ code: "invalid_request" }, 400);
+            index = found + 1;
+          }
+          if (options?.failPagedFetch === true && index > 0) {
+            return response({ code: "invalid_persisted_data" }, 500);
+          }
+          const page = pages[index] ?? [];
+          const last = page[page.length - 1] as { createdAt?: unknown; id?: unknown } | undefined;
+          const hasNext = index + 1 < pages.length;
+          return response({
+            turns: page,
+            nextCursor:
+              hasNext && typeof last?.createdAt === "string" && typeof last?.id === "string"
+                ? { createdAt: last.createdAt, id: last.id }
+                : null,
+          });
+        }
         return response({ turns: stored, nextCursor: null });
       }
       throw new Error(`Unexpected fetch: ${String(url)}`);
     }),
   );
+  function PanelRoute() {
+    return (
+      <QueryClientProvider client={createAppQueryClient()}>
+        <AdvisorPanel
+          engagementId={ENGAGEMENT_ID}
+          archived={options?.archived ?? false}
+          excerpts={options?.excerpts ?? ["artifact-1"]}
+          findingIds={options?.findingIds ?? []}
+          onExcerptsChange={() => {}}
+          onFindingIdsChange={() => {}}
+          onClose={() => {}}
+        />
+      </QueryClientProvider>
+    );
+  }
+  const rootRoute = createRootRoute({ component: PanelRoute });
   const router = createRouter({
     history: createMemoryHistory({ initialEntries: ["/"] }),
-    routes: [
-      createRootRoute({
-        component: () => (
-          <QueryClientProvider client={createAppQueryClient()}>
-            <AdvisorPanel
-              engagementId={ENGAGEMENT_ID}
-              archived={options?.archived ?? false}
-              excerpts={options?.excerpts ?? ["artifact-1"]}
-              findingIds={options?.findingIds ?? []}
-              onExcerptsChange={() => {}}
-              onFindingIdsChange={() => {}}
-              onClose={() => {}}
-            />
-          </QueryClientProvider>
-        ),
+    routeTree: rootRoute.addChildren([
+      createRoute({
+        getParentRoute: () => rootRoute,
+        path: "settings",
+        component: () => null,
       }),
-    ],
+    ]),
   });
-  render(<RouterProvider router={router} />);
-  return { posted, router };
+  await router.load();
+  const view = render(<RouterProvider router={router} />);
+  return { posted, router, unmount: view.unmount };
+}
+
+beforeEach(() => {
+  Object.defineProperty(window, "requestAnimationFrame", {
+    configurable: true,
+    value: vi.fn((callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    }),
+  });
+  Object.defineProperty(window, "cancelAnimationFrame", {
+    configurable: true,
+    value: vi.fn(),
+  });
+});
+
+function button(name: string): HTMLButtonElement {
+  return screen.getByRole("button", { name }) as HTMLButtonElement;
+}
+
+function askButton(): HTMLButtonElement {
+  return button("Ask");
+}
+
+function questionBox(): HTMLTextAreaElement {
+  return screen.getByLabelText(/Question/) as HTMLTextAreaElement;
 }
 
 async function askQuestion(question: string) {
@@ -169,21 +223,21 @@ afterEach(() => {
 
 describe("advisor panel composer", () => {
   it("disables Ask without an excerpt and explains finding-only entry", async () => {
-    renderPanel(() => pendingTurn(), { excerpts: [], findingIds: [FINDING_ID] });
-    expect(screen.getByRole("button", { name: "Ask" })).toBeDisabled();
+    await renderPanel(() => pendingTurn(), { excerpts: [], findingIds: [FINDING_ID] });
+    expect(askButton().disabled).toBe(true);
     await screen.findByText("Finding-only questions need at least one evidence excerpt.");
   });
 
   it("rejects overlong questions by byte count", async () => {
-    renderPanel(() => pendingTurn());
+    await renderPanel(() => pendingTurn());
     const box = screen.getByLabelText(/Question/) as HTMLTextAreaElement;
     fireEvent.change(box, { target: { value: `é${"x".repeat(2000)}` } });
-    expect(screen.getByRole("button", { name: "Ask" })).toBeDisabled();
+    expect(askButton().disabled).toBe(true);
   });
 
   it("reuses the same key on retry after an ambiguous failure", async () => {
     let calls = 0;
-    const { posted } = renderPanel(() => {
+    const { posted } = await renderPanel(() => {
       calls += 1;
       if (calls === 1) throw new TypeError("network down");
       return pendingTurn();
@@ -198,7 +252,7 @@ describe("advisor panel composer", () => {
   });
 
   it("mints a fresh key only through New attempt", async () => {
-    const { posted } = renderPanel(() => pendingTurn());
+    const { posted } = await renderPanel(() => pendingTurn());
     await askQuestion("What does this show?");
     await waitFor(() => expect(posted).toHaveLength(1));
     fireEvent.click(screen.getByRole("button", { name: "New attempt" }));
@@ -226,25 +280,25 @@ function testFinding(id: string, title: string) {
 
 describe("advisor panel states", () => {
   it("shows archived history read-only without a composer", async () => {
-    renderPanel(() => pendingTurn(), {
+    await renderPanel(() => pendingTurn(), {
       archived: true,
       history: [succeededTurn()],
     });
     await screen.findByText("Archived engagements are read-only.");
-    expect(screen.getByLabelText(/Question/)).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Ask" })).toBeDisabled();
+    expect((screen.getByLabelText(/Question/) as HTMLTextAreaElement).disabled).toBe(true);
+    expect(askButton().disabled).toBe(true);
     await screen.findByText("The banner shows HTTP.");
   });
 
   it("links to settings when the advisor is unconfigured", async () => {
-    renderPanel(() => pendingTurn(), { status: { ...okStatus, reason: "unconfigured" } });
+    await renderPanel(() => pendingTurn(), { status: { ...okStatus, reason: "unconfigured" } });
     const link = await screen.findByRole("link", { name: "Open Advisor settings" });
     expect(link.getAttribute("href")).toBe("/settings");
-    expect(screen.getByRole("button", { name: "Ask" })).toBeDisabled();
+    expect(askButton().disabled).toBe(true);
   });
 
   it("renders uncertainty and inert unknown citations without raw HTML", async () => {
-    renderPanel(
+    await renderPanel(
       () =>
         succeededTurn({
           abstained: false,
@@ -260,7 +314,7 @@ describe("advisor panel states", () => {
   });
 
   it("maps terminal failures to friendly messages", async () => {
-    renderPanel(
+    await renderPanel(
       () => ({
         ...pendingTurn(),
         status: "provider_error",
@@ -273,7 +327,7 @@ describe("advisor panel states", () => {
   });
 
   it("sends checked findings with the selected excerpts", async () => {
-    const { posted } = renderPanel(() => pendingTurn(), {
+    const { posted } = await renderPanel(() => pendingTurn(), {
       findings: [testFinding(FINDING_ID, "Open banner")],
     });
     fireEvent.click(screen.getByRole("checkbox", { name: /Open banner/ }));
@@ -283,5 +337,127 @@ describe("advisor panel states", () => {
       excerptArtifactIds: ["artifact-1"],
       findingIds: [FINDING_ID],
     });
+  });
+
+  it("sends the edited draft, not stale text, on New attempt", async () => {
+    const { posted } = await renderPanel(() => pendingTurn());
+    await askQuestion("First question?");
+    await waitFor(() => expect(posted).toHaveLength(1));
+    fireEvent.change(questionBox(), { target: { value: "Second question?" } });
+    fireEvent.click(button("New attempt"));
+    await waitFor(() => expect(posted).toHaveLength(2));
+    expect((posted[1]?.body as { question?: unknown }).question).toBe("Second question?");
+    expect(posted[1]?.key).not.toBe(posted[0]?.key);
+  });
+
+  it("trims padded questions before sending", async () => {
+    const { posted } = await renderPanel(() => pendingTurn());
+    await askQuestion("  padded question?  ");
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect((posted[0]?.body as { question?: unknown }).question).toBe("padded question?");
+  });
+
+  it("locks finding selection when archived", async () => {
+    await renderPanel(() => pendingTurn(), {
+      archived: true,
+      findings: [testFinding(FINDING_ID, "Open banner")],
+    });
+    const boxes = await screen.findAllByRole("checkbox", { name: /Open banner/ });
+    expect(boxes.length).toBeGreaterThan(0);
+    for (const box of boxes) {
+      expect((box as HTMLInputElement).disabled).toBe(true);
+    }
+  });
+
+  it("surfaces pagination failures with retry", async () => {
+    const answer = (label: string) => `Answer ${label}.`;
+    const first = { ...succeededTurn(), id: "10000000-0000-4000-8000-000000000011", answer: answer("one") };
+    const second = { ...succeededTurn(), id: "10000000-0000-4000-8000-000000000012", answer: answer("two") };
+    const third = { ...succeededTurn(), id: "10000000-0000-4000-8000-000000000013", answer: answer("three") };
+    await renderPanel(() => pendingTurn(), {
+      history: [],
+      historyPages: [[first, second], [third]],
+      failPagedFetch: true,
+    });
+    await screen.findByText("Answer one.");
+    await screen.findByText("Answer two.");
+    fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
+    await screen.findByText("Could not load more explanations.");
+    const retries = screen.getAllByRole("button", { name: "Retry" });
+    expect(retries).toHaveLength(1);
+    fireEvent.click(retries[0] as HTMLButtonElement);
+    await screen.findByText("Could not load more explanations.");
+  });
+
+  it("polls visible pending turns and stops after unmount", async () => {
+    const gets: string[] = [];
+    const { unmount } = await renderPanel(() => pendingTurn(), {
+      history: [pendingTurn()],
+      onRequest: (url, method) => {
+        if (method === "GET" && url.includes("/advisor/turns")) gets.push(url);
+      },
+    });
+    await screen.findByText("Running…");
+    const initial = gets.length;
+    expect(initial).toBeGreaterThanOrEqual(1);
+    await new Promise((resolve) => setTimeout(resolve, 6500));
+    expect(gets.length).toBeGreaterThan(initial);
+    unmount();
+    const frozen = gets.length;
+    await new Promise((resolve) => setTimeout(resolve, 6000));
+    expect(gets.length).toBe(frozen);
+  }, 30000);
+
+  it("reconciles cancellation against persisted status", async () => {
+    let gets = 0;
+    let heldResolve: (() => void) | null = null;
+    const held = new Promise<void>((resolve) => {
+      heldResolve = resolve;
+    });
+    await renderPanel(
+      async () => {
+        await held;
+        return pendingTurn();
+      },
+      {
+        onRequest: (url, method) => {
+          if (method === "GET" && url.includes("/advisor/turns")) gets += 1;
+        },
+      },
+    );
+    fireEvent.change(questionBox(), { target: { value: "What does this show?" } });
+    fireEvent.click(button("Ask"));
+    await screen.findByRole("button", { name: "Cancel" });
+    const before = gets;
+    fireEvent.click(button("Cancel"));
+    heldResolve?.();
+    await waitFor(() => expect(gets).toBeGreaterThan(before));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("closes on Escape and restores trigger focus on unmount", async () => {
+    const onClose = vi.fn();
+    const trigger = document.createElement("button");
+    trigger.textContent = "trigger";
+    document.body.append(trigger);
+    trigger.focus();
+    const { unmount } = render(
+      <QueryClientProvider client={createAppQueryClient()}>
+        <AdvisorPanel
+          engagementId={ENGAGEMENT_ID}
+          archived={false}
+          excerpts={["artifact-1"]}
+          findingIds={[]}
+          onExcerptsChange={() => {}}
+          onFindingIdsChange={() => {}}
+          onClose={onClose}
+        />
+      </QueryClientProvider>,
+    );
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    unmount();
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
   });
 });

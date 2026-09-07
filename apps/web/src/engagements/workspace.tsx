@@ -254,6 +254,7 @@ function EngagementDetail({
   }, [displayed.id, closeAdvisor, setAdvisorExcerpts, setAdvisorFindingIds]);
 
   const toggleAdvisorFinding = (findingId: string) => {
+    if (archived) return;
     if (advisorDraft.findingIds.includes(findingId)) {
       setAdvisorFindingIds(advisorDraft.findingIds.filter((id) => id !== findingId));
       return;

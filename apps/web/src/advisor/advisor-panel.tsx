@@ -1,4 +1,9 @@
-import { ADVISOR_QUESTION_MAX_BYTES, type AdvisorTurn } from "@blackglass/contracts";
+import {
+  ADVISOR_EXCERPT_IDS_MAX,
+  ADVISOR_FINDING_IDS_MAX,
+  ADVISOR_QUESTION_MAX_BYTES,
+  type AdvisorTurn,
+} from "@blackglass/contracts";
 import { Button } from "@blackglass/ui";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
@@ -13,9 +18,9 @@ import {
   type RequestAdvisorTurnInput,
 } from "./turn-query.js";
 
-const MAX_EXCERPTS = 4;
-const MAX_FINDINGS = 8;
 const REFETCH_AFTER_CONFLICT_MS = 3_000;
+const PENDING_POLL_INTERVAL_MS = 5_000;
+const PENDING_POLL_MAX_ROUNDS = 12;
 
 function utf8Length(value: string): number {
   return new TextEncoder().encode(value).length;
@@ -54,8 +59,13 @@ const SETUP_REASONS = new Set([
 ]);
 
 function friendlyFailure(main: string, detail?: string): string {
-  const copy = TERMINAL_FAILURE_COPY[main] ?? "The advisor request failed.";
-  return detail === undefined || detail === main ? copy : `${copy} (${detail})`;
+  // Prefer the terminal code: TurnCard passes the stored errorCode, so a
+  // provider_error turn reports its actual endpoint message.
+  if (detail !== undefined) {
+    const exact = TERMINAL_FAILURE_COPY[detail];
+    if (exact !== undefined) return exact;
+  }
+  return TERMINAL_FAILURE_COPY[main] ?? "The advisor request failed.";
 }
 
 export interface AdvisorPanelProps {
@@ -92,28 +102,62 @@ export function AdvisorPanel({
   const keyRef = useRef<{ key: string; fingerprint: string } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const conflictTimer = useRef<number | undefined>(undefined);
+  const pollRounds = useRef(0);
 
   const findings = useFindingsQuery(engagementId);
   const history = useAdvisorTurnsQuery(engagementId);
   const advisorStatus = useAdvisorStatusQuery();
   const ask = useRequestAdvisorTurnMutation(engagementId);
+  const historyRef = useRef(history);
+  historyRef.current = history;
 
+  // Non-modal drawer focus: capture the trigger, focus the panel, and
+  // restore focus on unmount. No trap: background stays interactive.
   useEffect(() => {
-    panelRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
+    const active = document.activeElement;
+    returnFocusRef.current = active instanceof HTMLElement ? active : null;
+    const frame = window.requestAnimationFrame(() => panelRef.current?.focus());
     return () => {
+      window.cancelAnimationFrame(frame);
       abortRef.current?.abort();
       if (conflictTimer.current !== undefined) {
         window.clearTimeout(conflictTimer.current);
         conflictTimer.current = undefined;
       }
+      const returnFocus = returnFocusRef.current;
+      returnFocusRef.current = null;
+      if (returnFocus && document.contains(returnFocus)) {
+        returnFocus.focus();
+      }
     };
   }, []);
 
-  const questionBytes = utf8Length(question);
+  useEffect(() => {
+    pollRounds.current = 0;
+  }, [engagementId]);
+
+  const turns = history.data?.pages.flatMap((page) => page.turns) ?? [];
+  const visiblePending = turns.some((turn) => turn.status === "pending");
+
+  // Bounded reconciliation for visible pending turns: refetch history on
+  // an interval, stop after a finite number of rounds. Never re-POSTs.
+  useEffect(() => {
+    if (!visiblePending) return;
+    const timer = window.setInterval(() => {
+      if (pollRounds.current >= PENDING_POLL_MAX_ROUNDS) {
+        window.clearInterval(timer);
+        return;
+      }
+      pollRounds.current += 1;
+      void historyRef.current.refetch();
+    }, PENDING_POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [visiblePending, engagementId]);
+
+  const normalizedQuestion = question.trim();
+  const questionBytes = utf8Length(normalizedQuestion);
   const excerptCount = excerpts.length;
   const findingCount = findingIds.length;
   const needsExcerpt = findingCount > 0 && excerptCount === 0;
@@ -123,11 +167,11 @@ export function AdvisorPanel({
     !archived &&
     !setupNeeded &&
     !ask.isPending &&
-    question.trim().length > 0 &&
+    normalizedQuestion.length > 0 &&
     questionBytes <= ADVISOR_QUESTION_MAX_BYTES &&
     excerptCount >= 1 &&
-    excerptCount <= MAX_EXCERPTS &&
-    findingCount <= MAX_FINDINGS;
+    excerptCount <= ADVISOR_EXCERPT_IDS_MAX &&
+    findingCount <= ADVISOR_FINDING_IDS_MAX;
 
   function keyFor(input: RequestAdvisorTurnInput): string {
     const print = fingerprint(input);
@@ -167,12 +211,27 @@ export function AdvisorPanel({
     );
   }
 
-  function handleAsk() {
-    const input: RequestAdvisorTurnInput = {
-      question,
+  function buildDraftInput(): RequestAdvisorTurnInput | undefined {
+    if (
+      archived ||
+      normalizedQuestion.length === 0 ||
+      questionBytes > ADVISOR_QUESTION_MAX_BYTES ||
+      excerptCount < 1 ||
+      excerptCount > ADVISOR_EXCERPT_IDS_MAX ||
+      findingCount > ADVISOR_FINDING_IDS_MAX
+    ) {
+      return undefined;
+    }
+    return {
+      question: normalizedQuestion,
       excerptArtifactIds: [...excerpts],
       findingIds: [...findingIds],
     };
+  }
+
+  function handleAsk() {
+    const input = buildDraftInput();
+    if (input === undefined) return;
     send(input, keyFor(input));
   }
 
@@ -182,12 +241,10 @@ export function AdvisorPanel({
   }
 
   function handleNewAttempt() {
+    const input = buildDraftInput();
+    if (input === undefined) return;
     keyRef.current = null;
-    if (lastAttempt === null) {
-      handleAsk();
-      return;
-    }
-    send(lastAttempt.input, keyFor(lastAttempt.input));
+    send(input, keyFor(input));
   }
 
   function handleCancel() {
@@ -196,11 +253,12 @@ export function AdvisorPanel({
   }
 
   function toggleFinding(id: string) {
+    if (archived) return;
     if (findingIds.includes(id)) {
       onFindingIdsChange(findingIds.filter((entry) => entry !== id));
       return;
     }
-    if (findingIds.length >= MAX_FINDINGS) return;
+    if (findingIds.length >= ADVISOR_FINDING_IDS_MAX) return;
     onFindingIdsChange([...findingIds, id]);
   }
 
@@ -214,7 +272,7 @@ export function AdvisorPanel({
     (lastError.code === "request_failed" || lastError.code === "turn_in_progress") &&
     fingerprint(lastAttempt.input) ===
       fingerprint({
-        question,
+        question: normalizedQuestion,
         excerptArtifactIds: [...excerpts],
         findingIds: [...findingIds],
       });
@@ -225,8 +283,6 @@ export function AdvisorPanel({
         lastError.code === "missing_key_env" ||
         lastError.code === "key_unset" ||
         lastError.code === "public_not_opted_in"));
-
-  const turns = history.data?.pages.flatMap((page) => page.turns) ?? [];
 
   return (
     <section
@@ -254,7 +310,7 @@ export function AdvisorPanel({
       <div className="mt-3 grid gap-3">
         <div>
           <p className="m-0 text-[12px] font-semibold">
-            Evidence excerpts ({excerptCount} of {MAX_EXCERPTS})
+            Evidence excerpts ({excerptCount} of {ADVISOR_EXCERPT_IDS_MAX})
           </p>
           {excerptCount === 0 ? (
             <p className="mt-1 mb-0 text-[12px] text-muted-foreground">
@@ -286,13 +342,14 @@ export function AdvisorPanel({
 
         <div>
           <p className="m-0 text-[12px] font-semibold">
-            Findings ({findingCount} of {MAX_FINDINGS})
+            Findings ({findingCount} of {ADVISOR_FINDING_IDS_MAX})
           </p>
           <FindingPicker
+            archived={archived}
             findings={findings.data}
             isLoading={findings.isFetching && findings.data === undefined}
             selectedIds={findingIds}
-            disabled={archived || findingCount >= MAX_FINDINGS}
+            disabled={archived || findingCount >= ADVISOR_FINDING_IDS_MAX}
             onToggle={toggleFinding}
           />
           {needsExcerpt && !archived ? (
@@ -407,11 +464,41 @@ export function AdvisorPanel({
               Previous explanations could not be loaded.
             </p>
           ) : null}
+          {history.data !== undefined && history.isError ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <p className="m-0 text-[12px] text-muted-foreground" role="alert">
+                Showing saved explanations; refresh failed.
+              </p>
+              <Button
+                type="button"
+                variant="quiet"
+                className="h-7 px-2 text-[12px]"
+                onClick={() => void history.refetch()}
+              >
+                Retry
+              </Button>
+            </div>
+          ) : null}
           <ul className="m-0 list-none space-y-3 p-0">
             {turns.map((turn) => (
               <TurnCard key={turn.id} turn={turn} />
             ))}
           </ul>
+          {history.isFetchNextPageError ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <p className="m-0 text-[12px] text-muted-foreground" role="alert">
+                Could not load more explanations.
+              </p>
+              <Button
+                type="button"
+                variant="quiet"
+                className="h-7 px-2 text-[12px]"
+                onClick={() => void history.fetchNextPage()}
+              >
+                Retry
+              </Button>
+            </div>
+          ) : null}
           {history.hasNextPage ? (
             <div className="mt-2">
               <Button
@@ -432,12 +519,14 @@ export function AdvisorPanel({
 }
 
 function FindingPicker({
+  archived,
   findings,
   isLoading,
   selectedIds,
   disabled,
   onToggle,
 }: {
+  archived: boolean;
   findings: ReadonlyArray<{ id: string; title: string }> | undefined;
   isLoading: boolean;
   selectedIds: readonly string[];
@@ -464,7 +553,7 @@ function FindingPicker({
               <input
                 type="checkbox"
                 checked={selected}
-                disabled={disabled && !selected}
+                disabled={(disabled && !selected) || archived}
                 onChange={() => onToggle(finding.id)}
                 className="mt-1 shrink-0 accent-primary"
               />
