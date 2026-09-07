@@ -160,16 +160,19 @@ async function renderPanel(
   let applyArchived: ((value: boolean) => void) | undefined;
   function PanelRoute() {
     const [archived, setArchived] = useState(options?.archived ?? false);
+    const [excerpts, setExcerpts] = useState(options?.excerpts ?? ["artifact-1"]);
+    const [findingIds, setFindingIds] = useState(options?.findingIds ?? []);
+    const [queryClient] = useState(() => createAppQueryClient());
     applyArchived = setArchived;
     return (
-      <QueryClientProvider client={createAppQueryClient()}>
+      <QueryClientProvider client={queryClient}>
         <AdvisorPanel
           engagementId={ENGAGEMENT_ID}
           archived={archived}
-          excerpts={options?.excerpts ?? ["artifact-1"]}
-          findingIds={options?.findingIds ?? []}
-          onExcerptsChange={() => {}}
-          onFindingIdsChange={() => {}}
+          excerpts={excerpts}
+          findingIds={findingIds}
+          onExcerptsChange={setExcerpts}
+          onFindingIdsChange={setFindingIds}
           onClose={() => {}}
         />
       </QueryClientProvider>
