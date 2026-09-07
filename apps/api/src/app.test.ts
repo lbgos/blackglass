@@ -19,6 +19,12 @@ const emptyEngagementRepository = {
       error: { code: "engagement_not_found" as const },
     };
   },
+  getFindingForEngagement() {
+    return {
+      ok: false as const,
+      error: { code: "finding_not_found" as const },
+    };
+  },
   listEngagements() {
     return { ok: true as const, value: [] };
   },

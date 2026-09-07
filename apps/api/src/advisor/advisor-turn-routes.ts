@@ -5,7 +5,6 @@ import {
   AdvisorTurnListResponseSchema,
   AdvisorTurnSchema,
   CreateAdvisorTurnRequestSchema,
-  GetAdvisorSettingsResponseSchema,
   commandJsonV1CreateAdvisorTurnDigest,
   parseAdvisorTurnListQuery,
   projectCommandJsonV1DigestInput,
@@ -175,8 +174,9 @@ export function registerAdvisorTurnRoutes(app: FastifyInstance, deps: AdvisorTur
   };
 
   app.post("/api/v1/engagements/:engagementId/advisor/turns", async (request, reply) => {
-    // Local mutation guard: a single valid key header is required before
-    // any write path is reachable.
+    // Mutation guard: a single valid key header is required before
+    // any write path is reachable. The key validates idempotency only;
+    // loopback binding at the server boundary is the network control.
     const key = readIdempotencyKey(request);
     if (key === undefined) return sendError(reply, 400, "invalid_request");
     const params = AdvisorTurnIdParamsSchema.safeParse(request.params);
@@ -255,7 +255,7 @@ export function registerAdvisorTurnRoutes(app: FastifyInstance, deps: AdvisorTur
         return sendError(reply, 409, "idempotency_conflict");
       }
       if (existing.status !== "pending") return sendTurn(reply, existing);
-      let refreshed: typeof lookup;
+      let refreshed: ReturnType<AdvisorTurnRouteDeps["turns"]["lookupTurnByIdempotencyKey"]>;
       try {
         const expired = deps.turns.expireStalePending(engagementId);
         if (!expired.ok) {
@@ -337,7 +337,10 @@ export function registerAdvisorTurnRoutes(app: FastifyInstance, deps: AdvisorTur
       for (let page = 0; page < HISTORY_PAGES && history.length < HISTORY_TURNS; page += 1) {
         let listed: ReturnType<AdvisorTurnRouteDeps["turns"]["listTurns"]>;
         try {
-          listed = deps.turns.listTurns(engagementId, { cursor, limit: HISTORY_PAGE_SIZE });
+          listed = deps.turns.listTurns(engagementId, {
+            ...(cursor === undefined ? {} : { cursor }),
+            limit: HISTORY_PAGE_SIZE,
+          });
         } catch {
           return sendError(reply, 500, "invalid_persisted_data");
         }
@@ -447,7 +450,7 @@ export function registerAdvisorTurnRoutes(app: FastifyInstance, deps: AdvisorTur
             apiKey,
             publicOptIn: settings.publicEndpointOptIn,
           },
-          { signal: controller.signal, requestFn: deps.transport?.requestFn },
+          { signal: controller.signal, ...(deps.transport?.requestFn === undefined ? {} : { requestFn: deps.transport.requestFn }) },
         );
       } catch {
         // An unexpected provider throw must still finalize the reserved
@@ -511,7 +514,7 @@ export function registerAdvisorTurnRoutes(app: FastifyInstance, deps: AdvisorTur
     let listed: ReturnType<AdvisorTurnRouteDeps["turns"]["listTurns"]>;
     try {
       listed = deps.turns.listTurns(params.data.engagementId, {
-        cursor: query.value.before,
+        ...(query.value.before === undefined ? {} : { cursor: query.value.before }),
         limit: query.value.limit,
       });
     } catch {

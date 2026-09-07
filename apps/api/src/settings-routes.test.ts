@@ -29,6 +29,7 @@ async function createSettingsBackedApp() {
   const settingsRepository = new SettingsRepository(database.db);
   const engagementRepository = {
     getEngagement: () => ({ ok: false, error: { code: "engagement_not_found" } }),
+    getFindingForEngagement: () => ({ ok: false, error: { code: "finding_not_found" } }),
     listEngagements: () => ({ ok: true, value: [] }),
     listScopeRevisions: () => ({ ok: false, error: { code: "engagement_not_found" } }),
     getAction: () => ({ ok: false, error: { code: "action_not_found" } }),

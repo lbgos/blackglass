@@ -830,6 +830,7 @@ describe("engagement mutation routes", () => {
     const staleApp = buildApp({
       engagementRepository: {
         getEngagement: () => ({ ok: false, error: { code: "engagement_not_found" } }),
+        getFindingForEngagement: () => ({ ok: false, error: { code: "finding_not_found" } }),
         listEngagements: () => ({ ok: true, value: [] }),
         listScopeRevisions: () => ({ ok: true, value: [] }),
         getAction: () => ({ ok: false, error: { code: "action_not_found" } }),
@@ -864,6 +865,7 @@ describe("engagement mutation routes", () => {
     const brokenApp = buildApp({
       engagementRepository: {
         getEngagement: () => ({ ok: false, error: { code: "engagement_not_found" } }),
+        getFindingForEngagement: () => ({ ok: false, error: { code: "finding_not_found" } }),
         listEngagements: () => ({ ok: true, value: [] }),
         listScopeRevisions: () => ({ ok: true, value: [] }),
         getAction: () => ({ ok: false, error: { code: "action_not_found" } }),

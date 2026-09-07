@@ -164,6 +164,7 @@ describe("engagement query routes", () => {
     const app = buildApp({
       engagementRepository: {
         getEngagement: () => ({ ok: false, error: { code } }),
+        getFindingForEngagement: () => ({ ok: false, error: { code: "finding_not_found" } }),
         listEngagements: () => ({ ok: false, error: { code } }),
         listScopeRevisions: () => ({ ok: false, error: { code } }),
         getAction: () => ({ ok: false, error: { code: "action_not_found" as const } }),
@@ -235,6 +236,7 @@ describe("engagement query routes", () => {
     const app = buildApp({
       engagementRepository: {
         getEngagement: () => ({ ok: true, value: { marker } as never }),
+        getFindingForEngagement: () => ({ ok: false, error: { code: "finding_not_found" } }),
         listEngagements: () => ({ ok: true, value: [{ marker }] as never }),
         listScopeRevisions: () => ({ ok: true, value: [{ marker }] as never }),
         getAction: () => ({ ok: false, error: { code: "action_not_found" as const } }),
