@@ -162,7 +162,7 @@ function storeExcerpt(
   state.excerpts.set(id, { content, totalBytes, truncated });
 }
 
-function ownedArtifact(id: string, text: string): { sizeBytes: number; content: Buffer } {
+function ownedArtifact(_id: string, text: string): { sizeBytes: number; content: Buffer } {
   const content = Buffer.from(text, "utf8");
   return { sizeBytes: content.length, content };
 }

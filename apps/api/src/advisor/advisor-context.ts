@@ -1,5 +1,6 @@
 import {
   CreateAdvisorExplanationRequestSchema,
+  type AdvisorEvidenceBlock,
   type AdvisorSuppliedEvidenceId,
 } from "@blackglass/contracts";
 import type { EngagementRepository, EvidenceGrantRepository } from "@blackglass/db";
@@ -9,7 +10,6 @@ import {
   advisorUtf8ByteLength,
   buildAdvisorExplanationPrompt,
   truncateUtf8Bytes,
-  type AdvisorEvidenceBlock,
   type AdvisorExplanationPrompt,
   type AdvisorHistoryTurn,
 } from "@blackglass/domain";
