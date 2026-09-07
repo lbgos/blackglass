@@ -152,12 +152,15 @@ async function renderPanel(
       throw new Error(`Unexpected fetch: ${String(url)}`);
     }),
   );
+  // Mutable archived flag so a test can flip the engagement to archived
+  // and rerender the same mounted panel without losing composer state.
+  const panelProps = { archived: options?.archived ?? false };
   function PanelRoute() {
     return (
       <QueryClientProvider client={createAppQueryClient()}>
         <AdvisorPanel
           engagementId={ENGAGEMENT_ID}
-          archived={options?.archived ?? false}
+          archived={panelProps.archived}
           excerpts={options?.excerpts ?? ["artifact-1"]}
           findingIds={options?.findingIds ?? []}
           onExcerptsChange={() => {}}
@@ -180,7 +183,15 @@ async function renderPanel(
   });
   await router.load();
   const view = render(<RouterProvider router={router} />);
-  return { posted, router, unmount: view.unmount };
+  return {
+    posted,
+    router,
+    unmount: view.unmount,
+    rerenderArchived: (archived: boolean) => {
+      panelProps.archived = archived;
+      view.rerender(<RouterProvider router={router} />);
+    },
+  };
 }
 
 beforeEach(() => {
@@ -258,6 +269,23 @@ describe("advisor panel composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "New attempt" }));
     await waitFor(() => expect(posted).toHaveLength(2));
     expect(posted[1]?.key).not.toBe(posted[0]?.key);
+  });
+
+  it("blocks retry and new attempt once archived after an ambiguous failure", async () => {
+    let calls = 0;
+    const { posted, rerenderArchived } = await renderPanel(() => {
+      calls += 1;
+      if (calls === 1) throw new TypeError("network down");
+      return pendingTurn();
+    });
+    await askQuestion("What does this show?");
+    await screen.findByRole("button", { name: "Retry" });
+    await screen.findByRole("button", { name: "New attempt" });
+    rerenderArchived(true);
+    expect(askButton().disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New attempt" })).toBeNull();
+    expect(posted).toHaveLength(1);
   });
 });
 
@@ -408,11 +436,55 @@ describe("advisor panel states", () => {
     expect(gets.length).toBe(frozen);
   }, 30000);
 
+  it("gives a distinct new attempt its own poll budget after exhaustion", async () => {
+    const gets: string[] = [];
+    const intervals: Array<() => void> = [];
+    const setIntervalSpy = vi.spyOn(window, "setInterval").mockImplementation(
+      ((callback: () => void): number => {
+        intervals.push(callback);
+        return intervals.length;
+      }) as unknown as typeof window.setInterval,
+    );
+    try {
+      const { posted } = await renderPanel(() => pendingTurn(), {
+        history: [],
+        onRequest: (url, method) => {
+          if (method === "GET" && url.includes("/advisor/turns")) gets.push(url);
+        },
+      });
+      await askQuestion("First question?");
+      await screen.findByText("Running…");
+      const poll = intervals[intervals.length - 1];
+      expect(poll).not.toBeUndefined();
+      if (poll === undefined) throw new Error("polling interval was not scheduled");
+      const baseline = gets.length;
+      for (let round = 0; round < 12; round += 1) {
+        poll();
+        await waitFor(() => expect(gets.length).toBe(baseline + round + 1));
+      }
+      // Budget exhausted: further ticks must not refetch.
+      poll();
+      poll();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(gets.length).toBe(baseline + 12);
+      // A distinct new owned attempt restarts the budget.
+      fireEvent.change(questionBox(), { target: { value: "Second question?" } });
+      fireEvent.click(button("New attempt"));
+      await waitFor(() => expect(posted).toHaveLength(2));
+      await waitFor(() => expect(gets.length).toBeGreaterThan(baseline + 12));
+      const resumed = gets.length;
+      poll();
+      await waitFor(() => expect(gets.length).toBe(resumed + 1));
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
+  });
+
   it("reconciles cancellation against persisted status", async () => {
     let gets = 0;
-    let heldResolve: (() => void) | null = null;
+    let releaseHeldRequest!: () => void;
     const held = new Promise<void>((resolve) => {
-      heldResolve = resolve;
+      releaseHeldRequest = () => resolve(undefined);
     });
     await renderPanel(
       async () => {
@@ -430,7 +502,7 @@ describe("advisor panel states", () => {
     await screen.findByRole("button", { name: "Cancel" });
     const before = gets;
     fireEvent.click(button("Cancel"));
-    heldResolve?.();
+    releaseHeldRequest();
     await waitFor(() => expect(gets).toBeGreaterThan(before));
     expect(screen.queryByRole("alert")).toBeNull();
   });

@@ -143,8 +143,15 @@ export function AdvisorPanel({
 
   // Bounded reconciliation for visible pending turns: refetch history on
   // an interval, stop after a finite number of rounds. Never re-POSTs.
+  // A settled cycle restarts the budget here (refetches never re-run this
+  // effect while pending stays visible), and each owned attempt restarts
+  // it in send(), so a new pending turn always gets a full budget while
+  // one continuously visible pending turn can never poll forever.
   useEffect(() => {
-    if (!visiblePending) return;
+    if (!visiblePending) {
+      pollRounds.current = 0;
+      return;
+    }
     const timer = window.setInterval(() => {
       if (pollRounds.current >= PENDING_POLL_MAX_ROUNDS) {
         window.clearInterval(timer);
@@ -183,6 +190,10 @@ export function AdvisorPanel({
   }
 
   function send(input: RequestAdvisorTurnInput, idempotencyKey: string) {
+    if (archived) return;
+    // A distinct new owned attempt gets its own bounded poll budget, even
+    // when a previous cycle exhausted it.
+    pollRounds.current = 0;
     abortRef.current?.abort();
     window.clearTimeout(conflictTimer.current);
     conflictTimer.current = undefined;
@@ -236,7 +247,7 @@ export function AdvisorPanel({
   }
 
   function handleRetry() {
-    if (lastAttempt === null) return;
+    if (archived || lastAttempt === null) return;
     send(lastAttempt.input, lastAttempt.key);
   }
 
@@ -263,10 +274,12 @@ export function AdvisorPanel({
   }
 
   function removeExcerpt(id: string) {
+    if (archived) return;
     onExcerptsChange(excerpts.filter((entry) => entry !== id));
   }
 
   const retryable =
+    !archived &&
     lastError !== null &&
     lastAttempt !== null &&
     (lastError.code === "request_failed" || lastError.code === "turn_in_progress") &&
@@ -413,7 +426,7 @@ export function AdvisorPanel({
               Retry
             </Button>
           ) : null}
-          {!ask.isPending && lastAttempt !== null ? (
+          {!ask.isPending && !archived && lastAttempt !== null ? (
             <Button type="button" variant="quiet" onClick={handleNewAttempt}>
               New attempt
             </Button>
