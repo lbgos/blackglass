@@ -10,6 +10,7 @@ import {
   useLatestRunOutputQuery,
   useRunOutputQuery,
 } from "./run-output-query.js";
+import { useEngagementWorkspace } from "./workspace-context.js";
 
 export function RawOutputPanel() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -110,6 +111,12 @@ function RawOutputContent({
   onRefresh: () => void;
   source: "latest" | "selected";
 }) {
+  const { openAdvisor } = useEngagementWorkspace();
+  // Only real published artifact IDs from this run's preserved streams
+  // seed the advisor draft. A run ID is never an excerpt.
+  const askIds = [output.stdout, output.stderr].flatMap((stream) =>
+    stream.present ? [stream.artifactId] : [],
+  );
   return (
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -120,9 +127,21 @@ function RawOutputContent({
             {output.run.state}
           </span>
         </p>
-        <Button type="button" variant="quiet" className="h-7 px-2 text-[12px]" onClick={onRefresh}>
-          Refresh
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {askIds.length > 0 ? (
+            <Button
+              type="button"
+              variant="quiet"
+              className="h-7 px-2 text-[12px]"
+              onClick={() => openAdvisor(askIds, [])}
+            >
+              Ask about this run
+            </Button>
+          ) : null}
+          <Button type="button" variant="quiet" className="h-7 px-2 text-[12px]" onClick={onRefresh}>
+            Refresh
+          </Button>
+        </div>
       </div>
       <RawStream label="stdout" stream={output.stdout} runId={output.run.id} />
       <RawStream label="stderr" stream={output.stderr} runId={output.run.id} />

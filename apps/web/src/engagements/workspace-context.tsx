@@ -1,13 +1,25 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 
+export interface AdvisorDraft {
+  readonly nonce: number;
+  readonly open: boolean;
+  readonly excerpts: readonly string[];
+  readonly findingIds: readonly string[];
+}
+
 interface EngagementWorkspaceContextValue {
+  advisorDraft: AdvisorDraft;
   announce: (message: string) => void;
   clearNotice: () => void;
+  closeAdvisor: () => void;
   engagementFilter: string;
   focusRunsToken: number;
   notice: string | null;
+  openAdvisor: (excerpts: readonly string[], findingIds: readonly string[]) => void;
   openCreate: () => void;
   requestFocusRuns: () => void;
+  setAdvisorExcerpts: (ids: readonly string[]) => void;
+  setAdvisorFindingIds: (ids: readonly string[]) => void;
   setEngagementFilter: (value: string) => void;
 }
 
@@ -23,6 +35,12 @@ export function EngagementWorkspaceProvider({
   const [engagementFilter, setEngagementFilter] = useState("");
   const [focusRunsToken, setFocusRunsToken] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+  const [advisorDraft, setAdvisorDraft] = useState<AdvisorDraft>({
+    nonce: 0,
+    open: false,
+    excerpts: [],
+    findingIds: [],
+  });
   const announce = useCallback((message: string) => {
     setNotice(message);
   }, []);
@@ -32,20 +50,44 @@ export function EngagementWorkspaceProvider({
   const requestFocusRuns = useCallback(() => {
     setFocusRunsToken((current) => current + 1);
   }, []);
+  const openAdvisor = useCallback((excerpts: readonly string[], findingIds: readonly string[]) => {
+    setAdvisorDraft((current) => ({
+      nonce: current.nonce + 1,
+      open: true,
+      excerpts: [...excerpts],
+      findingIds: [...findingIds],
+    }));
+  }, []);
+  const closeAdvisor = useCallback(() => {
+    setAdvisorDraft((current) => (current.open ? { ...current, open: false } : current));
+  }, []);
+  const setAdvisorExcerpts = useCallback((ids: readonly string[]) => {
+    setAdvisorDraft((current) => ({ ...current, excerpts: [...ids] }));
+  }, []);
+  const setAdvisorFindingIds = useCallback((ids: readonly string[]) => {
+    setAdvisorDraft((current) => ({ ...current, findingIds: [...ids] }));
+  }, []);
   const value = useMemo(
     () => ({
+      advisorDraft,
       announce,
       clearNotice,
+      closeAdvisor,
       engagementFilter,
       focusRunsToken,
       notice,
+      openAdvisor,
       openCreate,
       requestFocusRuns,
+      setAdvisorExcerpts,
+      setAdvisorFindingIds,
       setEngagementFilter,
     }),
     [
+      advisorDraft,
       announce,
       clearNotice,
+      closeAdvisor,
       engagementFilter,
       focusRunsToken,
       notice,
