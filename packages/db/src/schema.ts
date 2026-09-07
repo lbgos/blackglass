@@ -1268,6 +1268,10 @@ export const advisorTurns = sqliteTable(
     question: text("question").notNull(),
     answer: text("answer").notNull(),
     uncertainty: text("uncertainty").notNull(),
+    // Explicit abstention boolean for succeeded turns, null otherwise. P1
+    // allows abstained answers with partial text and citations, so the flag
+    // can never be inferred from blank fields.
+    abstained: integer("abstained", { mode: "boolean" }),
     citationsJson: text("citations_json").notNull(),
     suppliedIdsJson: text("supplied_ids_json").notNull(),
     redactions: integer("redactions").notNull(),
@@ -1295,6 +1299,10 @@ export const advisorTurns = sqliteTable(
     check(
       "advisor_turn_uncertainty_bytes",
       sql`length(cast(${table.uncertainty} as blob)) <= 2000`,
+    ),
+    check(
+      "advisor_turn_abstained",
+      sql`(${table.status} = 'succeeded' and ${table.abstained} in (0, 1)) or (${table.status} <> 'succeeded' and ${table.abstained} is null)`,
     ),
     check(
       "advisor_turn_citations_json",

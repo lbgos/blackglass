@@ -4,6 +4,7 @@ import { and, desc, eq, inArray, lt, or } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import {
   ADVISOR_EVIDENCE_BLOCKS_MAX,
+  ADVISOR_EXPLANATION_PROFILE,
   AdvisorExplanationSchema,
   AdvisorQuestionSchema,
   AdvisorSuppliedEvidenceIdSchema,
@@ -75,6 +76,9 @@ export interface AdvisorTurnRecord {
   readonly question: string;
   readonly answer: string;
   readonly uncertainty: string;
+  // Explicit abstention flag for succeeded turns, null otherwise. Never
+  // inferred: P1 allows abstained answers with partial text and citations.
+  readonly abstained: boolean | null;
   readonly citations: readonly string[];
   readonly suppliedIds: readonly AdvisorSuppliedEvidenceId[];
   readonly redactions: number;
@@ -198,6 +202,24 @@ function mapTurnRow(row: typeof advisorTurns.$inferSelect): AdvisorTurnRecord | 
   } else if (row.errorCode !== null) {
     return undefined;
   }
+  // Succeeded rows revalidate through the whole explanation schema, so the
+  // stored fields satisfy every P1 invariant including the grounded-answer
+  // citation rule. Other statuses carry no explanation and must be null.
+  let abstained: boolean | null = null;
+  if (row.status === "succeeded") {
+    if (typeof row.abstained !== "boolean") return undefined;
+    const explanation = AdvisorExplanationSchema.safeParse({
+      profile: ADVISOR_EXPLANATION_PROFILE,
+      answer: row.answer,
+      citations: [...citations],
+      abstained: row.abstained,
+      uncertainty: row.uncertainty,
+    });
+    if (!explanation.success) return undefined;
+    abstained = row.abstained;
+  } else if (row.abstained !== null) {
+    return undefined;
+  }
   if (
     (row.status === "pending" || row.status === "cancelled" || row.status === "expired") &&
     (row.answer !== "" || row.uncertainty !== "" || citations.length !== 0)
@@ -211,6 +233,7 @@ function mapTurnRow(row: typeof advisorTurns.$inferSelect): AdvisorTurnRecord | 
     question: row.question,
     answer: row.answer,
     uncertainty: row.uncertainty,
+    abstained,
     citations,
     suppliedIds: suppliedIds.data,
     redactions: row.redactions,
@@ -349,6 +372,7 @@ export class AdvisorTurnsRepository {
             question: input.question,
             answer: "",
             uncertainty: "",
+            abstained: null,
             citationsJson: "[]",
             suppliedIdsJson: suppliedJson,
             redactions: 0,
@@ -425,6 +449,7 @@ export class AdvisorTurnsRepository {
     let answer = "";
     let uncertainty = "";
     let citations: readonly string[] = [];
+    let abstained: boolean | null = null;
     let redactions = 0;
     let errorCode: AdvisorTurnFailureCode | null = null;
     if (completion.status === "succeeded") {
@@ -438,6 +463,7 @@ export class AdvisorTurnsRepository {
       answer = explanation.data.answer;
       uncertainty = explanation.data.uncertainty;
       citations = [...explanation.data.citations];
+      abstained = explanation.data.abstained;
       redactions = completion.redactions;
     } else if (completion.status === "parse_error" || completion.status === "provider_error") {
       if (!isFailureCode(completion.errorCode)) return failed("invalid_input");
@@ -491,11 +517,12 @@ export class AdvisorTurnsRepository {
           }
           if (row.status === "expired") return failed("turn_expired");
           if (row.status !== "pending") return failed("turn_not_pending");
-          const completed = tx.update(advisorTurns)
+          const completed =           tx.update(advisorTurns)
             .set({
               status: completion.status,
               answer,
               uncertainty,
+              abstained,
               citationsJson: JSON.stringify(citations),
               redactions,
               errorCode,

@@ -286,40 +286,60 @@ describe("advisor turn completion", () => {
     expect(replayed.value.turn.status).toBe("pending");
   });
 
-  it("roundtrips an abstention without deriving new semantics", () => {
-    const { fixture, turnId } = reservedTurn();
-    const completed = fixture.turns.completeTurn({
-      engagementId: fixture.engagementId,
-      turnId,
+  it("stores the exact abstained boolean, never a derivation", () => {
+    // Identical text and citations with opposite flags must persist
+    // opposite booleans: abstention cannot be inferred from blank fields.
+    const sharedText = {
+      answer: "Partial read: only the banner is visible.",
+      citations: ["nmap-xml-1"],
+      uncertainty: "Version cannot be determined from the banner alone.",
+    };
+    const first = createFixture();
+    const firstReserved = first.turns.reserveOrReplay(
+      reserveInput({ engagementId: first.engagementId }),
+    );
+    if (!firstReserved.ok || firstReserved.value.disposition !== "reserved") {
+      throw new Error("reserve fixture failed");
+    }
+    const abstained = first.turns.completeTurn({
+      engagementId: first.engagementId,
+      turnId: firstReserved.value.turn.id,
       requestDigest: DIGEST_A,
       completion: {
         status: "succeeded",
-        explanation: explanation({
-          answer: "",
-          citations: [],
-          abstained: true,
-          uncertainty: "Excerpts do not show the version.",
-        }),
+        explanation: explanation({ ...sharedText, abstained: true }),
         redactions: 1,
       },
     });
-    expect(completed.ok).toBe(true);
-    if (!completed.ok) return;
-    expect(completed.value.turn).toMatchObject({
-      status: "succeeded",
-      answer: "",
-      uncertainty: "Excerpts do not show the version.",
-      citations: [],
-      errorCode: null,
+    expect(abstained.ok).toBe(true);
+    if (!abstained.ok) return;
+    expect(abstained.value.turn.abstained).toBe(true);
+
+    const second = createFixture();
+    const secondReserved = second.turns.reserveOrReplay(
+      reserveInput({ engagementId: second.engagementId }),
+    );
+    if (!secondReserved.ok || secondReserved.value.disposition !== "reserved") {
+      throw new Error("reserve fixture failed");
+    }
+    const grounded = second.turns.completeTurn({
+      engagementId: second.engagementId,
+      turnId: secondReserved.value.turn.id,
+      requestDigest: DIGEST_A,
+      completion: {
+        status: "succeeded",
+        explanation: explanation({ ...sharedText, abstained: false }),
+        redactions: 1,
+      },
     });
-    const listed = fixture.turns.listTurns(fixture.engagementId);
-    expect(listed.ok).toBe(true);
-    if (!listed.ok) return;
-    expect(listed.value.turns[0]).toMatchObject({
-      status: "succeeded",
-      answer: "",
-      uncertainty: "Excerpts do not show the version.",
-    });
+    expect(grounded.ok).toBe(true);
+    if (!grounded.ok) return;
+    expect(grounded.value.turn.abstained).toBe(false);
+
+    const relisted = second.turns.listTurns(second.engagementId);
+    expect(relisted.ok).toBe(true);
+    if (!relisted.ok) return;
+    expect(relisted.value.turns[0]?.abstained).toBe(false);
   });
 
   it("stores bounded error codes without output", () => {

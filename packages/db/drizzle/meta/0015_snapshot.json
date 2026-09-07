@@ -3249,6 +3249,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "abstained": {
+          "name": "abstained",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "citations_json": {
           "name": "citations_json",
           "type": "text",
@@ -3405,6 +3412,10 @@
         "advisor_turn_updated_at": {
           "name": "advisor_turn_updated_at",
           "value": "length(\"advisor_turns\".\"updated_at\") >= 20"
+        },
+        "advisor_turn_abstained": {
+          "name": "advisor_turn_abstained",
+          "value": "(\"advisor_turns\".\"status\" = 'succeeded' and \"advisor_turns\".\"abstained\" in (0, 1)) or (\"advisor_turns\".\"status\" <> 'succeeded' and \"advisor_turns\".\"abstained\" is null)"
         }
       }
     }
