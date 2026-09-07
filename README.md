@@ -16,15 +16,15 @@ When I work a box, tool output lives in terminal tabs, notes in one file, screen
 
 **Findings.** Next slice, not built yet: turn a run into a finding with your own notes attached.
 
-**Advisor.** Deferred until the advisor gate (D6): point it at any OpenAI-compatible endpoint, local by default, and the model reads your evidence and suggests what to look at next. Optional.
+**Advisor.** Optional: point it at any OpenAI-compatible endpoint and ask grounded questions about selected engagement evidence, with abstention when evidence is insufficient. See [docs/operator/advisor-setup.md](./docs/operator/advisor-setup.md).
 
 ## Status
 
 In active development. The program goal is a workbench that can operate a real CTF box end to end.
 
-Working today: engagements with archive and reopen, targets with saved scope and one-click continue, and the Nmap loop with lifecycle polling, XML evidence publication, and projected services with evidence download links.
+Working today: engagements with archive and reopen, targets with saved scope and one-click continue, and the Nmap loop with lifecycle polling, XML evidence publication, and projected services with evidence download links. Engagement notes, HTTP probing, findings capture, raw run output viewing, engagement deadlines, persisted runner and advisor settings, and evidence explanations from a configured model endpoint are also in.
 
-Honest placeholders: the console Advisor, Activity, and Raw output tabs are deferred surfaces, settings controls show shipped defaults until the settings store lands, and plugins wait on the D5 protocol gate. The next slices in order are engagement notes, HTTP probing, findings capture, raw run output viewing, and engagement deadlines. The full plan lives in [docs/development/V0.1_PLAN.md](./docs/development/V0.1_PLAN.md).
+Honest placeholders: the console Advisor, Activity, and Raw output tabs are deferred surfaces, and plugins wait on the D5 protocol gate. The full plan lives in [docs/development/V0.1_PLAN.md](./docs/development/V0.1_PLAN.md).
 
 ## Quick start
 
