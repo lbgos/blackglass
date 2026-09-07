@@ -845,6 +845,26 @@ class TransactionRepository implements EngagementWriteTransaction {
     return { ok: true, value: values };
   }
 
+  // Narrow read-only scoped finding lookup for evidence assembly. Unlike
+  // mutations it stays available on archived engagements; a missing row or
+  // a row owned by another engagement is identically finding_not_found.
+  getFindingForEngagement(
+    engagementId: string,
+    findingId: string,
+  ): RepositoryResult<Finding> {
+    const current = this.currentEngagement(engagementId);
+    if (!current.ok) return current;
+    const row = this.client
+      .select()
+      .from(findings)
+      .where(eq(findings.id, findingId))
+      .get();
+    if (row === undefined || row.engagementId !== engagementId) {
+      return failed({ code: "finding_not_found" });
+    }
+    return findingFromRow(row);
+  }
+
   private setFindingStatus(
     engagementId: string,
     findingId: string,

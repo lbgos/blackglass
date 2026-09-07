@@ -339,3 +339,43 @@ describe("findings persistence", () => {
     ).toEqual({ ok: false, error: { code: "engagement_not_found" } });
   });
 });
+
+describe("scoped finding reads", () => {
+  it("returns owned findings and stays readable when archived", () => {
+    const { repository } = createFixture();
+    const engagement = createEngagement(repository);
+    const created = repository.createFinding(engagement.id, {
+      title: "Scoped finding",
+      severity: "medium",
+      body: "Evidence shows the banner.",
+    });
+    if (!created.ok) throw new Error(`Create failed: ${created.error.code}`);
+    expect(
+      repository.getFindingForEngagement(engagement.id, created.value.id),
+    ).toEqual({ ok: true, value: created.value });
+    const archived = repository.archive(engagement.id, engagement.revision);
+    if (!archived.ok) throw new Error(`Archive failed: ${archived.error.code}`);
+    expect(
+      repository.getFindingForEngagement(engagement.id, created.value.id),
+    ).toEqual({ ok: true, value: created.value });
+  });
+
+  it("reports unknown and foreign findings identically", () => {
+    const { repository } = createFixture();
+    const first = createEngagement(repository);
+    const second = createEngagement(repository);
+    const created = repository.createFinding(first.id, {
+      title: "Owned finding",
+      severity: "low",
+      body: "",
+    });
+    if (!created.ok) throw new Error(`Create failed: ${created.error.code}`);
+    const expected = { ok: false, error: { code: "finding_not_found" } };
+    expect(repository.getFindingForEngagement(first.id, UNKNOWN_ID)).toEqual(expected);
+    expect(repository.getFindingForEngagement(second.id, created.value.id)).toEqual(expected);
+    expect(repository.getFindingForEngagement(UNKNOWN_ID, created.value.id)).toEqual({
+      ok: false,
+      error: { code: "engagement_not_found" },
+    });
+  });
+});
