@@ -201,7 +201,7 @@ describe("advisor context assembly", () => {
     state.findings.set(FINDING, ownedFinding(FINDING, "Port 80 open."));
     const result = await assembleAdvisorContext(
       {
-        request: validRequest({ findingIds: [FINDING] }),
+        request: validRequest({ findingIds: [FINDING], question: `What does this evidence show? ${SECRET}` }),
         history: [{ question: "Earlier?", answer: "Earlier answer." }],
       },
       makeDeps(state),
@@ -228,7 +228,9 @@ describe("advisor context assembly", () => {
     ]);
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain(SECRET);
-    expect(serialized).not.toContain("What does this evidence show?");
+    expect(result.value.prompt.user).toContain("What does this evidence show?");
+    expect("question" in result.value).toBe(false);
+    expect("history" in result.value).toBe(false);
     expect("blocks" in result.value).toBe(false);
   });
 
