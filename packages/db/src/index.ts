@@ -77,10 +77,28 @@ export { HttpProbeRepository } from "./http-probe.js";
 export { FfufRepository } from "./ffuf.js";
 export { RunOutputRepository } from "./run-output.js";
 export {
+  ADVISOR_TURN_EXPIRY_CLEANUP_LIMIT,
+  ADVISOR_TURN_EXPIRY_MS,
+  ADVISOR_TURN_LIST_MAX,
+  AdvisorTurnsRepository,
+  type AdvisorTurnCursor,
+  type AdvisorTurnFailureCode,
+  type AdvisorTurnRecord,
+  type AdvisorTurnStatus,
+  type AdvisorTurnsError,
+  type AdvisorTurnsErrorCode,
+  type AdvisorTurnsRepositoryProviders,
+  type AdvisorTurnsResult,
+  type CompleteAdvisorTurnCompletion,
+  type CompleteAdvisorTurnInput,
+  type ReserveAdvisorTurnInput,
+} from "./advisor-turns.js";
+export {
   actionCoveredDestinations,
   actionSnapshots,
   actionWarningAcknowledgments,
   actions,
+  advisorTurns,
   engagementActiveScopes,
   engagementNotes,
   engagements,
