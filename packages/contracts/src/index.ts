@@ -38,3 +38,4 @@ export {
   type ConnectionTestResult,
 } from "./advisor-status.js";
 export * from "./advisor-chat.js";
+export * from "./advisor-turns.js";

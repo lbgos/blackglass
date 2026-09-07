@@ -127,6 +127,17 @@ export const CommandJsonV1CancelActionBodyDigestSchema = z.object({
   expectedRevision: jsonField,
 });
 
+// Advisor turn digest binds the explicit request only: question plus the
+// excerpt and finding id arrays in original order (order determines prompt
+// order, so canonicalization must preserve it). Model, settings, history,
+// and the body engagement id stay out so retries survive drift; the route
+// checks body/path engagement equality before projecting.
+export const CommandJsonV1CreateAdvisorTurnBodyDigestSchema = z.object({
+  question: jsonField,
+  excerptArtifactIds: jsonField,
+  findingIds: jsonField,
+});
+
 export const CommandJsonV1CreateFfufDiscoveryBodyDigestSchema = z.object({
   expectedEngagementRevision: jsonField,
   expectedActiveScopeRevisionId: jsonField,
@@ -422,6 +433,12 @@ export const commandJsonV1CancelActionDigest = digestProjection({
   path: CommandJsonV1ActionIdPathDigestSchema,
   query: CommandJsonV1EmptyObjectDigestSchema,
   body: objectProjection(CommandJsonV1CancelActionBodyDigestSchema),
+});
+
+export const commandJsonV1CreateAdvisorTurnDigest = digestProjection({
+  path: CommandJsonV1EngagementIdPathDigestSchema,
+  query: CommandJsonV1EmptyObjectDigestSchema,
+  body: objectProjection(CommandJsonV1CreateAdvisorTurnBodyDigestSchema),
 });
 
 export const commandJsonV1CreateFfufDiscoveryDigest = digestProjection({
