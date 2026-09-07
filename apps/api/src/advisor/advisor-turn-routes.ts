@@ -7,6 +7,7 @@ import {
   CreateAdvisorTurnRequestSchema,
   GetAdvisorSettingsResponseSchema,
   commandJsonV1CreateAdvisorTurnDigest,
+  parseAdvisorTurnListQuery,
   projectCommandJsonV1DigestInput,
   type AdvisorTurn,
 } from "@blackglass/contracts";
@@ -28,18 +29,18 @@ import {
   assembleAdvisorContext,
   type AdvisorContextDeps,
 } from "./advisor-context.js";
-import { classifyAdvisorEndpointHost } from "./advisor-status-probe.js";
+import { classifyAdvisorEndpointHost } from "../advisor-status-probe.js";
 import {
   postAdvisorChatCompletion,
   type AdvisorTransportErrorCode,
   type AdvisorTransportRequestFn,
 } from "./advisor-transport.js";
-import type { EvidenceStore } from "./evidence/evidence-store.js";
+import type { EvidenceStore } from "../evidence/evidence-store.js";
 import {
   parseBoundedDigestInput,
   prepareLocalOperatorCommand,
   readIdempotencyKey,
-} from "./operator-command.js";
+} from "../operator-command.js";
 
 export interface AdvisorTurnRouteDeps {
   engagements: Pick<EngagementRepository, "getEngagement" | "getFindingForEngagement">;
@@ -449,7 +450,17 @@ export function registerAdvisorTurnRoutes(app: FastifyInstance, deps: AdvisorTur
           { signal: controller.signal, requestFn: deps.transport?.requestFn },
         );
       } catch {
-        return sendError(reply, 500, "invalid_persisted_data");
+        // An unexpected provider throw must still finalize the reserved
+        // row: cancelled when the client is gone, terminal failure
+        // otherwise. Never strand pending, never leak the raw error.
+        if (controller.signal.aborted) {
+          await finalizeCancelled();
+          return;
+        }
+        return finishFailed(reply, deps, engagementId, turnId, requestDigest, key, {
+          status: "provider_error",
+          errorCode: "provider_unreachable",
+        });
       }
       if (controller.signal.aborted) {
         // Late-provider resolve race: the output is discarded and the
@@ -479,7 +490,7 @@ export function registerAdvisorTurnRoutes(app: FastifyInstance, deps: AdvisorTur
         parsedBody = JSON.parse(transport.untrustedContent);
       } catch {
         return finishFailed(reply, deps, engagementId, turnId, requestDigest, key, {
-          status: "provider_error",
+          status: "parse_error",
           errorCode: "provider_parse_error",
         });
       }
@@ -585,7 +596,7 @@ async function sendTurnFromExplanation(
   const explanation = AdvisorExplanationSchema.safeParse(parsedBody);
   if (!explanation.success) {
     return finishFailed(reply, deps, engagementId, turnId, requestDigest, key, {
-      status: "provider_error",
+      status: "parse_error",
       errorCode: "provider_parse_error",
     });
   }
@@ -607,7 +618,7 @@ async function sendTurnFromExplanation(
   });
   if (!rebuilt.success) {
     return finishFailed(reply, deps, engagementId, turnId, requestDigest, key, {
-      status: "provider_error",
+      status: "parse_error",
       errorCode: "provider_parse_error",
     });
   }

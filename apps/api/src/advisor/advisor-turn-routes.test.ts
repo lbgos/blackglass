@@ -19,8 +19,9 @@ import type {
   AdvisorTransportRequestFn,
   AdvisorTransportRequestOptions,
 } from "./advisor-transport.js";
-import { buildApp } from "./app.js";
-import { EvidenceStore } from "./evidence/evidence-store.js";
+import { buildApp } from "../app.js";
+import { EvidenceStore } from "../evidence/evidence-store.js";
+import { buildStorageBackedApp } from "../runtime.js";
 
 const KEY_ENV_VAR = "BLACKGLASS_ADVISOR_TURNS_TEST_KEY";
 const KEY_VALUE = "lab-advisor-key-value";
@@ -275,6 +276,19 @@ describe("advisor turn routes", () => {
     });
     expect(rejected.statusCode).toBe(400);
     expect(rejected.json()).toEqual({ code: "invalid_request" });
+    const malformed = await harness.app.inject({
+      method: "POST",
+      url: `/api/v1/engagements/${harness.engagementId}/advisor/turns`,
+      headers: { "idempotency-key": "short" },
+      payload: {
+        engagementId: harness.engagementId,
+        question: "What does this evidence show?",
+        excerptArtifactIds: ["00000000-0000-4000-8000-000000000001"],
+        findingIds: [],
+      },
+    });
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.json()).toEqual({ code: "invalid_request" });
     const relisted = await harness.app.inject({
       method: "GET",
       url: `/api/v1/engagements/${harness.engagementId}/advisor/turns`,
@@ -711,5 +725,29 @@ describe("advisor turn routes", () => {
     const blocked = await postTurn(harness.app, harness.engagementId, "fixture-key-turn-archived-0", artifactId);
     expect(blocked.statusCode).toBe(409);
     expect(blocked.json()).toEqual({ code: "engagement_archived" });
+  });
+
+  it("mounts turn routes through the storage-backed runtime factory", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "blackglass-advisor-turns-runtime-"));
+    temporaryDirectories.push(directory);
+    await chmod(directory, 0o700);
+    const app = await buildStorageBackedApp(directory);
+    openApps.push(app);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/engagements",
+      headers: { "idempotency-key": "runtime-fixture-engagement-000" },
+      payload: { name: "Runtime lab", kind: "lab", autoContinueWarnings: false },
+    });
+    expect(created.statusCode).toBe(201);
+    const engagementId = (created.json() as { id: string }).id;
+    const listed = await app.inject({
+      method: "GET",
+      url: `/api/v1/engagements/${engagementId}/advisor/turns`,
+    });
+    // 200 with an empty page proves the routes are mounted by the real
+    // factory; an unmounted path would 404 with a route-not-found body.
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toEqual({ turns: [], nextCursor: null });
   });
 });

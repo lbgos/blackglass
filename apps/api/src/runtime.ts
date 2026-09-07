@@ -1,4 +1,5 @@
 import {
+  AdvisorTurnsRepository,
   EngagementRepository,
   EvidenceGrantRepository,
   FfufRepository,
@@ -53,6 +54,7 @@ export async function buildStorageBackedApp(
     const httpProbeRepository = new HttpProbeRepository(database.db);
     const ffufRepository = new FfufRepository(database.db);
     const settingsRepository = new SettingsRepository(database.db);
+    const advisorTurnsRepository = new AdvisorTurnsRepository(database.db);
     const runOutputRepository = new RunOutputRepository(database.db);
 
     // Evidence publication is fail-closed: without a loadable native binding
@@ -104,6 +106,7 @@ export async function buildStorageBackedApp(
       ...(backupLock === undefined ? {} : { storageGate: backupLock }),
       nmapServiceRepository,
       settingsRepository,
+      advisorTurnsRepository,
       httpProbeRepository,
       ffufRepository,
       runOutputRepository,
