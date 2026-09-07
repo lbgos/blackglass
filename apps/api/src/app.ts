@@ -10,6 +10,7 @@ import Fastify, {
   type FastifyServerOptions,
 } from "fastify";
 import type {
+  AdvisorTurnsRepository,
   EngagementRepository,
   EvidenceGrantRepository,
   FfufRepository,
@@ -45,6 +46,10 @@ import { registerHttpProbeRoutes } from "./http-probe-routes.js";
 import { registerReportRoutes } from "./report-routes.js";
 import { registerSettingsRoutes } from "./settings-routes.js";
 import {
+  registerAdvisorTurnRoutes,
+  type AdvisorTurnRouteOptions,
+} from "./advisor/advisor-turn-routes.js";
+import {
   registerAdvisorStatusRoutes,
   type AdvisorStatusRouteOptions,
 } from "./advisor-status-routes.js";
@@ -54,6 +59,7 @@ interface BuildAppOptions {
   engagementRepository: Pick<
     EngagementRepository,
     | "getEngagement"
+    | "getFindingForEngagement"
     | "listEngagements"
     | "listScopeRevisions"
     | "getAction"
@@ -108,6 +114,18 @@ interface BuildAppOptions {
     | "updateAdvisorSettings"
   >;
   advisorStatus?: Omit<AdvisorStatusRouteOptions, "repository">;
+  advisorTurnsRepository?: Pick<
+    AdvisorTurnsRepository,
+    | "reserveOrReplay"
+    | "completeTurn"
+    | "listTurns"
+    | "expireStalePending"
+    | "lookupTurnByIdempotencyKey"
+  >;
+  advisorTurns?: Omit<
+    AdvisorTurnRouteOptions,
+    "engagements" | "turns" | "grants" | "store" | "settings"
+  >;
   httpProbeRepository?: Pick<HttpProbeRepository, "listForEngagement">;
   ffufRepository?: Pick<FfufRepository, "listForEngagement">;
   runOutputRepository?: Pick<
@@ -135,6 +153,8 @@ export function buildApp({
   nmapServiceRepository,
   settingsRepository,
   advisorStatus,
+  advisorTurnsRepository,
+  advisorTurns,
   httpProbeRepository,
   ffufRepository,
   runOutputRepository,
@@ -255,6 +275,26 @@ export function buildApp({
   if (settingsRepository !== undefined) {
     registerSettingsRoutes(app, { repository: settingsRepository });
     registerAdvisorStatusRoutes(app, { ...advisorStatus, repository: settingsRepository });
+  }
+  if (
+    advisorTurnsRepository !== undefined &&
+    settingsRepository !== undefined &&
+    evidenceGrantRepository !== undefined &&
+    evidenceStore !== undefined
+  ) {
+    registerAdvisorTurnRoutes(app, {
+      ...advisorTurns,
+      engagements: {
+        getEngagement: engagementRepository.getEngagement.bind(engagementRepository),
+        getFindingForEngagement: engagementRepository.getFindingForEngagement.bind(
+          engagementRepository,
+        ),
+      },
+      turns: advisorTurnsRepository,
+      grants: evidenceGrantRepository,
+      store: evidenceStore,
+      settings: settingsRepository,
+    });
   }
   if (httpProbeRepository !== undefined) {
     registerHttpProbeRoutes(app, { repository: httpProbeRepository });

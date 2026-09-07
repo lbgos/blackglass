@@ -404,6 +404,68 @@ export class AdvisorTurnsRepository {
     }
   }
 
+  // Narrow read-only lookup by idempotency key for the early-replay path.
+  // Single statement, no transaction, no writes: expiry and conflict
+  // decisions stay with the caller.
+  lookupTurnByIdempotencyKey(
+    engagementId: string,
+    idempotencyKey: string,
+  ): AdvisorTurnsResult<{ turn: AdvisorTurnRecord | null }> {
+    if (!isIdentifier(engagementId)) return failed("invalid_input");
+    if (!IdempotencyKeySchema.safeParse(idempotencyKey).success) {
+      return failed("invalid_input");
+    }
+    try {
+      const existing = this.db
+        .select()
+        .from(advisorTurns)
+        .where(
+          and(
+            eq(advisorTurns.engagementId, engagementId),
+            eq(advisorTurns.idempotencyKey, idempotencyKey),
+          ),
+        )
+        .get();
+      if (existing === undefined) return { ok: true, value: { turn: null } };
+      const turn = mapTurnRow(existing);
+      if (turn === undefined) return failed("invalid_persisted_data");
+      return { ok: true, value: { turn } };
+    } catch (error) {
+      return { ok: false, error: storageError(error) };
+    }
+  }
+
+  // Narrow read-only lookup by idempotency key for the early-replay
+  // path. Single statement, no transaction, no writes: expiry and
+  // conflict decisions stay with the caller.
+  lookupTurnByIdempotencyKey(
+    engagementId: string,
+    idempotencyKey: string,
+  ): AdvisorTurnsResult<{ turn: AdvisorTurnRecord | null }> {
+    if (!isIdentifier(engagementId)) return failed("invalid_input");
+    if (!IdempotencyKeySchema.safeParse(idempotencyKey).success) {
+      return failed("invalid_input");
+    }
+    try {
+      const existing = this.db
+        .select()
+        .from(advisorTurns)
+        .where(
+          and(
+            eq(advisorTurns.engagementId, engagementId),
+            eq(advisorTurns.idempotencyKey, idempotencyKey),
+          ),
+        )
+        .get();
+      if (existing === undefined) return { ok: true, value: { turn: null } };
+      const turn = mapTurnRow(existing);
+      if (turn === undefined) return failed("invalid_persisted_data");
+      return { ok: true, value: { turn } };
+    } catch (error) {
+      return { ok: false, error: storageError(error) };
+    }
+  }
+
   private replayAfterConflict(
     engagementId: string,
     idempotencyKey: string,
