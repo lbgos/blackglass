@@ -1,4 +1,5 @@
 import type { Engagement } from "@blackglass/contracts";
+import { ADVISOR_FINDING_IDS_MAX } from "@blackglass/contracts";
 import {
   Button,
   EmptyState,
@@ -8,6 +9,7 @@ import {
   StaleDataState,
 } from "@blackglass/ui";
 import { Link, useNavigate } from "@tanstack/react-router";
+import { useEffect } from "react";
 
 import {
   ENGAGEMENT_KIND_LABELS,
@@ -16,6 +18,7 @@ import {
 } from "./format.js";
 import { partitionEngagements, useEngagementDetailQuery, useEngagementsQuery } from "./query.js";
 import { ActionPlanner } from "./action-planner.js";
+import { AdvisorPanel } from "../advisor/advisor-panel.js";
 import { EngagementDeadlineSection } from "./deadline.js";
 import { EngagementFindingsSection } from "./findings.js";
 import { EngagementFfufSection } from "./ffuf-surface.js";
@@ -234,6 +237,30 @@ function EngagementDetail({
   const runId = selectedRunId !== undefined && selectedRunId.length > 0 ? selectedRunId : undefined;
   const navigate = useNavigate();
   const archived = displayed.status === "archived";
+  const {
+    advisorDraft,
+    closeAdvisor,
+    setAdvisorExcerpts,
+    setAdvisorFindingIds,
+  } = useEngagementWorkspace();
+
+  // Advisor selection belongs to one engagement: switching engagements
+  // closes the drawer and drops the draft so responses can never leak
+  // across engagements.
+  useEffect(() => {
+    closeAdvisor();
+    setAdvisorExcerpts([]);
+    setAdvisorFindingIds([]);
+  }, [displayed.id, closeAdvisor, setAdvisorExcerpts, setAdvisorFindingIds]);
+
+  const toggleAdvisorFinding = (findingId: string) => {
+    if (advisorDraft.findingIds.includes(findingId)) {
+      setAdvisorFindingIds(advisorDraft.findingIds.filter((id) => id !== findingId));
+      return;
+    }
+    if (advisorDraft.findingIds.length >= ADVISOR_FINDING_IDS_MAX) return;
+    setAdvisorFindingIds([...advisorDraft.findingIds, findingId]);
+  };
 
   const selectRun = (nextRunId: string) => {
     void navigate({
@@ -366,6 +393,14 @@ function EngagementDetail({
           key={`findings-${displayed.id}`}
           archived={archived}
           engagementId={displayed.id}
+          {...(advisorDraft.open
+            ? {
+                selection: {
+                  selectedIds: advisorDraft.findingIds,
+                  onToggleFinding: toggleAdvisorFinding,
+                },
+              }
+            : {})}
         />
       ) : null}
 
@@ -373,6 +408,19 @@ function EngagementDetail({
         <EngagementReportSection
           key={`report-${displayed.id}`}
           engagementId={displayed.id}
+        />
+      ) : null}
+
+      {advisorDraft.open ? (
+        <AdvisorPanel
+          key={`${displayed.id}:${advisorDraft.nonce}`}
+          engagementId={displayed.id}
+          archived={archived}
+          excerpts={advisorDraft.excerpts}
+          findingIds={advisorDraft.findingIds}
+          onExcerptsChange={setAdvisorExcerpts}
+          onFindingIdsChange={setAdvisorFindingIds}
+          onClose={closeAdvisor}
         />
       ) : null}
     </article>

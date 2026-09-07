@@ -29,15 +29,24 @@ function parseEvidenceInput(value: string): string[] {
 export function EngagementFindingsSection({
   archived,
   engagementId,
+  selection,
 }: {
   archived: boolean;
   engagementId: string;
+  selection?:
+    | {
+        selectedIds: readonly string[];
+        onToggleFinding: (findingId: string) => void;
+      }
+    | undefined;
 }) {
   const findings = useFindingsQuery(engagementId);
   const retry = () => void findings.refetch();
   const hasData = findings.data !== undefined;
 
-  const body = <FindingsBody archived={archived} engagementId={engagementId} />;
+  const body = (
+    <FindingsBody archived={archived} engagementId={engagementId} selection={selection} />
+  );
 
   return (
     <section aria-label="Findings" className="mt-5 border-t border-border pt-4">
@@ -78,9 +87,16 @@ export function EngagementFindingsSection({
 function FindingsBody({
   archived,
   engagementId,
+  selection,
 }: {
   archived: boolean;
   engagementId: string;
+  selection?:
+    | {
+        selectedIds: readonly string[];
+        onToggleFinding: (findingId: string) => void;
+      }
+    | undefined;
 }) {
   const findings = useFindingsQuery(engagementId);
   const create = useCreateFindingMutation(engagementId);
@@ -153,6 +169,14 @@ function FindingsBody({
                   archived={archived}
                   finding={finding}
                   pending={resolve.isPending || reopen.isPending}
+                  selectedForAdvisor={
+                    selection === undefined ? undefined : selection.selectedIds.includes(finding.id)
+                  }
+                  onToggleAdvisor={
+                    selection === undefined
+                      ? undefined
+                      : () => selection.onToggleFinding(finding.id)
+                  }
                   onResolve={() => {
                     if (resolve.isError) resolve.reset();
                     if (reopen.isError) reopen.reset();
@@ -263,20 +287,33 @@ function FindingRow({
   pending,
   onResolve,
   onReopen,
+  selectedForAdvisor,
+  onToggleAdvisor,
 }: {
   archived: boolean;
   finding: Finding;
   pending: boolean;
   onResolve: () => void;
   onReopen: () => void;
+  selectedForAdvisor?: boolean | undefined;
+  onToggleAdvisor?: (() => void) | undefined;
 }) {
   const isOpen = finding.status === "open";
   return (
     <li className="rounded-[10px] border border-border px-3 py-2.5">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <p className="m-0 truncate text-[13px] font-semibold" title={finding.title}>
-            {finding.title}
+          <p className="m-0 flex items-start gap-2 truncate text-[13px] font-semibold" title={finding.title}>
+            {onToggleAdvisor !== undefined ? (
+              <input
+                type="checkbox"
+                checked={selectedForAdvisor === true}
+                onChange={onToggleAdvisor}
+                aria-label={`Select finding ${finding.title} for advisor`}
+                className="mt-0.5 shrink-0 accent-primary"
+              />
+            ) : null}
+            <span className="min-w-0 flex-1 truncate">{finding.title}</span>
           </p>
           <p className="m-0 mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
             <span>{finding.severity}</span>
