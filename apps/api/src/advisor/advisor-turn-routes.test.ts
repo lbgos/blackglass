@@ -52,6 +52,7 @@ interface FakeTransport {
   hold(): void;
   release(): void;
   waitForHits(count: number): Promise<void>;
+  waitForServerAbort(timeoutMs?: number): Promise<void>;
 }
 
 function createFakeTransport(
@@ -63,6 +64,7 @@ function createFakeTransport(
   let gate: Promise<void> = Promise.resolve();
   let releaseGate: () => void = () => {};
   const waiters: Array<() => void> = [];
+  const signals: AbortSignal[] = [];
   const notify = () => {
     for (const waiter of waiters.splice(0)) waiter();
   };
@@ -72,6 +74,7 @@ function createFakeTransport(
       const authorization = options.headers.authorization;
       authorizations.push(typeof authorization === "string" ? authorization : undefined);
       bodies.push(options.body);
+      if (options.signal !== undefined) signals.push(options.signal);
       notify();
       await gate;
       if (options.signal?.aborted) {
@@ -99,6 +102,29 @@ function createFakeTransport(
           else waiters.push(check);
         };
         waiters.push(check);
+      }),
+    // Resolves once a signal handed to the fake has actually aborted, so
+    // the test only releases a held provider after the server observed
+    // the disconnect. Bounded: rejects instead of hanging teardown.
+    waitForServerAbort: (timeoutMs = 5_000): Promise<void> =>
+      new Promise<void>((resolve, reject) => {
+        const done = () => {
+          for (const signal of signals) signal.removeEventListener("abort", onAbort);
+          clearTimeout(timer);
+        };
+        const onAbort = () => {
+          done();
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          done();
+          reject(new Error("timed out waiting for server-side abort"));
+        }, timeoutMs);
+        for (const signal of signals) signal.addEventListener("abort", onAbort, { once: true });
+        if (signals.some((signal) => signal.aborted)) {
+          done();
+          resolve();
+        }
       }),
   };
 }
@@ -647,26 +673,56 @@ describe("advisor turn routes", () => {
       }),
       signal: controller.signal,
     });
-    pending.catch(() => {});
-    await harness.transport.waitForHits(1);
-    controller.abort();
-    await harness.transport.waitForHits(1);
-    harness.transport.release();
-    const deadline = Date.now() + 5_000;
-    let status: string | undefined;
-    while (Date.now() < deadline) {
-      const listed = await harness.app.inject({
+    const clientSettled = pending.then(
+      () => "fulfilled" as const,
+      () => "rejected" as const,
+    );
+    try {
+      await harness.transport.waitForHits(1);
+      // The reservation must exist as pending before the disconnect.
+      const before = await harness.app.inject({
         method: "GET",
         url: `/api/v1/engagements/${harness.engagementId}/advisor/turns`,
       });
-      const turns = (listed.json() as { turns: Array<{ status: string }> }).turns;
-      if (turns.length > 0 && turns[0]?.status === "cancelled") {
-        status = "cancelled";
-        break;
+      expect(
+        (before.json() as { turns: Array<{ status: string }> }).turns.map((turn) => turn.status),
+      ).toEqual(["pending"]);
+      controller.abort();
+      expect(await clientSettled).toBe("rejected");
+      // Only release the held provider after the server-side transport
+      // signal actually aborted; releasing earlier permits a legitimate
+      // succeeded race and would weaken the assertion.
+      await harness.transport.waitForServerAbort();
+      harness.transport.release();
+      const deadline = Date.now() + 5_000;
+      let turn: { status: string; answer: string; citations: unknown[] } | undefined;
+      while (Date.now() < deadline) {
+        const listed = await harness.app.inject({
+          method: "GET",
+          url: `/api/v1/engagements/${harness.engagementId}/advisor/turns`,
+        });
+        const turns = (listed.json() as { turns: Array<typeof turn & object> }).turns;
+        if (turns.length > 0 && turns[0]?.status === "cancelled") {
+          turn = turns[0] as typeof turn & object;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
       }
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(turn?.status).toBe("cancelled");
+      expect(turn?.answer).toBe("");
+      expect(turn?.citations).toEqual([]);
+      // No resurrection after the late provider response settles.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const reread = await harness.app.inject({
+        method: "GET",
+        url: `/api/v1/engagements/${harness.engagementId}/advisor/turns`,
+      });
+      expect(
+        (reread.json() as { turns: Array<{ status: string }> }).turns.map((t) => t.status),
+      ).toEqual(["cancelled"]);
+    } finally {
+      harness.transport.release();
     }
-    expect(status).toBe("cancelled");
   }, 15000);
 
   it("reads archived and paged history", async () => {
