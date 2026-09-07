@@ -163,6 +163,10 @@ export interface EngagementWriteTransaction {
     input: unknown,
   ): RepositoryResult<Finding>;
   listFindings(engagementId: string): RepositoryResult<Finding[]>;
+  getFindingForEngagement(
+    engagementId: string,
+    findingId: string,
+  ): RepositoryResult<Finding>;
   resolveFinding(
     engagementId: string,
     findingId: string,
@@ -1481,6 +1485,33 @@ export class EngagementRepository {
         values.push(parsed.value);
       }
       return { ok: true, value: values };
+    } catch (error) {
+      return failed({
+        code: isStorageBusy(error) ? "storage_busy" : "invalid_persisted_data",
+      });
+    }
+  }
+
+  getFindingForEngagement(
+    engagementId: string,
+    findingId: string,
+  ): RepositoryResult<Finding> {
+    try {
+      const engagement = this.db
+        .select({ id: engagements.id })
+        .from(engagements)
+        .where(eq(engagements.id, engagementId))
+        .get();
+      if (engagement === undefined) return failed({ code: "engagement_not_found" });
+      const row = this.db
+        .select()
+        .from(findings)
+        .where(eq(findings.id, findingId))
+        .get();
+      if (row === undefined || row.engagementId !== engagementId) {
+        return failed({ code: "finding_not_found" });
+      }
+      return findingFromRow(row);
     } catch (error) {
       return failed({
         code: isStorageBusy(error) ? "storage_busy" : "invalid_persisted_data",

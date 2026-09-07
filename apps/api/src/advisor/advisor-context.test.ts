@@ -33,6 +33,12 @@ interface FakeState {
   missing: Set<string>;
   corrupt: Set<string>;
   excerptCalls: string[];
+  excerptArgs: Array<{
+    artifactId: string;
+    expectedSizeBytes: number;
+    expectedDigest: string;
+    maxBytes: number;
+  }>;
   engagementCalls: number;
   engagementArchived: boolean;
 }
@@ -112,13 +118,14 @@ function makeDeps(state: FakeState): AdvisorContextDeps {
       },
     },
     excerpts: {
-      verifiedExcerpt: async ({ artifactId }): Promise<VerifiedExcerptResult> => {
-        state.excerptCalls.push(artifactId);
-        if (state.missing.has(artifactId)) return { status: "missing" };
-        if (state.corrupt.has(artifactId)) {
+      verifiedExcerpt: async (args): Promise<VerifiedExcerptResult> => {
+        state.excerptCalls.push(args.artifactId);
+        state.excerptArgs.push({ ...args });
+        if (state.missing.has(args.artifactId)) return { status: "missing" };
+        if (state.corrupt.has(args.artifactId)) {
           return { status: "corrupt", code: "artifact_symlink_rejected" };
         }
-        const entry = state.excerpts.get(artifactId);
+        const entry = state.excerpts.get(args.artifactId);
         if (entry === undefined) return { status: "missing" };
         return {
           status: "ready",
@@ -139,6 +146,7 @@ function emptyState(): FakeState {
     missing: new Set(),
     corrupt: new Set(),
     excerptCalls: [],
+    excerptArgs: [],
     engagementCalls: 0,
     engagementArchived: false,
   };
@@ -209,6 +217,14 @@ describe("advisor context assembly", () => {
     expect(result.value.prompt.user).toContain("[redacted]");
     expect(result.value.excerpts).toEqual([
       { id: "nmap-xml-1", truncated: false, totalBytes: owned.sizeBytes },
+    ]);
+    expect(state.excerptArgs).toEqual([
+      {
+        artifactId: "nmap-xml-1",
+        expectedSizeBytes: owned.sizeBytes,
+        expectedDigest: DIGEST,
+        maxBytes: 4096,
+      },
     ]);
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain(SECRET);
@@ -308,8 +324,11 @@ describe("advisor context assembly", () => {
     expect(truncated.ok).toBe(true);
     if (!truncated.ok) return;
     expect(truncated.value.excerpts).toEqual([
-      { id: "nmap-xml-1", truncated: false, totalBytes: 4_096 },
+      { id: "nmap-xml-1", truncated: true, totalBytes: 6_000 },
     ]);
+    expect(truncated.value.prompt.user).toContain(
+      "[excerpt truncated: first 4096 of 6000 bytes]",
+    );
     const oversized = emptyState();
     for (let index = 0; index < 4; index += 1) {
       const id = `artifact-${index}`;
