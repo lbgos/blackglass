@@ -1,71 +1,45 @@
 # Blackglass
 
-A local-first workbench for CTFs and lab work.
+A local-first workspace for security assessments, CTFs, and labs.
 
-When I work a box, tool output lives in terminal tabs, notes in one file, screenshots in another folder, and nothing ties them together. Blackglass puts all of it under the engagement: targets, scope, tool runs, raw output, findings. It runs on your machine, keeps everything in a local SQLite file, and works offline.
+I'm building it for my own security work: keep targets, scans, evidence, notes, and reports together. Less moving things between tools, more time understanding the target. If it helps you with internal assessments or client work too, I'd like your input.
 
 ## What it does
 
-**Engagements.** One per box, lab, or assessment. Targets, scope, runs, and findings live under it instead of scattered across folders.
+- Nmap service discovery, HTTP probing, and ffuf path discovery.
+- Saved run history, output, and evidence per engagement.
+- Markdown notes, findings, and reports exported as Markdown or JSON.
+- Saved scope with warnings you can acknowledge and continue past.
+- Optional [AI evidence explanations](docs/operator/advisor-setup.md) using your own compatible endpoint.
 
-**Scope.** Saved rules define what is in bounds. Point a tool at something out of scope and you get one concise warning. Continue runs it and records the warning with the exact target, so nothing gets blocked silently and nothing gets forgotten.
+Runs on your Linux machine with a browser UI, SQLite, and local evidence files. External AI providers receive the evidence you select.
 
-**Runner.** Tools run as child processes on your host. Spawned by argv, never shell strings, cancelled with the whole process group, resource-limited. Runs hold leases with fencing tokens, so a stale runner cannot append results after it lost the lease.
-
-**Evidence.** Raw tool output is stored immutable and content-addressed before anything reads or formats it. You can always go back to what the tool actually said.
-
-**Findings.** Capture findings against runs with severity levels, notes, and resolve/reopen transitions.
-
-**Advisor.** Optional: point it at a compatible OpenAI-style endpoint, one that answers JSON object mode with the documented response fields, and ask grounded questions about selected engagement evidence, with abstention when evidence is insufficient. See [docs/operator/advisor-setup.md](./docs/operator/advisor-setup.md).
-
-## Status
-
-In active development. The program goal is a workbench that can operate a real CTF box end to end.
-
-Working today: engagements with archive and reopen, targets with saved scope and one-click continue, and the Nmap loop with lifecycle polling, XML evidence publication, and projected services with evidence download links. Engagement notes, HTTP probing, findings capture, raw run output viewing, engagement deadlines, persisted runner and advisor settings, and evidence explanations from a configured model endpoint are also in.
-
-Honest placeholders: the console Advisor, Activity, and Raw output tabs are deferred surfaces, and plugins wait on the D5 protocol gate. The full plan lives in [docs/development/V0.1_PLAN.md](./docs/development/V0.1_PLAN.md).
+**Early development.** Local, single-user use. Some screens are unfinished, and runner setup is still manual. No packaged installer yet.
 
 ## Quick start
 
-Requires a supported Linux host (glibc >= 2.28) for the full evidence workflow, Node.js 24 and pnpm 10, plus a C compiler (`cc`) and Node API development headers (`node_api.h`) for the one-time native build below. The compiler and the headers are separate prerequisites.
+Requires Linux with glibc 2.28+, Node.js 24, pnpm 10.24.0, a C compiler (`cc`), and Node development headers (`node_api.h`).
 
 ```bash
+git clone https://github.com/Lbgosna/blackglass.git
+cd blackglass
 pnpm install --frozen-lockfile
-pnpm --filter @blackglass/evidence-native build   # one-time native build per checkout
-pnpm dev        # supervised API + web with isolated dev storage
+pnpm --filter @blackglass/evidence-native build
+pnpm dev
 ```
 
-Rerun the native build when its C source changes or the runtime reports the binding unavailable; if that step fails, check its error output for missing headers or a compiler failure. Without the binding the app still boots, but evidence routes and advisor turn routes stay unregistered by design. For contributor validation, run `pnpm check` separately. It checks format, lint, types, tests, and the build.
+Open <http://127.0.0.1:5173>. Data lives in `.blackglass/dev` by default. The native build is required for evidence and advisor turns.
 
-## Stack
+This starts the UI and API. Scans also need a separately [enrolled runner](docs/architecture/0002-actions-runs-runner-trust.md), installed tools, and a wordlist for ffuf. In the [runner configuration](apps/runner/src/config.ts), set `BLACKGLASS_API_BASE_URL` to `http://127.0.0.1:3001` for development.
 
-- Node.js 24, pnpm workspaces, strict TypeScript
-- React 19, Vite, TanStack Router and Query, Tailwind CSS v4
-- Fastify, Zod, REST, Server-Sent Events
-- SQLite in WAL mode through Drizzle
-- plugin protocol over versioned NDJSON is planned and gated on D5; no plugin SDK ships yet
+## Try it
 
-## Layout
+Use a dedicated lab and [tell me what breaks or gets in your way](https://github.com/Lbgosna/blackglass/issues). Include reproduction steps and your tested commit. Keep credentials and private target data out of reports.
 
-```text
-apps/web            React client
-apps/api            Fastify control plane
-apps/runner         native host runner
-packages/contracts  shared Zod, API, and event contracts
-packages/domain     pure rules and state transitions
-packages/db         Drizzle schema and migrations
-packages/ui         Blackglass-owned UI primitives
-docs/               plans, contracts, and status
-```
+Considering it for your business? Tell me what you'd need before adopting it. Stars and sharing help others find the project.
 
-## Docs
+## Development
 
-- [AGENTS.md](./AGENTS.md): rules for coding agents in this repository
-- [docs/development/V0.1_PLAN.md](./docs/development/V0.1_PLAN.md): product plan and milestones
-- [docs/architecture/DECISION_GATES.md](./docs/architecture/DECISION_GATES.md): decisions that must settle before their milestone
-- [docs/ui/constitution.md](./docs/ui/constitution.md): shell, motion, theme, and accessibility behavior
+TypeScript, React, Vite, Tailwind CSS, Fastify, and SQLite. Run `pnpm check` for formatting, lint, types, tests, and builds.
 
-## License
-
-[AGPL-3.0](./LICENSE)
+[Plan](docs/development/V0.1_PLAN.md) · [Contributing workflow](docs/development/MAINTAINER_HANDBOOK.md) · [AGPL-3.0-only](LICENSE)
