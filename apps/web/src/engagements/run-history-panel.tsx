@@ -1,4 +1,5 @@
 import type { RunOutputResponse } from "@blackglass/contracts";
+import { isTerminalRunState } from "@blackglass/domain";
 import {
   Button,
   LoadingRegion,
@@ -6,6 +7,7 @@ import {
   Skeleton,
   StaleDataState,
 } from "@blackglass/ui";
+import { useEffect, useRef, useState } from "react";
 
 import { formatEngagementTimestamp } from "./format.js";
 import { useRunHistoryQuery } from "./run-history-query.js";
@@ -17,6 +19,13 @@ export interface RunHistoryPanelProps {
   readonly onSelect: (runId: string) => void;
   readonly selectedRunId: string | undefined;
 }
+
+// Bounded auto-checking for a selected run that the loaded history still
+// shows as non-terminal. The output endpoint answers those runs with the same
+// 404 as a missing run, so the panel reports progress from the listed row
+// instead of fetching output until the row turns terminal.
+const PENDING_POLL_INTERVAL_MS = 2_000;
+const PENDING_POLL_MAX_ROUNDS = 30;
 
 // Read-only engagement run history. The list renders in API order
 // (newest first) without client-side resorting. Selection is fully
@@ -31,7 +40,65 @@ export function RunHistoryPanel({
 }: RunHistoryPanelProps) {
   const history = useRunHistoryQuery(engagementId, limit);
   const hasHistoryData = history.data !== undefined;
-  const retryHistory = () => void history.refetch();
+  const [autoRoundsUsed, setAutoRoundsUsed] = useState(0);
+  const [autoLocked, setAutoLocked] = useState(false);
+  const fetchingRef = useRef(false);
+  const historyRef = useRef(history);
+  const mountedRef = useRef(true);
+  const resetAutoBudget = () => {
+    setAutoRoundsUsed(0);
+    setAutoLocked(false);
+  };
+  const retryHistory = () => {
+    resetAutoBudget();
+    void history.refetch();
+  };
+  const restartAutoChecks = () => {
+    resetAutoBudget();
+    void history.refetch();
+  };
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    setAutoRoundsUsed(0);
+    setAutoLocked(false);
+  }, [engagementId, selectedRunId]);
+  useEffect(() => {
+    fetchingRef.current = history.isFetching;
+    historyRef.current = history;
+  });
+  const loadedRuns = history.data?.pages.flatMap((page) => page.runs) ?? [];
+  const selectedRow =
+    selectedRunId === undefined
+      ? undefined
+      : loadedRuns.find((run) => run.id === selectedRunId);
+  const selectedPendingRow =
+    selectedRow !== undefined && !isTerminalRunState(selectedRow.state)
+      ? selectedRow
+      : undefined;
+  const autoExhausted = autoRoundsUsed >= PENDING_POLL_MAX_ROUNDS;
+  const autoPollEligible =
+    selectedPendingRow !== undefined &&
+    !history.isError &&
+    (history.data?.pages.length ?? 1) === 1 &&
+    !autoLocked &&
+    !autoExhausted;
+  useEffect(() => {
+    if (!autoPollEligible) return;
+    const timer = window.setInterval(() => {
+      const current = historyRef.current;
+      if (fetchingRef.current) return;
+      if ((current.data?.pages.length ?? 1) > 1) return;
+      void current.refetch().finally(() => {
+        if (mountedRef.current) setAutoRoundsUsed((count) => count + 1);
+      });
+    }, PENDING_POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [autoPollEligible]);
 
   if (engagementId === undefined) {
     return (
@@ -136,7 +203,12 @@ export function RunHistoryPanel({
               type="button"
               variant="secondary"
               disabled={!history.hasNextPage || history.isFetchingNextPage}
-              onClick={() => void history.fetchNextPage()}
+              onClick={() => {
+                // A second loaded page ends single-page auto-checking before
+                // it can refetch; further updates come from manual refresh.
+                setAutoLocked(true);
+                void history.fetchNextPage();
+              }}
             >
               {history.isFetchingNextPage ? "Loading more" : "Load more"}
             </Button>
@@ -165,7 +237,58 @@ export function RunHistoryPanel({
         )}
       </div>
       <div className="mt-4 border-t border-border pt-3">
-        <SelectedRunOutput engagementId={engagementId} selectedRunId={selectedRunId} />
+        {selectedPendingRow !== undefined ? (
+          <PendingSelectedRun
+            autoRoundsUsed={autoRoundsUsed}
+            paused={autoExhausted}
+            runId={selectedPendingRow.id}
+            runState={selectedPendingRow.state}
+            onRefresh={restartAutoChecks}
+          />
+        ) : (
+          <SelectedRunOutput
+            engagementId={engagementId}
+            selectedRunId={selectedRunId}
+            onManualRetry={resetAutoBudget}
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function PendingSelectedRun({
+  autoRoundsUsed,
+  onRefresh,
+  paused,
+  runId,
+  runState,
+}: {
+  autoRoundsUsed: number;
+  onRefresh: () => void;
+  paused: boolean;
+  runId: string;
+  runState: string;
+}) {
+  return (
+    <section aria-label="Selected run output">
+      <h3 className="m-0 text-[13px] font-semibold">Selected run output</h3>
+      <p className="mt-1 mb-0 text-[12px] leading-5 text-muted-foreground">
+        Run{" "}
+        <span className="font-mono" title={runId}>
+          {runId}
+        </span>{" "}
+        is still {runState}. Preserved output appears automatically when the run finishes.
+      </p>
+      <p className="mt-1 mb-0 text-[12px] text-muted-foreground" aria-live="polite">
+        {paused
+          ? "Auto-check paused after 30 checks."
+          : `Auto-checking every 2 seconds (check ${autoRoundsUsed + 1} of 30).`}
+      </p>
+      <div className="mt-3">
+        <Button type="button" variant="secondary" onClick={onRefresh}>
+          Refresh
+        </Button>
       </div>
     </section>
   );
@@ -173,14 +296,19 @@ export function RunHistoryPanel({
 
 function SelectedRunOutput({
   engagementId,
+  onManualRetry,
   selectedRunId,
 }: {
   engagementId: string;
+  onManualRetry: () => void;
   selectedRunId: string | undefined;
 }) {
   const output = useRunOutputQuery(engagementId, selectedRunId);
   const hasOutputData = output.data !== undefined;
-  const retryOutput = () => void output.refetch();
+  const retryOutput = () => {
+    void output.refetch();
+    onManualRetry();
+  };
 
   if (selectedRunId === undefined || selectedRunId.length === 0) {
     return (

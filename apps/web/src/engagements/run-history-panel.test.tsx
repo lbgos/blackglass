@@ -2,7 +2,7 @@
 
 import { ThemeProvider } from "@blackglass/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAppQueryClient } from "../query-client.js";
@@ -93,6 +93,14 @@ function assertReadOnly(fetchMock: ReturnType<typeof vi.fn>): void {
   expect(urls.some((url) => /cancel|retry|continue|add-scope/.test(url))).toBe(false);
 }
 
+function historyGetCount(fetchMock: ReturnType<typeof vi.fn>): number {
+  return fetchUrls(fetchMock).filter((url) => url.includes("/runs?")).length;
+}
+
+function outputGetCount(fetchMock: ReturnType<typeof vi.fn>): number {
+  return fetchUrls(fetchMock).filter((url) => /\/runs\/[^/]+\/output$/.test(url)).length;
+}
+
 beforeEach(() => {
   window.localStorage.clear();
   Object.defineProperty(window, "matchMedia", {
@@ -113,6 +121,7 @@ afterEach(() => {
   testQueryClients.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("run history panel", () => {
@@ -266,5 +275,361 @@ describe("run history panel", () => {
     expect(await screen.findByText("Run unavailable")).toBeTruthy();
     expect(screen.getByText(/That run is no longer available/)).toBeTruthy();
     assertReadOnly(fetchMock);
+  });
+
+  it("shows pending for a listed running run without fetching its output", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/runs?")) {
+          return response({
+            runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", "running")],
+            nextCursor: null,
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPanel({ selectedRunId: "run-1" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText(/is still running/)).toBeTruthy();
+      expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
+      expect(screen.queryByText("Run unavailable")).toBeNull();
+      expect(outputGetCount(fetchMock)).toBe(0);
+      expect(historyGetCount(fetchMock)).toBe(1);
+      assertReadOnly(fetchMock);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("auto-checks at most 30 times, then pauses without touching output", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/runs?")) {
+          return response({
+            runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", "running")],
+            nextCursor: null,
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPanel({ selectedRunId: "run-1" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(historyGetCount(fetchMock)).toBe(1);
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(historyGetCount(fetchMock)).toBe(31);
+      expect(screen.getByText(/Auto-check paused after 30 checks/)).toBeTruthy();
+      expect(outputGetCount(fetchMock)).toBe(0);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(historyGetCount(fetchMock)).toBe(31);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refresh restarts the poll budget after pausing", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/runs?")) {
+          return response({
+            runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", "running")],
+            nextCursor: null,
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPanel({ selectedRunId: "run-1" });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(62_000);
+      expect(historyGetCount(fetchMock)).toBe(31);
+      expect(screen.getByText(/Auto-check paused after 30 checks/)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(historyGetCount(fetchMock)).toBe(32);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(historyGetCount(fetchMock)).toBe(34);
+      expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fetches exact output once the listed row turns terminal", async () => {
+    vi.useFakeTimers();
+    try {
+      let historyCalls = 0;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/runs?")) {
+          historyCalls += 1;
+          const state = historyCalls < 3 ? "running" : "succeeded";
+          return response({
+            runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", state)],
+            nextCursor: null,
+          });
+        }
+        if (url.endsWith("/runs/run-1/output")) return response(outputFor("run-1", "final-bytes"));
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPanel({ selectedRunId: "run-1" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText(/is still running/)).toBeTruthy();
+      await vi.advanceTimersByTimeAsync(4_000);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(outputGetCount(fetchMock)).toBe(1);
+      expect(fetchUrls(fetchMock)).toContain(`/api/v1/engagements/${ENGAGEMENT_ID}/runs/run-1/output`);
+      expect(screen.getByTestId("run-history-stdout").textContent).toBe("final-bytes");
+      expect(screen.queryByText(/is still/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps unknown selected ids on the unavailable path without pending", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/runs?")) {
+        return response({
+          runs: [runSummary("run-old", "2026-08-09T12:00:00.000Z")],
+          nextCursor: null,
+        });
+      }
+      if (url.endsWith("/runs/run-missing/output")) {
+        return response({ code: "run_not_found" }, 404);
+      }
+      return response({ code: "invalid_request" }, 400);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderPanel({ selectedRunId: "run-missing" });
+    expect(await screen.findByText("Run unavailable")).toBeTruthy();
+    expect(screen.queryByText(/is still/)).toBeNull();
+    expect(outputGetCount(fetchMock)).toBe(1);
+  });
+
+  it("does not auto-poll once a second page is loaded", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("before=cursor-1")) {
+          return response({
+            runs: [runSummary("run-old", "2026-08-09T12:00:00.000Z", "running")],
+            nextCursor: null,
+          });
+        }
+        if (url.includes("/runs?")) {
+          return response({
+            runs: [runSummary("run-new", "2026-08-10T12:00:00.000Z")],
+            nextCursor: "cursor-1",
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPanel({ selectedRunId: "run-old" });
+      await vi.advanceTimersByTimeAsync(0);
+      // Selected id is beyond the loaded window, so the exact path applies.
+      expect(outputGetCount(fetchMock)).toBe(1);
+      fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText(/is still running/)).toBeTruthy();
+      const loaded = historyGetCount(fetchMock);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(historyGetCount(fetchMock)).toBe(loaded);
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(historyGetCount(fetchMock)).toBe(loaded + 1);
+      expect(outputGetCount(fetchMock)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to exact fetch when the selected row disappears", async () => {
+    vi.useFakeTimers();
+    try {
+      let historyCalls = 0;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/runs?")) {
+          historyCalls += 1;
+          if (historyCalls === 1) {
+            return response({
+              runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", "running")],
+              nextCursor: null,
+            });
+          }
+          return response({ runs: [], nextCursor: null });
+        }
+        if (url.endsWith("/runs/run-1/output")) {
+          return response({ code: "run_not_found" }, 404);
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPanel({ selectedRunId: "run-1" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText(/is still running/)).toBeTruthy();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText("Run unavailable")).toBeTruthy();
+      expect(outputGetCount(fetchMock)).toBe(1);
+      const settled = historyGetCount(fetchMock);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(historyGetCount(fetchMock)).toBe(settled);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restarts polling from the history retry after an error", async () => {
+    vi.useFakeTimers();
+    try {
+      let historyCalls = 0;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/runs?")) {
+          historyCalls += 1;
+          if (historyCalls === 2) return response({ code: "storage_busy" }, 503);
+          return response({
+            runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", "running")],
+            nextCursor: null,
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPanel({ selectedRunId: "run-1" });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(screen.getByText(/Showing the last successful run history/)).toBeTruthy();
+      fireEvent.click(
+        within(screen.getByLabelText("Selected run output")).getByRole("button", {
+          name: "Refresh",
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
+      const restarted = historyGetCount(fetchMock);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(historyGetCount(fetchMock)).toBe(restarted + 2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops polling on unmount and resets budget on selection change", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/runs?")) {
+          return response({
+            runs: [
+              runSummary("run-1", "2026-08-10T12:00:00.000Z", "running"),
+              runSummary("run-2", "2026-08-10T12:01:00.000Z", "running"),
+            ],
+            nextCursor: null,
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const queryClient = createAppQueryClient();
+      testQueryClients.add(queryClient);
+      const { rerender, unmount } = render(
+        <ThemeProvider>
+          <QueryClientProvider client={queryClient}>
+            <RunHistoryPanel
+              engagementId={ENGAGEMENT_ID}
+              selectedRunId="run-1"
+              onSelect={() => undefined}
+            />
+          </QueryClientProvider>
+        </ThemeProvider>,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(56_000);
+      expect(historyGetCount(fetchMock)).toBe(29);
+      rerender(
+        <ThemeProvider>
+          <QueryClientProvider client={queryClient}>
+            <RunHistoryPanel
+              engagementId={ENGAGEMENT_ID}
+              selectedRunId="run-2"
+              onSelect={() => undefined}
+            />
+          </QueryClientProvider>
+        </ThemeProvider>,
+      );
+      await vi.advanceTimersByTimeAsync(6_000);
+      // A reset budget allows 3 more rounds; without it only 1 fits before 30.
+      expect(historyGetCount(fetchMock)).toBe(32);
+      expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
+      unmount();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(historyGetCount(fetchMock)).toBe(32);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders pending for every non-terminal state", async () => {
+    for (const state of ["queued", "leased", "running", "cancel_requested"]) {
+      vi.useFakeTimers();
+      try {
+        const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/runs?")) {
+            return response({
+              runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", state)],
+              nextCursor: null,
+            });
+          }
+          return response({ code: "invalid_request" }, 400);
+        });
+        vi.stubGlobal("fetch", fetchMock);
+        renderPanel({ selectedRunId: "run-1" });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(screen.getByText(new RegExp(`is still ${state}`))).toBeTruthy();
+        expect(outputGetCount(fetchMock)).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+      cleanup();
+    }
+  });
+
+  it("uses the output path for every terminal state", async () => {
+    for (const state of ["succeeded", "failed", "cancelled"]) {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/runs?")) {
+          return response({
+            runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", state)],
+            nextCursor: null,
+          });
+        }
+        if (url.endsWith("/runs/run-1/output")) return response(outputFor("run-1", "terminal-bytes"));
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPanel({ selectedRunId: "run-1" });
+      await screen.findByTestId("run-history-stdout");
+      expect(screen.getByTestId("run-history-stdout").textContent).toBe("terminal-bytes");
+      expect(screen.queryByText(/is still/)).toBeNull();
+      expect(outputGetCount(fetchMock)).toBe(1);
+      cleanup();
+    }
   });
 });
