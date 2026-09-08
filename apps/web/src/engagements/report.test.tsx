@@ -6,7 +6,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ReportBundle } from "@blackglass/contracts";
+import { engagementReportMarkdown } from "@blackglass/contracts";
 import { createAppQueryClient } from "../query-client.js";
+import { maskReportBundle } from "./report-mask.js";
 import { EngagementReportSection } from "./report.js";
 
 const engagementId = "10000000-0000-4000-8000-000000000001";
@@ -227,5 +229,103 @@ describe("engagement report", () => {
       </ThemeProvider>,
     );
     expect(await screen.findByText("Report unavailable")).toBeTruthy();
+  });
+
+  it("masks operator text by default and shares the projection across preview, copy, and download", async () => {
+    const secretNote = "flag{synthetic-share-0001}";
+    const secretBody = "password=synthetic-share-002";
+    const structuredProduct = "SyntheticServer flag{synthetic-structured-0001}";
+    const bundle: ReportBundle = {
+      ...bundleFixture(),
+      findings: [
+        {
+          contractVersion: 1,
+          id: "20000000-0000-4000-8000-000000000001",
+          engagementId,
+          title: "Shared projection finding",
+          severity: "high",
+          status: "open",
+          body: `impact ${secretBody}`,
+          evidenceArtifactIds: [],
+          createdAt: "2026-08-12T12:00:00.000Z",
+          updatedAt: "2026-08-12T12:00:00.000Z",
+        },
+      ],
+      notesMarkdown: `see ${secretNote}`,
+      services: {
+        total: 1,
+        truncated: false,
+        rows: [
+          {
+            address: "192.0.2.10",
+            port: 80,
+            protocol: "tcp",
+            hostname: null,
+            serviceName: "http",
+            product: structuredProduct,
+            version: "1.0",
+            source: "nmap",
+            parserVersion: "nmap-xml-v1",
+            runId: "run-1",
+            artifactId: "artifact-1",
+            artifactDigest: `sha256:${"a".repeat(64)}`,
+            observedAt: "2026-08-12T12:00:00.000Z",
+          },
+        ],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(bundle))),
+    );
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {});
+
+    renderSection();
+
+    // Masked by default with a visible count; structured text is preserved.
+    expect(await screen.findByText(/2 replacements/)).toBeTruthy();
+    const preview = document.querySelector("section[aria-label='Report'] pre")?.textContent ?? "";
+    expect(preview).toContain("[redacted]");
+    expect(preview).not.toContain(secretNote);
+    expect(preview).not.toContain(secretBody);
+    expect(preview).toContain(structuredProduct);
+
+    // JSON download carries the same masked copy, not the stored bundle.
+    const maskedJson = `${JSON.stringify(maskReportBundle(bundle).bundle, null, 2)}\n`;
+    const storedJson = `${JSON.stringify(bundle, null, 2)}\n`;
+    expect(new Blob([maskedJson]).size).not.toBe(new Blob([storedJson]).size);
+    fireEvent.click(screen.getByRole("button", { name: "Download JSON" }));
+    await waitFor(() =>
+      expect(URL.createObjectURL as ReturnType<typeof vi.fn>).toHaveBeenCalled(),
+    );
+    const downloaded = (URL.createObjectURL as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+      | Blob
+      | undefined;
+    expect(downloaded).toBeInstanceOf(Blob);
+    expect(downloaded?.size).toBe(new Blob([maskedJson]).size);
+
+    // Copy carries the same masked Markdown as the preview.
+    fireEvent.click(screen.getByRole("button", { name: "Copy Markdown" }));
+    await waitFor(() =>
+      expect(window.navigator.clipboard.writeText).toHaveBeenCalled(),
+    );
+    const clipboard = window.navigator.clipboard.writeText as ReturnType<typeof vi.fn>;
+    const copiedMasked = String(clipboard.mock.calls[0]?.[0] ?? "");
+    expect(copiedMasked).toBe(engagementReportMarkdown(maskReportBundle(bundle).bundle));
+    expect(copiedMasked).not.toContain(secretNote);
+
+    // Opting out reveals the original stored text for every surface.
+    fireEvent.click(screen.getByRole("button", { name: "Show original" }));
+    expect(await screen.findByRole("button", { name: "Mask secrets" })).toBeTruthy();
+    const originalPreview =
+      document.querySelector("section[aria-label='Report'] pre")?.textContent ?? "";
+    expect(originalPreview).toContain(secretNote);
+    // The copy button briefly confirms as "Copied" after the first copy.
+    fireEvent.click(screen.getByRole("button", { name: /Copy Markdown|Copied/ }));
+    await waitFor(() => expect(clipboard.mock.calls.length).toBe(2));
+    expect(String(clipboard.mock.calls[1]?.[0] ?? "")).toContain(secretNote);
+    clickSpy.mockRestore();
   });
 });

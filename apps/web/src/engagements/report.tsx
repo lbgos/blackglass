@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { engagementReportMarkdown, type ReportBundle } from "@blackglass/contracts";
 import {
@@ -8,6 +8,8 @@ import {
   Skeleton,
   StaleDataState,
 } from "@blackglass/ui";
+
+import { maskReportBundle } from "./report-mask.js";
 
 import {
   copyTextToClipboard,
@@ -91,10 +93,17 @@ function ReportBody({
   engagementId: string;
   refreshing: boolean;
 }) {
-  const markdown = engagementReportMarkdown(bundle);
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string | undefined>(undefined);
+  // Session-only sharing default: masked until the operator opts out. It
+  // resets when the engagement changes and never persists or deletes data.
+  const [masked, setMasked] = useState(true);
   const copyTimer = useRef<number | undefined>(undefined);
+  // One derived copy feeds the preview, copy, and both downloads, so every
+  // surface shows the same text. The stored bundle stays original.
+  const shared = useMemo(() => maskReportBundle(bundle), [bundle]);
+  const view = masked ? shared.bundle : bundle;
+  const markdown = engagementReportMarkdown(view);
 
   useEffect(() => {
     const timer = copyTimer.current;
@@ -106,6 +115,9 @@ function ReportBody({
     setCopied(false);
     setActionError(undefined);
   }, [engagementId, bundle.generatedAt]);
+  useEffect(() => {
+    setMasked(true);
+  }, [engagementId]);
 
   const empty = isReportEmpty(bundle);
   const summary = `${bundle.findings.length} findings · ${bundle.services.total} services · ${bundle.probes.total} probes · ${bundle.ffufResults.total} ffuf results · ${bundle.evidenceArtifacts.total} artifacts`;
@@ -128,7 +140,7 @@ function ReportBody({
     try {
       downloadTextFile(
         reportJsonFilename(engagementId),
-        `${JSON.stringify(bundle, null, 2)}\n`,
+        `${JSON.stringify(view, null, 2)}\n`,
         "application/json",
       );
     } catch {
@@ -149,6 +161,11 @@ function ReportBody({
     <div className="grid min-w-0 gap-3">
       <p className="m-0 text-[12px] text-muted-foreground" aria-live="polite">
         {summary}
+      </p>
+      <p className="m-0 text-[12px] text-muted-foreground">
+        {masked
+          ? `Sharing view masks operator notes, findings, and context with a heuristic redactor (${shared.redactions} replacements). It cannot guarantee every secret is removed. The stored report is unchanged.`
+          : "Showing the original stored report, including any secrets it contains. The stored report is unchanged."}
       </p>
       {refreshing ? (
         <p className="m-0 text-[12px] text-muted-foreground" role="status">
@@ -178,6 +195,14 @@ function ReportBody({
           onClick={onDownloadMarkdown}
         >
           Download Markdown
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          aria-pressed={masked}
+          onClick={() => setMasked((value) => !value)}
+        >
+          {masked ? "Show original" : "Mask secrets"}
         </Button>
       </div>
       {actionError ? (
