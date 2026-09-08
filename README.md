@@ -36,7 +36,7 @@ pnpm --filter @blackglass/evidence-native build   # one-time native build per ch
 pnpm dev        # supervised API + web with isolated dev storage
 ```
 
-Rerun the native build when its C source changes or the runtime reports the binding unavailable; a compiler error from that step means one of the prerequisites above is missing. Without the binding the app still boots, but evidence and advisor routes stay unregistered by design. Contributors validate with `pnpm check` (format, lint, typecheck, test, build), not as a step after the long-running `pnpm dev`.
+Rerun the native build when its C source changes or the runtime reports the binding unavailable; if that step fails, check its error output for missing headers or a compiler failure. Without the binding the app still boots, but evidence routes and advisor turn routes stay unregistered by design. For contributor validation, run `pnpm check` separately. It checks format, lint, types, tests, and the build.
 
 ## Stack
 
