@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmod, mkdir, readFile, rm } from "node:fs/promises";
 import { networkInterfaces, tmpdir } from "node:os";
 import net from "node:net";
@@ -10,6 +10,9 @@ import { randomUUID } from "node:crypto";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEADLINE_MS = 20_000;
+const EVIDENCE_NATIVE_BUILD_TIMEOUT_MS = 60_000;
+const SYNTHETIC_UNKNOWN_ENGAGEMENT_ID = "00000000-0000-4000-8000-000000000000";
+const SYNTHETIC_UNKNOWN_ARTIFACT_ID = "synthetic-missing-artifact";
 const temporaryDataDirectories = new Set();
 
 test.afterEach(async () => {
@@ -113,6 +116,49 @@ async function waitForJson(url, state) {
     const response = await fetch(url, { signal: AbortSignal.timeout(500) });
     if (!response.ok) return undefined;
     return response.json();
+  }, state);
+}
+
+function ensureEvidenceNativeBinding() {
+  const buildScript = path.join(
+    repositoryRoot,
+    "packages",
+    "evidence-native",
+    "scripts",
+    "build.mjs",
+  );
+  const result = spawnSync(process.execPath, [buildScript], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    shell: false,
+    timeout: EVIDENCE_NATIVE_BUILD_TIMEOUT_MS,
+  });
+  assert.equal(
+    result.error,
+    undefined,
+    `evidence-native build failed to spawn: ${String(result.error)}`,
+  );
+  assert.equal(
+    result.status,
+    0,
+    `evidence-native build failed (status ${String(result.status)}).\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+  );
+}
+
+async function waitForDomainNotFound(url, expectedCode, state) {
+  return waitFor(url, async () => {
+    const response = await fetch(url, { signal: AbortSignal.timeout(500) });
+    if (response.status !== 404) return undefined;
+    let payload;
+    try {
+      payload = await response.json();
+    } catch {
+      return undefined;
+    }
+    // Exact domain error proves a registered handler. A Fastify routing miss
+    // returns { statusCode, error, message } and must not pass.
+    assert.deepEqual(payload, { code: expectedCode });
+    return payload;
   }, state);
 }
 
@@ -331,4 +377,45 @@ test("API bind failure prevents the web listener and propagates failure", async 
   assert.notEqual(result.code, 0);
   assert.match(`${dev.state.stdout}\n${dev.state.stderr}`, /API.*(failed|exited)/i);
   await waitForClosed(webPort);
+});
+
+test("pnpm dev with native build registers evidence and advisor routes", async (t) => {
+  ensureEvidenceNativeBinding();
+
+  const apiPort = await allocatePort();
+  let webPort = await allocatePort();
+  while (webPort === apiPort) webPort = await allocatePort();
+  const dev = startDev({
+    BLACKGLASS_API_PORT: String(apiPort),
+    BLACKGLASS_WEB_PORT: String(webPort),
+  });
+  t.after(() => {
+    if (!dev.state.exited) signalGroup(dev.child, "SIGKILL");
+  });
+
+  assert.deepEqual(await waitForJson(`http://127.0.0.1:${apiPort}/health`, dev.state), {
+    status: "ok",
+  });
+
+  const evidenceUrl =
+    `http://127.0.0.1:${apiPort}/api/v1/engagements/${SYNTHETIC_UNKNOWN_ENGAGEMENT_ID}` +
+    `/artifacts/${SYNTHETIC_UNKNOWN_ARTIFACT_ID}/content`;
+  assert.deepEqual(
+    await waitForDomainNotFound(evidenceUrl, "artifact_not_found", dev.state),
+    { code: "artifact_not_found" },
+  );
+
+  const advisorUrl =
+    `http://127.0.0.1:${apiPort}/api/v1/engagements/${SYNTHETIC_UNKNOWN_ENGAGEMENT_ID}` +
+    `/advisor/turns`;
+  assert.deepEqual(
+    await waitForDomainNotFound(advisorUrl, "engagement_not_found", dev.state),
+    { code: "engagement_not_found" },
+  );
+
+  const descendants = await descendantProcessIds(dev.child.pid);
+  signalGroup(dev.child, "SIGTERM");
+  await waitForExit(dev, "development process to stop after SIGTERM");
+  await Promise.all([waitForClosed(apiPort), waitForClosed(webPort)]);
+  await waitForProcessesGone(descendants);
 });
