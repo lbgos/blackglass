@@ -13,7 +13,8 @@ not promise any particular model or result quality.
 - A model server reachable **from the control-plane host** (not from your
   browser). The server must accept OpenAI-style chat requests with
   `response_format: {"type": "json_object"}` and answer `POST
-  <prefix>/chat/completions` with exactly one JSON object carrying the
+  <prefix>/chat/completions` with an OpenAI-style response envelope whose
+  `choices[0].message.content` string contains exactly one JSON object with the
   documented fields (`profile`, `answer`, `citations`, `abstained`,
   `uncertainty`); a local llama-swap instance or any other compatible
   runner qualifies only if it follows that contract. Servers that emit

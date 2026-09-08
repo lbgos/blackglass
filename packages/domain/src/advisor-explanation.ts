@@ -43,17 +43,17 @@ export const ADVISOR_EXPLANATION_SYSTEM_PROMPT =
   `never attempt to recover or repeat them. ` +
   `Reply with exactly one JSON object and nothing else: no fences, no prefix, ` +
   `no suffix, no extra keys. The object has exactly these fields: "profile" ` +
-  `with the exact value "${ADVISOR_EXPLANATION_PROFILE}", "answer" with the ` +
+  `with the exact value "${ADVISOR_EXPLANATION_PROFILE}", "answer" as a string with the ` +
   `explanation, "citations" with the cited evidence identifiers as an array ` +
-  `of strings, "abstained" with true or false, and "uncertainty" with what ` +
+  `of strings, "abstained" with true or false, and "uncertainty" as a string with what ` +
   `is uncertain or missing. A grounded answer ("abstained" false) is ` +
   `non-blank and cites at least one supplied evidence identifier exactly as ` +
   `given, with no duplicates and at most ${ADVISOR_CITATIONS_MAX} citations ` +
   `of at most ${ADVISOR_CITATION_ID_MAX_CHARS} characters each. An abstention ` +
   `("abstained" true) states what is missing in non-blank "uncertainty" and ` +
   `may keep a partial "answer" describing the gap. Keep "answer" within ` +
-  `${ADVISOR_ANSWER_MAX_BYTES} bytes and "uncertainty" within ` +
-  `${ADVISOR_UNCERTAINTY_MAX_BYTES} bytes.`;
+  `${ADVISOR_ANSWER_MAX_BYTES} UTF-8 bytes and "uncertainty" within ` +
+  `${ADVISOR_UNCERTAINTY_MAX_BYTES} UTF-8 bytes.`;
 
 export interface AdvisorHistoryTurn {
   readonly question: string;
