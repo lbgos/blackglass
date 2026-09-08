@@ -14,9 +14,9 @@ When I work a box, tool output lives in terminal tabs, notes in one file, screen
 
 **Evidence.** Raw tool output is stored immutable and content-addressed before anything reads or formats it. You can always go back to what the tool actually said.
 
-**Findings.** Next slice, not built yet: turn a run into a finding with your own notes attached.
+**Findings.** Capture findings against runs with severity levels, notes, and resolve/reopen transitions.
 
-**Advisor.** Optional: point it at any OpenAI-compatible endpoint and ask grounded questions about selected engagement evidence, with abstention when evidence is insufficient. See [docs/operator/advisor-setup.md](./docs/operator/advisor-setup.md).
+**Advisor.** Optional: point it at a compatible OpenAI-style endpoint, one that answers JSON object mode with the documented response fields, and ask grounded questions about selected engagement evidence, with abstention when evidence is insufficient. See [docs/operator/advisor-setup.md](./docs/operator/advisor-setup.md).
 
 ## Status
 
@@ -28,13 +28,15 @@ Honest placeholders: the console Advisor, Activity, and Raw output tabs are defe
 
 ## Quick start
 
-Requires Node.js 24 and pnpm 10.
+Requires a supported Linux host (glibc >= 2.28) for the full evidence workflow, Node.js 24 and pnpm 10, plus a C compiler (`cc`) and Node API development headers (`node_api.h`) for the one-time native build below. The compiler and the headers are separate prerequisites.
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
+pnpm --filter @blackglass/evidence-native build   # one-time native build per checkout
 pnpm dev        # supervised API + web with isolated dev storage
-pnpm check      # format, lint, typecheck, test, build
 ```
+
+Rerun the native build when its C source changes or the runtime reports the binding unavailable; if that step fails, check its error output for missing headers or a compiler failure. Without the binding the app still boots, but evidence routes and advisor turn routes stay unregistered by design. For contributor validation, run `pnpm check` separately. It checks format, lint, types, tests, and the build.
 
 ## Stack
 

@@ -9,7 +9,8 @@ not promise any particular model or result quality.
 - A running control plane. For development: `pnpm dev` from the repository
   root (API on 3001, web on 5173, isolated storage under `.blackglass/dev`).
   A production API process needs `BLACKGLASS_DATA_DIR` set to an absolute
-  path and a port via `BLACKGLASS_API_PORT`.
+  path and a port via `BLACKGLASS_API_PORT`. Complete the [README quick start](../../README.md#quick-start) first, including its one-time native build: advisor turns read the
+  evidence store, so without it the turn routes stay unregistered.
 - A model server reachable **from the control-plane host** (not from your
   browser). The server must accept OpenAI-style chat requests with
   `response_format: {"type": "json_object"}` and answer `POST
