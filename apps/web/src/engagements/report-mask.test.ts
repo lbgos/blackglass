@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { ReportBundleSchema, type ReportBundle } from "@blackglass/contracts";
+import {
+  ENGAGEMENT_NOTES_MAX_BYTES,
+  ReportBundleSchema,
+  type ReportBundle,
+} from "@blackglass/contracts";
+import { ADVISOR_REDACTION_TOKEN } from "@blackglass/domain";
 
 import { maskReportBundle } from "./report-mask.js";
 
@@ -154,22 +159,48 @@ describe("maskReportBundle", () => {
     expect(ReportBundleSchema.safeParse(masked.bundle).success).toBe(true);
   });
 
-  it("never truncates when a replacement grows a bounded title past its schema limit", () => {
+  it("masks the whole title and name when a replacement would overflow their bounds", () => {
+    // Both inputs sit inside their 120-code-point limits, but the credential
+    // replacement grows them past it, so each field becomes the token.
     const title = `${"t".repeat(110)} token=x`;
+    const name = `${"n".repeat(110)} token=y`;
     expect(title.length).toBeLessThanOrEqual(120);
+    expect(name.length).toBeLessThanOrEqual(120);
     const base = bundleFixture();
     const bundle: ReportBundle = {
       ...base,
+      engagement: { ...base.engagement, name },
       findings: base.findings.map((finding) => ({ ...finding, title })),
     };
+    expect(ReportBundleSchema.safeParse(bundle).success).toBe(true);
     const masked = maskReportBundle(bundle);
-    const maskedTitle = masked.bundle.findings[0]?.title ?? "";
 
-    // The derived copy is display/export only, so fidelity wins over the
-    // 120-code-point title bound: full text with the redaction, no silent cut.
-    expect(maskedTitle.length).toBeGreaterThan(120);
-    expect(maskedTitle.startsWith("t".repeat(110))).toBe(true);
-    expect(maskedTitle.endsWith("[redacted]")).toBe(true);
+    expect(masked.bundle.findings[0]?.title).toBe(ADVISOR_REDACTION_TOKEN);
+    expect(masked.bundle.engagement.name).toBe(ADVISOR_REDACTION_TOKEN);
+    expect(masked.bundle.findings[0]?.title).not.toContain("token=x");
+    expect(masked.bundle.engagement.name).not.toContain("token=y");
+    // Full-field fallback still counts each changed field once.
+    expect(masked.maskedFields).toBe(4);
+    // Every export validates, and the stored original is exact.
+    expect(ReportBundleSchema.safeParse(masked.bundle).success).toBe(true);
+    expect(bundle.engagement.name).toBe(name);
+    expect(bundle.findings[0]?.title).toBe(title);
+  });
+
+  it("masks whole notes when a replacement would overflow the notes byte bound", () => {
+    // Input sits exactly at the exported byte limit; the credential
+    // replacement grows it past the limit, so the field becomes the token.
+    const secret = "token=z";
+    const notes = `${"a".repeat(ENGAGEMENT_NOTES_MAX_BYTES - secret.length)}${secret}`;
+    const base = bundleFixture();
+    const bundle: ReportBundle = { ...base, notesMarkdown: notes };
+    expect(ReportBundleSchema.safeParse(bundle).success).toBe(true);
+    const masked = maskReportBundle(bundle);
+
+    expect(masked.bundle.notesMarkdown).toBe(ADVISOR_REDACTION_TOKEN);
+    expect(masked.bundle.notesMarkdown).not.toContain(secret);
     expect(masked.maskedFields).toBe(3);
+    expect(ReportBundleSchema.safeParse(masked.bundle).success).toBe(true);
+    expect(bundle.notesMarkdown).toBe(notes);
   });
 });
