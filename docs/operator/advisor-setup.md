@@ -11,9 +11,16 @@ not promise any particular model or result quality.
   A production API process needs `BLACKGLASS_DATA_DIR` set to an absolute
   path and a port via `BLACKGLASS_API_PORT`.
 - A model server reachable **from the control-plane host** (not from your
-  browser). Any server that answers `POST <prefix>/chat/completions` with
-  OpenAI-style `choices` JSON works, for example a local llama-swap instance
-  or any other compatible runner. No model software ships with Blackglass.
+  browser). The server must accept OpenAI-style chat requests with
+  `response_format: {"type": "json_object"}` and answer `POST
+  <prefix>/chat/completions` with an OpenAI-style response envelope whose
+  `choices[0].message.content` string contains exactly one JSON object with the
+  documented fields (`profile`, `answer`, `citations`, `abstained`,
+  `uncertainty`); a local llama-swap instance or any other compatible
+  runner qualifies only if it follows that contract. Servers that emit
+  free-form prose fail closed with parse errors. No model software ships
+  with Blackglass, and no live compatibility with any specific model is
+  claimed here.
 
 ## 1. Export the API key, if your server needs one
 
