@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ADVISOR_EXPLANATION_PROFILE,
+  AdvisorExplanationSchema,
+} from "@blackglass/contracts";
+
+import {
   ADVISOR_EXPLANATION_PROMPT_VERSION,
   ADVISOR_EXPLANATION_SYSTEM_PROMPT,
   ADVISOR_HISTORY_ENTRY_MAX_BYTES,
@@ -16,6 +21,37 @@ describe("advisor explanation prompt", () => {
     expect(ADVISOR_EXPLANATION_SYSTEM_PROMPT).toContain("Do not produce exploit chains");
     expect(ADVISOR_EXPLANATION_SYSTEM_PROMPT).toContain("attack steps");
     expect(ADVISOR_EXPLANATION_SYSTEM_PROMPT).not.toContain("nmap");
+  });
+
+  it("instructs a single JSON object matching the enforced output schema", () => {
+    expect(ADVISOR_EXPLANATION_SYSTEM_PROMPT).toContain("exactly one JSON object");
+    expect(ADVISOR_EXPLANATION_SYSTEM_PROMPT).toContain("no fences");
+    expect(ADVISOR_EXPLANATION_SYSTEM_PROMPT).toContain("no extra keys");
+    expect(ADVISOR_EXPLANATION_SYSTEM_PROMPT).toContain(ADVISOR_EXPLANATION_PROFILE);
+    for (const field of ["answer", "citations", "abstained", "uncertainty"]) {
+      expect(ADVISOR_EXPLANATION_SYSTEM_PROMPT).toContain(`"${field}"`);
+    }
+  });
+
+  it("accepts documented grounded and abstained examples under the real schema", () => {
+    const grounded = {
+      profile: ADVISOR_EXPLANATION_PROFILE,
+      answer: "The quoted banner shows an HTTP service on probe-1.",
+      citations: ["probe-1"],
+      abstained: false,
+      uncertainty: "",
+    };
+    expect(AdvisorExplanationSchema.safeParse(grounded).success).toBe(true);
+    const abstained = {
+      profile: ADVISOR_EXPLANATION_PROFILE,
+      answer: "",
+      citations: [],
+      abstained: true,
+      uncertainty: "No banner text was supplied, so the service cannot be identified.",
+    };
+    expect(AdvisorExplanationSchema.safeParse(abstained).success).toBe(true);
+    const uncited = { ...grounded, citations: [] as string[] };
+    expect(AdvisorExplanationSchema.safeParse(uncited).success).toBe(false);
   });
 
   it("quotes malicious evidence as data and keeps the question separate", () => {

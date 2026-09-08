@@ -11,6 +11,7 @@ import {
   SettingsRepository,
   openEngagementDatabase,
 } from "@blackglass/db";
+import { ADVISOR_EXPLANATION_PROFILE } from "@blackglass/contracts";
 import { loadEvidenceNative } from "@blackglass/evidence-native";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -375,6 +376,41 @@ describe("advisor turn routes", () => {
     expect(turn.redactions).toBeGreaterThan(0);
     expect(turn.modelId).toBe("test-model");
     expect(harness.transport.hits()).toBe(1);
+  });
+
+  it("sends the output contract in the assembled system prompt", async () => {
+    const harness = await createHarness();
+    const artifactId = "00000000-0000-4000-8000-000000000001";
+    await writeArtifact(
+      harness.directory,
+      harness.database,
+      harness.engagementId,
+      artifactId,
+      Buffer.from("synthetic http probe body"),
+      "act-turn-contract-1",
+      "run-turn-contract-1",
+    );
+    const response = await postTurn(
+      harness.app,
+      harness.engagementId,
+      "fixture-key-turn-output-contract",
+      artifactId,
+    );
+    expect(response.statusCode).toBe(200);
+    const raw = harness.transport.bodies()[0];
+    if (raw === undefined) throw new Error("transport request body was not captured");
+    const sent = JSON.parse(raw.toString("utf8")) as {
+      messages?: Array<{ role?: unknown; content?: unknown }>;
+    };
+    const system = sent.messages?.[0]?.content;
+    expect(typeof system).toBe("string");
+    if (typeof system !== "string") throw new Error("system message missing from transport body");
+    expect(system).toContain("exactly one JSON object");
+    expect(system).toContain("no fences");
+    expect(system).toContain(ADVISOR_EXPLANATION_PROFILE);
+    for (const field of ["answer", "citations", "abstained", "uncertainty"]) {
+      expect(system).toContain(`"${field}"`);
+    }
   });
 
   it("replays after settings changes with zero further provider calls", async () => {
