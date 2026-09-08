@@ -363,6 +363,39 @@ describe("run history panel", () => {
     }
   });
 
+  it("restarts the 2s cadence when Refresh is clicked mid-interval", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/runs?")) {
+          return response({
+            runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", "running")],
+            nextCursor: null,
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPanel({ selectedRunId: "run-1" });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_800);
+      expect(historyGetCount(fetchMock)).toBe(1);
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(historyGetCount(fetchMock)).toBe(2);
+      // The old phase would have fired 200ms after the click; the restarted
+      // phase stays silent until a fresh 2000ms elapse.
+      await vi.advanceTimersByTimeAsync(1_900);
+      expect(historyGetCount(fetchMock)).toBe(2);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(historyGetCount(fetchMock)).toBe(3);
+      expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fetches exact output once the listed row turns terminal", async () => {
     vi.useFakeTimers();
     try {
@@ -445,11 +478,17 @@ describe("run history panel", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(screen.getByText(/is still running/)).toBeTruthy();
       const loaded = historyGetCount(fetchMock);
+      const cursorLoads = () =>
+        fetchUrls(fetchMock).filter((url) => url.includes("before=cursor-1")).length;
+      const loadedCursor = cursorLoads();
       await vi.advanceTimersByTimeAsync(10_000);
       expect(historyGetCount(fetchMock)).toBe(loaded);
       fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
       await vi.advanceTimersByTimeAsync(0);
-      expect(historyGetCount(fetchMock)).toBe(loaded + 1);
+      // v5 refetch() reloads every retained page through its stored cursor,
+      // so one manual refresh is two GETs here, both user-initiated.
+      expect(historyGetCount(fetchMock)).toBe(loaded + 2);
+      expect(cursorLoads()).toBe(loadedCursor + 1);
       expect(outputGetCount(fetchMock)).toBe(1);
     } finally {
       vi.useRealTimers();

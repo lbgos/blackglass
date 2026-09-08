@@ -45,6 +45,10 @@ export function RunHistoryPanel({
   // shows the previous session's count or paused copy.
   const sessionKey = `${engagementId ?? ""}::${selectedRunId ?? ""}`;
   const [poll, setPoll] = useState({ key: sessionKey, used: 0, locked: false });
+  // Bumped on every manual history restart so the interval below restarts a
+  // fresh 2s phase even when eligibility stays true. Never poll.used: that
+  // would churn the timer on every auto round.
+  const [restartEpoch, setRestartEpoch] = useState(0);
   const pollRef = useRef(poll);
   const fetchingRef = useRef(false);
   const historyRef = useRef(history);
@@ -70,6 +74,7 @@ export function RunHistoryPanel({
   };
   const restartAutoChecks = () => {
     resetPollBudget();
+    setRestartEpoch((epoch) => epoch + 1);
     startManualRefetch();
   };
   const retryHistory = () => {
@@ -117,7 +122,7 @@ export function RunHistoryPanel({
       });
     }, PENDING_POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [autoPollEligible, engagementId, selectedRunId]);
+  }, [autoPollEligible, engagementId, selectedRunId, restartEpoch]);
 
   if (engagementId === undefined) {
     return (
