@@ -2,7 +2,7 @@
 
 import { ThemeProvider } from "@blackglass/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAppQueryClient } from "../query-client.js";
@@ -100,6 +100,15 @@ function historyGetCount(fetchMock: ReturnType<typeof vi.fn>): number {
 
 function outputGetCount(fetchMock: ReturnType<typeof vi.fn>): number {
   return fetchUrls(fetchMock).filter((url) => /\/runs\/[^/]+\/output$/.test(url)).length;
+}
+
+// Advance fake timers, then drain pending TanStack notifications, follow-on
+// fetches, and re-renders without advancing the clock further (strict request
+// budgets stay exact). The drain runs outside timer advancement: advancing
+// timers inside an act() scope re-enters act and overflows.
+async function advancePanelTimers(ms: number): Promise<void> {
+  await vi.advanceTimersByTimeAsync(ms);
+  await act(async () => {});
 }
 
 beforeEach(() => {
@@ -293,7 +302,7 @@ describe("run history panel", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
       renderPanel({ selectedRunId: "run-1" });
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       expect(screen.getByText(/is still running/)).toBeTruthy();
       expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
       expect(screen.queryByText("Run unavailable")).toBeNull();
@@ -320,13 +329,13 @@ describe("run history panel", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
       renderPanel({ selectedRunId: "run-1" });
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       expect(historyGetCount(fetchMock)).toBe(1);
-      await vi.advanceTimersByTimeAsync(70_000);
+      await advancePanelTimers(70_000);
       expect(historyGetCount(fetchMock)).toBe(31);
       expect(screen.getByText(/Auto-check paused after 30 checks/)).toBeTruthy();
       expect(outputGetCount(fetchMock)).toBe(0);
-      await vi.advanceTimersByTimeAsync(30_000);
+      await advancePanelTimers(30_000);
       expect(historyGetCount(fetchMock)).toBe(31);
     } finally {
       vi.useRealTimers();
@@ -348,14 +357,14 @@ describe("run history panel", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
       renderPanel({ selectedRunId: "run-1" });
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(62_000);
+      await advancePanelTimers(0);
+      await advancePanelTimers(62_000);
       expect(historyGetCount(fetchMock)).toBe(31);
       expect(screen.getByText(/Auto-check paused after 30 checks/)).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       expect(historyGetCount(fetchMock)).toBe(32);
-      await vi.advanceTimersByTimeAsync(4_000);
+      await advancePanelTimers(4_000);
       expect(historyGetCount(fetchMock)).toBe(34);
       expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
     } finally {
@@ -378,17 +387,17 @@ describe("run history panel", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
       renderPanel({ selectedRunId: "run-1" });
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(1_800);
+      await advancePanelTimers(0);
+      await advancePanelTimers(1_800);
       expect(historyGetCount(fetchMock)).toBe(1);
       fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       expect(historyGetCount(fetchMock)).toBe(2);
       // The old phase would have fired 200ms after the click; the restarted
       // phase stays silent until a fresh 2000ms elapse.
-      await vi.advanceTimersByTimeAsync(1_900);
+      await advancePanelTimers(1_900);
       expect(historyGetCount(fetchMock)).toBe(2);
-      await vi.advanceTimersByTimeAsync(200);
+      await advancePanelTimers(200);
       expect(historyGetCount(fetchMock)).toBe(3);
       expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
     } finally {
@@ -415,10 +424,10 @@ describe("run history panel", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
       renderPanel({ selectedRunId: "run-1" });
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       expect(screen.getByText(/is still running/)).toBeTruthy();
-      await vi.advanceTimersByTimeAsync(4_000);
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(4_000);
+      await advancePanelTimers(0);
       expect(outputGetCount(fetchMock)).toBe(1);
       expect(fetchUrls(fetchMock)).toContain(`/api/v1/engagements/${ENGAGEMENT_ID}/runs/run-1/output`);
       expect(screen.getByTestId("run-history-stdout").textContent).toBe("final-bytes");
@@ -471,20 +480,20 @@ describe("run history panel", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
       renderPanel({ selectedRunId: "run-old" });
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       // Selected id is beyond the loaded window, so the exact path applies.
       expect(outputGetCount(fetchMock)).toBe(1);
       fireEvent.click(screen.getByRole("button", { name: "Load more" }));
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       expect(screen.getByText(/is still running/)).toBeTruthy();
       const loaded = historyGetCount(fetchMock);
       const cursorLoads = () =>
         fetchUrls(fetchMock).filter((url) => url.includes("before=cursor-1")).length;
       const loadedCursor = cursorLoads();
-      await vi.advanceTimersByTimeAsync(10_000);
+      await advancePanelTimers(10_000);
       expect(historyGetCount(fetchMock)).toBe(loaded);
       fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       // v5 refetch() reloads every retained page through its stored cursor,
       // so one manual refresh is two GETs here, both user-initiated.
       expect(historyGetCount(fetchMock)).toBe(loaded + 2);
@@ -518,14 +527,14 @@ describe("run history panel", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
       renderPanel({ selectedRunId: "run-1" });
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       expect(screen.getByText(/is still running/)).toBeTruthy();
-      await vi.advanceTimersByTimeAsync(2_000);
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(2_000);
+      await advancePanelTimers(0);
       expect(screen.getByText("Run unavailable")).toBeTruthy();
       expect(outputGetCount(fetchMock)).toBe(1);
       const settled = historyGetCount(fetchMock);
-      await vi.advanceTimersByTimeAsync(10_000);
+      await advancePanelTimers(10_000);
       expect(historyGetCount(fetchMock)).toBe(settled);
     } finally {
       vi.useRealTimers();
@@ -550,18 +559,18 @@ describe("run history panel", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
       renderPanel({ selectedRunId: "run-1" });
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(2_000);
+      await advancePanelTimers(0);
+      await advancePanelTimers(2_000);
       expect(screen.getByText(/Showing the last successful run history/)).toBeTruthy();
       fireEvent.click(
         within(screen.getByLabelText("Selected run output")).getByRole("button", {
           name: "Refresh",
         }),
       );
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
       const restarted = historyGetCount(fetchMock);
-      await vi.advanceTimersByTimeAsync(4_000);
+      await advancePanelTimers(4_000);
       expect(historyGetCount(fetchMock)).toBe(restarted + 2);
     } finally {
       vi.useRealTimers();
@@ -609,8 +618,8 @@ describe("run history panel", () => {
           </QueryClientProvider>
         </ThemeProvider>,
       );
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(2_000);
+      await advancePanelTimers(0);
+      await advancePanelTimers(2_000);
       expect(historyCalls).toBe(2);
       view.rerender(
         <ThemeProvider>
@@ -632,7 +641,7 @@ describe("run history panel", () => {
           nextCursor: null,
         }),
       );
-      await vi.advanceTimersByTimeAsync(6_000);
+      await advancePanelTimers(6_000);
       expect(historyGetCount(fetchMock)).toBe(5);
       expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
       // The only output call is the exact fetch from before the late data
@@ -676,9 +685,9 @@ describe("run history panel", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
       renderPanel({ selectedRunId: "run-1" });
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       for (let round = 0; round < 40; round += 1) {
-        await vi.advanceTimersByTimeAsync(2_000);
+        await advancePanelTimers(2_000);
         const resolve = waiting.shift();
         if (resolve !== undefined) resolve(runningPage());
       }
@@ -686,7 +695,7 @@ describe("run history panel", () => {
       expect(maxInFlight).toBe(1);
       expect(screen.getByText(/Auto-check paused after 30 checks/)).toBeTruthy();
       expect(outputGetCount(fetchMock)).toBe(0);
-      await vi.advanceTimersByTimeAsync(10_000);
+      await advancePanelTimers(10_000);
       expect(historyGetCount(fetchMock)).toBe(31);
     } finally {
       vi.useRealTimers();
@@ -723,8 +732,8 @@ describe("run history panel", () => {
           </QueryClientProvider>
         </ThemeProvider>,
       );
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(62_000);
+      await advancePanelTimers(0);
+      await advancePanelTimers(62_000);
       expect(historyGetCount(fetchMock)).toBe(31);
       expect(screen.getByText(/Auto-check paused after 30 checks/)).toBeTruthy();
       view.rerender(
@@ -740,9 +749,9 @@ describe("run history panel", () => {
       );
       // No render lag: the fresh session paints its own budget immediately.
       expect(screen.getByText(/check 1 of 30/)).toBeTruthy();
-      await vi.advanceTimersByTimeAsync(200);
+      await advancePanelTimers(200);
       expect(historyGetCount(fetchMock)).toBe(31);
-      await vi.advanceTimersByTimeAsync(1_800);
+      await advancePanelTimers(1_800);
       expect(historyGetCount(fetchMock)).toBe(32);
     } finally {
       vi.useRealTimers();
@@ -767,8 +776,8 @@ describe("run history panel", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
       renderPanel({ selectedRunId: "run-1" });
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(2_000);
+      await advancePanelTimers(0);
+      await advancePanelTimers(2_000);
       expect(screen.getByText(/Auto-check paused: history request failed/)).toBeTruthy();
       expect(screen.queryByText(/Auto-checking/)).toBeNull();
       expect(screen.queryByText(/after 30 checks/)).toBeNull();
@@ -797,9 +806,9 @@ describe("run history panel", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
       renderPanel({ selectedRunId: "run-old" });
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       fireEvent.click(screen.getByRole("button", { name: "Load more" }));
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       expect(screen.getByText(/Auto-check paused: more than one page loaded/)).toBeTruthy();
       expect(screen.queryByText(/Auto-checking/)).toBeNull();
       expect(screen.queryByText(/after 30 checks/)).toBeNull();
@@ -828,10 +837,10 @@ describe("run history panel", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
       renderPanel({ selectedRunId: "run-new" });
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Load more" }));
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       expect(screen.getByText(/Loading more history/)).toBeTruthy();
       expect(screen.queryByText(/Auto-checking/)).toBeNull();
       expect(screen.queryByText(/after 30 checks/)).toBeNull();
@@ -842,7 +851,7 @@ describe("run history panel", () => {
           nextCursor: null,
         }),
       );
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       expect(screen.getByText(/Auto-check paused: more than one page loaded/)).toBeTruthy();
     } finally {
       vi.useRealTimers();
@@ -873,10 +882,10 @@ describe("run history panel", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
       renderPanel({ selectedRunId: "run-new" });
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Load more" }));
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       expect(screen.getByText(/Auto-check paused: history request failed/)).toBeTruthy();
       expect(screen.queryByText(/Auto-checking/)).toBeNull();
       fireEvent.click(
@@ -884,7 +893,7 @@ describe("run history panel", () => {
           name: "Refresh",
         }),
       );
-      await vi.advanceTimersByTimeAsync(0);
+      await advancePanelTimers(0);
       expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
     } finally {
       vi.useRealTimers();
@@ -926,8 +935,8 @@ describe("run history panel", () => {
           </QueryClientProvider>
         </ThemeProvider>,
       );
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(2_000);
+      await advancePanelTimers(0);
+      await advancePanelTimers(2_000);
       expect(historyCalls).toBe(2);
       view.unmount();
       expect(resolvePending).toBeDefined();
@@ -937,7 +946,7 @@ describe("run history panel", () => {
           nextCursor: null,
         }),
       );
-      await vi.advanceTimersByTimeAsync(10_000);
+      await advancePanelTimers(10_000);
       expect(historyGetCount(fetchMock)).toBe(2);
       expect(outputGetCount(fetchMock)).toBe(0);
     } finally {
@@ -961,7 +970,7 @@ describe("run history panel", () => {
         });
         vi.stubGlobal("fetch", fetchMock);
         renderPanel({ selectedRunId: "run-1" });
-        await vi.advanceTimersByTimeAsync(0);
+        await advancePanelTimers(0);
         expect(screen.getByText(new RegExp(`is still ${state}`))).toBeTruthy();
         expect(outputGetCount(fetchMock)).toBe(0);
       } finally {
