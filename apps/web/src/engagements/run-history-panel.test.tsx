@@ -23,7 +23,8 @@ function runSummary(id: string, createdAt: string, state = "succeeded") {
     id,
     actionId: "action-1",
     state,
-    terminalKind: state === "succeeded" ? "succeeded" : null,
+    terminalKind:
+      state === "succeeded" ? "succeeded" : state === "failed" ? "failed" : state === "cancelled" ? "cancelled" : null,
     terminalReason: null,
     updatedAt: createdAt,
     createdAt,
@@ -31,13 +32,13 @@ function runSummary(id: string, createdAt: string, state = "succeeded") {
   };
 }
 
-function outputFor(runId: string, content: string) {
+function outputFor(runId: string, content: string, state = "succeeded") {
   return {
     run: {
       id: runId,
       actionId: "action-1",
-      state: "succeeded",
-      terminalKind: "succeeded",
+      state,
+      terminalKind: state,
       terminalReason: null,
       updatedAt: "2026-08-09T12:00:00.000Z",
     },
@@ -528,7 +529,132 @@ describe("run history panel", () => {
     }
   });
 
-  it("stops polling on unmount and resets budget on selection change", async () => {
+  it("rejects late completions from a previous selection without corrupting the budget", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveSecond!: (value: Response) => void;
+      let historyCalls = 0;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/runs?")) {
+          historyCalls += 1;
+          if (historyCalls === 1) {
+            return response({
+              runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", "running")],
+              nextCursor: null,
+            });
+          }
+          if (historyCalls === 2) {
+            return new Promise<Response>((resolve) => {
+              resolveSecond = resolve;
+            });
+          }
+          return response({
+            runs: [runSummary("run-2", "2026-08-10T12:01:00.000Z", "running")],
+            nextCursor: null,
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const queryClient = createAppQueryClient();
+      testQueryClients.add(queryClient);
+      const view = render(
+        <ThemeProvider>
+          <QueryClientProvider client={queryClient}>
+            <RunHistoryPanel
+              engagementId={ENGAGEMENT_ID}
+              selectedRunId="run-1"
+              onSelect={() => undefined}
+            />
+          </QueryClientProvider>
+        </ThemeProvider>,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(historyCalls).toBe(2);
+      view.rerender(
+        <ThemeProvider>
+          <QueryClientProvider client={queryClient}>
+            <RunHistoryPanel
+              engagementId={ENGAGEMENT_ID}
+              selectedRunId="run-2"
+              onSelect={() => undefined}
+            />
+          </QueryClientProvider>
+        </ThemeProvider>,
+      );
+      // The previous session's fetch resolves late with current server data.
+      // It must not consume the new session's budget or block its lock.
+      expect(resolveSecond).toBeDefined();
+      resolveSecond(
+        response({
+          runs: [runSummary("run-2", "2026-08-10T12:01:00.000Z", "running")],
+          nextCursor: null,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(historyGetCount(fetchMock)).toBe(5);
+      expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
+      // The only output call is the exact fetch from before the late data
+      // arrived, when run-2 was not yet in the loaded window.
+      expect(outputGetCount(fetchMock)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never starts more than 30 automatic checks with slow responses", async () => {
+    vi.useFakeTimers();
+    try {
+      let historyCalls = 0;
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const waiting: Array<(value: Response) => void> = [];
+      const runningPage = () =>
+        response({
+          runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", "running")],
+          nextCursor: null,
+        });
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/runs?")) {
+          historyCalls += 1;
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          if (historyCalls === 1) {
+            inFlight -= 1;
+            return runningPage();
+          }
+          return new Promise<Response>((resolve) => {
+            waiting.push((value) => {
+              inFlight -= 1;
+              resolve(value);
+            });
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPanel({ selectedRunId: "run-1" });
+      await vi.advanceTimersByTimeAsync(0);
+      for (let round = 0; round < 40; round += 1) {
+        await vi.advanceTimersByTimeAsync(2_000);
+        const resolve = waiting.shift();
+        if (resolve !== undefined) resolve(runningPage());
+      }
+      expect(historyGetCount(fetchMock)).toBe(31);
+      expect(maxInFlight).toBe(1);
+      expect(screen.getByText(/Auto-check paused after 30 checks/)).toBeTruthy();
+      expect(outputGetCount(fetchMock)).toBe(0);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(historyGetCount(fetchMock)).toBe(31);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restarts the 2s cadence and budget synchronously on selection change", async () => {
     vi.useFakeTimers();
     try {
       const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -547,7 +673,7 @@ describe("run history panel", () => {
       vi.stubGlobal("fetch", fetchMock);
       const queryClient = createAppQueryClient();
       testQueryClients.add(queryClient);
-      const { rerender, unmount } = render(
+      const view = render(
         <ThemeProvider>
           <QueryClientProvider client={queryClient}>
             <RunHistoryPanel
@@ -559,9 +685,10 @@ describe("run history panel", () => {
         </ThemeProvider>,
       );
       await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(56_000);
-      expect(historyGetCount(fetchMock)).toBe(29);
-      rerender(
+      await vi.advanceTimersByTimeAsync(62_000);
+      expect(historyGetCount(fetchMock)).toBe(31);
+      expect(screen.getByText(/Auto-check paused after 30 checks/)).toBeTruthy();
+      view.rerender(
         <ThemeProvider>
           <QueryClientProvider client={queryClient}>
             <RunHistoryPanel
@@ -572,13 +699,208 @@ describe("run history panel", () => {
           </QueryClientProvider>
         </ThemeProvider>,
       );
-      await vi.advanceTimersByTimeAsync(6_000);
-      // A reset budget allows 3 more rounds; without it only 1 fits before 30.
+      // No render lag: the fresh session paints its own budget immediately.
+      expect(screen.getByText(/check 1 of 30/)).toBeTruthy();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(historyGetCount(fetchMock)).toBe(31);
+      await vi.advanceTimersByTimeAsync(1_800);
       expect(historyGetCount(fetchMock)).toBe(32);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("names the exact stop reason and never claims checking while inactive", async () => {
+    vi.useFakeTimers();
+    try {
+      let historyCalls = 0;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/runs?")) {
+          historyCalls += 1;
+          if (historyCalls === 2) return response({ code: "storage_busy" }, 503);
+          return response({
+            runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", "running")],
+            nextCursor: null,
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPanel({ selectedRunId: "run-1" });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(screen.getByText(/Auto-check paused: history request failed/)).toBeTruthy();
+      expect(screen.queryByText(/Auto-checking/)).toBeNull();
+      expect(screen.queryByText(/after 30 checks/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+    cleanup();
+
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("before=cursor-1")) {
+          return response({
+            runs: [runSummary("run-old", "2026-08-09T12:00:00.000Z", "running")],
+            nextCursor: null,
+          });
+        }
+        if (url.includes("/runs?")) {
+          return response({
+            runs: [runSummary("run-new", "2026-08-10T12:00:00.000Z")],
+            nextCursor: "cursor-1",
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPanel({ selectedRunId: "run-old" });
+      await vi.advanceTimersByTimeAsync(0);
+      fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText(/Auto-check paused: more than one page loaded/)).toBeTruthy();
+      expect(screen.queryByText(/Auto-checking/)).toBeNull();
+      expect(screen.queryByText(/after 30 checks/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+    cleanup();
+
+    vi.useFakeTimers();
+    try {
+      let resolveNext!: (value: Response) => void;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("before=cursor-1")) {
+          return new Promise<Response>((resolve) => {
+            resolveNext = resolve;
+          });
+        }
+        if (url.includes("/runs?")) {
+          return response({
+            runs: [runSummary("run-new", "2026-08-10T12:00:00.000Z", "running")],
+            nextCursor: "cursor-1",
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPanel({ selectedRunId: "run-new" });
+      await vi.advanceTimersByTimeAsync(0);
       expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
-      unmount();
+      fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText(/Loading more history/)).toBeTruthy();
+      expect(screen.queryByText(/Auto-checking/)).toBeNull();
+      expect(screen.queryByText(/after 30 checks/)).toBeNull();
+      expect(resolveNext).toBeDefined();
+      resolveNext(
+        response({
+          runs: [runSummary("run-old", "2026-08-09T12:00:00.000Z", "running")],
+          nextCursor: null,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText(/Auto-check paused: more than one page loaded/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers a failed load-more through manual refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      let nextCalls = 0;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("before=cursor-1")) {
+          nextCalls += 1;
+          if (nextCalls === 1) return response({ code: "storage_busy" }, 503);
+          return response({
+            runs: [runSummary("run-old", "2026-08-09T12:00:00.000Z", "running")],
+            nextCursor: null,
+          });
+        }
+        if (url.includes("/runs?")) {
+          return response({
+            runs: [runSummary("run-new", "2026-08-10T12:00:00.000Z", "running")],
+            nextCursor: "cursor-1",
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPanel({ selectedRunId: "run-new" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText(/Auto-check paused: history request failed/)).toBeTruthy();
+      expect(screen.queryByText(/Auto-checking/)).toBeNull();
+      fireEvent.click(
+        within(screen.getByLabelText("Selected run output")).getByRole("button", {
+          name: "Refresh",
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText(/Auto-checking every 2 seconds/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops polling on unmount, even with a request in flight", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolvePending!: (value: Response) => void;
+      let historyCalls = 0;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/runs?")) {
+          historyCalls += 1;
+          if (historyCalls === 1) {
+            return response({
+              runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", "running")],
+              nextCursor: null,
+            });
+          }
+          return new Promise<Response>((resolve) => {
+            resolvePending = resolve;
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const queryClient = createAppQueryClient();
+      testQueryClients.add(queryClient);
+      const view = render(
+        <ThemeProvider>
+          <QueryClientProvider client={queryClient}>
+            <RunHistoryPanel
+              engagementId={ENGAGEMENT_ID}
+              selectedRunId="run-1"
+              onSelect={() => undefined}
+            />
+          </QueryClientProvider>
+        </ThemeProvider>,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(historyCalls).toBe(2);
+      view.unmount();
+      expect(resolvePending).toBeDefined();
+      resolvePending(
+        response({
+          runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", "running")],
+          nextCursor: null,
+        }),
+      );
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(historyGetCount(fetchMock)).toBe(32);
+      expect(historyGetCount(fetchMock)).toBe(2);
+      expect(outputGetCount(fetchMock)).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -620,13 +942,14 @@ describe("run history panel", () => {
             nextCursor: null,
           });
         }
-        if (url.endsWith("/runs/run-1/output")) return response(outputFor("run-1", "terminal-bytes"));
+        if (url.endsWith("/runs/run-1/output")) return response(outputFor("run-1", "terminal-bytes", state));
         return response({ code: "invalid_request" }, 400);
       });
       vi.stubGlobal("fetch", fetchMock);
       renderPanel({ selectedRunId: "run-1" });
       await screen.findByTestId("run-history-stdout");
       expect(screen.getByTestId("run-history-stdout").textContent).toBe("terminal-bytes");
+      expect(screen.getByText(`run-1 · ${state}`)).toBeTruthy();
       expect(screen.queryByText(/is still/)).toBeNull();
       expect(outputGetCount(fetchMock)).toBe(1);
       cleanup();

@@ -40,33 +40,41 @@ export function RunHistoryPanel({
 }: RunHistoryPanelProps) {
   const history = useRunHistoryQuery(engagementId, limit);
   const hasHistoryData = history.data !== undefined;
-  const [autoRoundsUsed, setAutoRoundsUsed] = useState(0);
-  const [autoLocked, setAutoLocked] = useState(false);
+  // One polling session per engagement + selection. The budget resets
+  // synchronously during render on session change so the next paint never
+  // shows the previous session's count or paused copy.
+  const sessionKey = `${engagementId ?? ""}::${selectedRunId ?? ""}`;
+  const [poll, setPoll] = useState({ key: sessionKey, used: 0, locked: false });
+  const pollRef = useRef(poll);
   const fetchingRef = useRef(false);
   const historyRef = useRef(history);
-  const mountedRef = useRef(true);
-  const resetAutoBudget = () => {
-    setAutoRoundsUsed(0);
-    setAutoLocked(false);
+  const inFlightRef = useRef<number | null>(null);
+  const callSeqRef = useRef(0);
+  if (poll.key !== sessionKey) {
+    const fresh = { key: sessionKey, used: 0, locked: false };
+    pollRef.current = fresh;
+    setPoll(fresh);
+  }
+  const resetPollBudget = () => {
+    const fresh = { key: sessionKey, used: 0, locked: false };
+    pollRef.current = fresh;
+    setPoll(fresh);
   };
-  const retryHistory = () => {
-    resetAutoBudget();
-    void history.refetch();
+  const startManualRefetch = () => {
+    const callId = callSeqRef.current + 1;
+    callSeqRef.current = callId;
+    inFlightRef.current = callId;
+    void historyRef.current.refetch().finally(() => {
+      if (inFlightRef.current === callId) inFlightRef.current = null;
+    });
   };
   const restartAutoChecks = () => {
-    resetAutoBudget();
-    void history.refetch();
+    resetPollBudget();
+    startManualRefetch();
   };
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-  useEffect(() => {
-    setAutoRoundsUsed(0);
-    setAutoLocked(false);
-  }, [engagementId, selectedRunId]);
+  const retryHistory = () => {
+    restartAutoChecks();
+  };
   useEffect(() => {
     fetchingRef.current = history.isFetching;
     historyRef.current = history;
@@ -80,25 +88,36 @@ export function RunHistoryPanel({
     selectedRow !== undefined && !isTerminalRunState(selectedRow.state)
       ? selectedRow
       : undefined;
-  const autoExhausted = autoRoundsUsed >= PENDING_POLL_MAX_ROUNDS;
   const autoPollEligible =
     selectedPendingRow !== undefined &&
     !history.isError &&
     (history.data?.pages.length ?? 1) === 1 &&
-    !autoLocked &&
-    !autoExhausted;
+    !poll.locked &&
+    poll.used < PENDING_POLL_MAX_ROUNDS;
   useEffect(() => {
     if (!autoPollEligible) return;
     const timer = window.setInterval(() => {
-      const current = historyRef.current;
+      const snapshot = pollRef.current;
+      if (snapshot.used >= PENDING_POLL_MAX_ROUNDS) return;
       if (fetchingRef.current) return;
+      if (inFlightRef.current !== null) return;
+      const current = historyRef.current;
       if ((current.data?.pages.length ?? 1) > 1) return;
+      // Reserve synchronously before the call so delayed responses can never
+      // push starts past the budget; late completions clear only their own
+      // call lock and touch nothing else.
+      const next = { ...snapshot, used: snapshot.used + 1 };
+      pollRef.current = next;
+      setPoll(next);
+      const callId = callSeqRef.current + 1;
+      callSeqRef.current = callId;
+      inFlightRef.current = callId;
       void current.refetch().finally(() => {
-        if (mountedRef.current) setAutoRoundsUsed((count) => count + 1);
+        if (inFlightRef.current === callId) inFlightRef.current = null;
       });
     }, PENDING_POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [autoPollEligible]);
+  }, [autoPollEligible, engagementId, selectedRunId]);
 
   if (engagementId === undefined) {
     return (
@@ -206,7 +225,11 @@ export function RunHistoryPanel({
               onClick={() => {
                 // A second loaded page ends single-page auto-checking before
                 // it can refetch; further updates come from manual refresh.
-                setAutoLocked(true);
+                // The lock persists (even if the page fetch fails) until a
+                // manual Refresh restarts the session.
+                const locked = { ...pollRef.current, locked: true };
+                pollRef.current = locked;
+                setPoll(locked);
                 void history.fetchNextPage();
               }}
             >
@@ -216,6 +239,24 @@ export function RunHistoryPanel({
         ) : null}
       </div>
     );
+
+  const pageCount = history.data?.pages.length ?? 1;
+  // Explicit stopped reason: never claim auto-checking while inactive, and
+  // never blame the 30-check budget for other stop causes.
+  let pendingStatus: string;
+  if (history.isError) {
+    pendingStatus = "Auto-check paused: history request failed.";
+  } else if (pageCount > 1) {
+    pendingStatus = "Auto-check paused: more than one page loaded.";
+  } else if (history.isFetchingNextPage) {
+    pendingStatus = "Loading more history…";
+  } else if (poll.locked) {
+    pendingStatus = "Loading more history failed.";
+  } else if (poll.used >= PENDING_POLL_MAX_ROUNDS) {
+    pendingStatus = "Auto-check paused after 30 checks.";
+  } else {
+    pendingStatus = `Auto-checking every 2 seconds (check ${poll.used + 1} of 30).`;
+  }
 
   return (
     <section aria-label="Run history">
@@ -239,17 +280,16 @@ export function RunHistoryPanel({
       <div className="mt-4 border-t border-border pt-3">
         {selectedPendingRow !== undefined ? (
           <PendingSelectedRun
-            autoRoundsUsed={autoRoundsUsed}
-            paused={autoExhausted}
             runId={selectedPendingRow.id}
             runState={selectedPendingRow.state}
+            statusLine={pendingStatus}
             onRefresh={restartAutoChecks}
           />
         ) : (
           <SelectedRunOutput
             engagementId={engagementId}
             selectedRunId={selectedRunId}
-            onManualRetry={resetAutoBudget}
+            onManualRetry={resetPollBudget}
           />
         )}
       </div>
@@ -258,17 +298,15 @@ export function RunHistoryPanel({
 }
 
 function PendingSelectedRun({
-  autoRoundsUsed,
   onRefresh,
-  paused,
   runId,
   runState,
+  statusLine,
 }: {
-  autoRoundsUsed: number;
   onRefresh: () => void;
-  paused: boolean;
   runId: string;
   runState: string;
+  statusLine: string;
 }) {
   return (
     <section aria-label="Selected run output">
@@ -281,9 +319,7 @@ function PendingSelectedRun({
         is still {runState}. Preserved output appears automatically when the run finishes.
       </p>
       <p className="mt-1 mb-0 text-[12px] text-muted-foreground" aria-live="polite">
-        {paused
-          ? "Auto-check paused after 30 checks."
-          : `Auto-checking every 2 seconds (check ${autoRoundsUsed + 1} of 30).`}
+        {statusLine}
       </p>
       <div className="mt-3">
         <Button type="button" variant="secondary" onClick={onRefresh}>
