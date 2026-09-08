@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { engagementReportMarkdown, type ReportBundle } from "@blackglass/contracts";
 import {
@@ -8,6 +8,8 @@ import {
   Skeleton,
   StaleDataState,
 } from "@blackglass/ui";
+
+import { maskReportBundle } from "./report-mask.js";
 
 import {
   copyTextToClipboard,
@@ -28,6 +30,7 @@ export function EngagementReportSection({
   const body =
     report.data !== undefined ? (
       <ReportBody
+        key={engagementId}
         engagementId={engagementId}
         bundle={report.data}
         refreshing={report.isFetching}
@@ -91,15 +94,21 @@ function ReportBody({
   engagementId: string;
   refreshing: boolean;
 }) {
-  const markdown = engagementReportMarkdown(bundle);
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string | undefined>(undefined);
+  // Session-only sharing default: masked until the operator opts out. It
+  // resets when the engagement changes and never persists or deletes data.
+  const [masked, setMasked] = useState(true);
   const copyTimer = useRef<number | undefined>(undefined);
+  // One derived copy feeds the preview, copy, and both downloads, so every
+  // surface shows the same text. The stored bundle stays original.
+  const shared = useMemo(() => maskReportBundle(bundle), [bundle]);
+  const view = masked ? shared.bundle : bundle;
+  const markdown = engagementReportMarkdown(view);
 
   useEffect(() => {
-    const timer = copyTimer.current;
     return () => {
-      if (timer !== undefined) window.clearTimeout(timer);
+      if (copyTimer.current !== undefined) window.clearTimeout(copyTimer.current);
     };
   }, []);
   useEffect(() => {
@@ -128,7 +137,7 @@ function ReportBody({
     try {
       downloadTextFile(
         reportJsonFilename(engagementId),
-        `${JSON.stringify(bundle, null, 2)}\n`,
+        `${JSON.stringify(view, null, 2)}\n`,
         "application/json",
       );
     } catch {
@@ -145,10 +154,24 @@ function ReportBody({
     }
   };
 
+  const onToggleMask = () => {
+    if (copyTimer.current !== undefined) {
+      window.clearTimeout(copyTimer.current);
+      copyTimer.current = undefined;
+    }
+    setCopied(false);
+    setMasked((value) => !value);
+  };
+
   return (
     <div className="grid min-w-0 gap-3">
       <p className="m-0 text-[12px] text-muted-foreground" aria-live="polite">
         {summary}
+      </p>
+      <p className="m-0 text-[12px] text-muted-foreground">
+        {masked
+          ? `Sharing view masks notes, findings, and engagement text only (Fields masked: ${shared.maskedFields}). Other report data is unchanged. Heuristic mask; secrets may remain.`
+          : "Showing the original stored report, including any secrets it contains. The stored report is unchanged."}
       </p>
       {refreshing ? (
         <p className="m-0 text-[12px] text-muted-foreground" role="status">
@@ -178,6 +201,14 @@ function ReportBody({
           onClick={onDownloadMarkdown}
         >
           Download Markdown
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          aria-pressed={masked}
+          onClick={onToggleMask}
+        >
+          {masked ? "Show original" : "Mask secrets"}
         </Button>
       </div>
       {actionError ? (
