@@ -9,6 +9,7 @@ import type { ReportBundle } from "@blackglass/contracts";
 import { engagementReportMarkdown } from "@blackglass/contracts";
 import { createAppQueryClient } from "../query-client.js";
 import { maskReportBundle } from "./report-mask.js";
+import { reportQueryKey } from "./report-query.js";
 import { EngagementReportSection } from "./report.js";
 
 const engagementId = "10000000-0000-4000-8000-000000000001";
@@ -67,13 +68,14 @@ const testQueryClients = new Set<QueryClient>();
 function renderSection() {
   const queryClient = createAppQueryClient();
   testQueryClients.add(queryClient);
-  return render(
+  const rendered = render(
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
         <EngagementReportSection engagementId={engagementId} />
       </QueryClientProvider>
     </ThemeProvider>,
   );
+  return { queryClient, ...rendered };
 }
 
 beforeEach(() => {
@@ -282,10 +284,10 @@ describe("engagement report", () => {
       .spyOn(HTMLAnchorElement.prototype, "click")
       .mockImplementation(function (this: HTMLAnchorElement) {});
 
-    renderSection();
+    const { queryClient } = renderSection();
 
-    // Masked by default with a visible count; structured text is preserved.
-    expect(await screen.findByText(/2 replacements/)).toBeTruthy();
+    // Masked by default with a visible field count; structured text is preserved.
+    expect(await screen.findByText(/Fields masked: 2/)).toBeTruthy();
     const preview = document.querySelector("section[aria-label='Report'] pre")?.textContent ?? "";
     expect(preview).toContain("[redacted]");
     expect(preview).not.toContain(secretNote);
@@ -293,18 +295,23 @@ describe("engagement report", () => {
     expect(preview).toContain(structuredProduct);
 
     // JSON download carries the same masked copy, not the stored bundle.
-    const maskedJson = `${JSON.stringify(maskReportBundle(bundle).bundle, null, 2)}\n`;
+    const masked = maskReportBundle(bundle);
     const storedJson = `${JSON.stringify(bundle, null, 2)}\n`;
-    expect(new Blob([maskedJson]).size).not.toBe(new Blob([storedJson]).size);
+    const createObjectURL = URL.createObjectURL as ReturnType<typeof vi.fn>;
     fireEvent.click(screen.getByRole("button", { name: "Download JSON" }));
-    await waitFor(() =>
-      expect(URL.createObjectURL as ReturnType<typeof vi.fn>).toHaveBeenCalled(),
-    );
-    const downloaded = (URL.createObjectURL as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
-      | Blob
-      | undefined;
-    expect(downloaded).toBeInstanceOf(Blob);
-    expect(downloaded?.size).toBe(new Blob([maskedJson]).size);
+    await waitFor(() => expect(createObjectURL.mock.calls.length).toBe(1));
+    const downloadedJson = createObjectURL.mock.calls[0]?.[0] as Blob | undefined;
+    expect(downloadedJson).toBeInstanceOf(Blob);
+    const downloadedJsonText = await downloadedJson?.text();
+    expect(downloadedJsonText).not.toBe(storedJson);
+    expect(JSON.parse(downloadedJsonText ?? "")).toEqual(masked.bundle);
+
+    // Markdown download carries the same masked Markdown as the preview.
+    fireEvent.click(screen.getByRole("button", { name: "Download Markdown" }));
+    await waitFor(() => expect(createObjectURL.mock.calls.length).toBe(2));
+    const downloadedMarkdown = createObjectURL.mock.calls[1]?.[0] as Blob | undefined;
+    expect(downloadedMarkdown).toBeInstanceOf(Blob);
+    expect(await downloadedMarkdown?.text()).toBe(preview);
 
     // Copy carries the same masked Markdown as the preview.
     fireEvent.click(screen.getByRole("button", { name: "Copy Markdown" }));
@@ -326,6 +333,80 @@ describe("engagement report", () => {
     fireEvent.click(screen.getByRole("button", { name: /Copy Markdown|Copied/ }));
     await waitFor(() => expect(clipboard.mock.calls.length).toBe(2));
     expect(String(clipboard.mock.calls[1]?.[0] ?? "")).toContain(secretNote);
+
+    // Toggling and exporting never rewrite the cached stored bundle.
+    expect(queryClient.getQueryData(reportQueryKey(engagementId))).toEqual(bundle);
     clickSpy.mockRestore();
+  });
+
+  it("resets the mask toggle when switching engagements", async () => {
+    const engagementB = "10000000-0000-4000-8000-000000000002";
+    const bundleA: ReportBundle = {
+      ...bundleFixture(),
+      notesMarkdown: "see flag{synthetic-reset-0001}",
+    };
+    const baseB = bundleFixture();
+    const bundleB: ReportBundle = {
+      ...baseB,
+      engagement: { ...baseB.engagement, id: engagementB, name: "Second lab" },
+      findings: [],
+      notesMarkdown: "plain second notes",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes(`/engagements/${engagementB}/report`)) {
+          return Promise.resolve(response(bundleB));
+        }
+        if (url.includes(`/engagements/${engagementId}/report`)) {
+          return Promise.resolve(response(bundleA));
+        }
+        return Promise.reject(new Error("unexpected fetch"));
+      }),
+    );
+    const queryClient = createAppQueryClient();
+    testQueryClients.add(queryClient);
+    const rendered = render(
+      <ThemeProvider>
+        <QueryClientProvider client={queryClient}>
+          <EngagementReportSection engagementId={engagementId} />
+        </QueryClientProvider>
+      </ThemeProvider>,
+    );
+    const previewText = () =>
+      document.querySelector("section[aria-label='Report'] pre")?.textContent ?? "";
+
+    expect(await screen.findByText(/Fields masked: 1/)).toBeTruthy();
+    expect(previewText()).not.toContain("flag{synthetic-reset-0001}");
+
+    // Opt out on A, then switch to B: the fresh engagement starts masked.
+    fireEvent.click(screen.getByRole("button", { name: "Show original" }));
+    expect(await screen.findByRole("button", { name: "Mask secrets" })).toBeTruthy();
+    expect(previewText()).toContain("flag{synthetic-reset-0001}");
+
+    rendered.rerender(
+      <ThemeProvider>
+        <QueryClientProvider client={queryClient}>
+          <EngagementReportSection engagementId={engagementB} />
+        </QueryClientProvider>
+      </ThemeProvider>,
+    );
+    expect(await screen.findByText(/Fields masked: 0/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show original" })).toBeTruthy();
+
+    // Switching back to A restores the masked default instead of the opt-out.
+    rendered.rerender(
+      <ThemeProvider>
+        <QueryClientProvider client={queryClient}>
+          <EngagementReportSection engagementId={engagementId} />
+        </QueryClientProvider>
+      </ThemeProvider>,
+    );
+    expect(await screen.findByText(/Default credentials on admin panel/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show original" })).toBeTruthy();
+    expect(previewText()).not.toContain("flag{synthetic-reset-0001}");
+    expect(queryClient.getQueryData(reportQueryKey(engagementId))).toEqual(bundleA);
+    expect(queryClient.getQueryData(reportQueryKey(engagementB))).toEqual(bundleB);
   });
 });

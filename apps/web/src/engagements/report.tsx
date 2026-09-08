@@ -30,6 +30,7 @@ export function EngagementReportSection({
   const body =
     report.data !== undefined ? (
       <ReportBody
+        key={engagementId}
         engagementId={engagementId}
         bundle={report.data}
         refreshing={report.isFetching}
@@ -106,18 +107,14 @@ function ReportBody({
   const markdown = engagementReportMarkdown(view);
 
   useEffect(() => {
-    const timer = copyTimer.current;
     return () => {
-      if (timer !== undefined) window.clearTimeout(timer);
+      if (copyTimer.current !== undefined) window.clearTimeout(copyTimer.current);
     };
   }, []);
   useEffect(() => {
     setCopied(false);
     setActionError(undefined);
   }, [engagementId, bundle.generatedAt]);
-  useEffect(() => {
-    setMasked(true);
-  }, [engagementId]);
 
   const empty = isReportEmpty(bundle);
   const summary = `${bundle.findings.length} findings · ${bundle.services.total} services · ${bundle.probes.total} probes · ${bundle.ffufResults.total} ffuf results · ${bundle.evidenceArtifacts.total} artifacts`;
@@ -157,6 +154,15 @@ function ReportBody({
     }
   };
 
+  const onToggleMask = () => {
+    if (copyTimer.current !== undefined) {
+      window.clearTimeout(copyTimer.current);
+      copyTimer.current = undefined;
+    }
+    setCopied(false);
+    setMasked((value) => !value);
+  };
+
   return (
     <div className="grid min-w-0 gap-3">
       <p className="m-0 text-[12px] text-muted-foreground" aria-live="polite">
@@ -164,7 +170,7 @@ function ReportBody({
       </p>
       <p className="m-0 text-[12px] text-muted-foreground">
         {masked
-          ? `Sharing view masks operator notes, findings, and context with a heuristic redactor (${shared.redactions} replacements). It cannot guarantee every secret is removed. The stored report is unchanged.`
+          ? `Sharing view masks notes, findings, and engagement text only (Fields masked: ${shared.maskedFields}). Other report data is unchanged. Heuristic mask; secrets may remain.`
           : "Showing the original stored report, including any secrets it contains. The stored report is unchanged."}
       </p>
       {refreshing ? (
@@ -200,7 +206,7 @@ function ReportBody({
           type="button"
           variant="secondary"
           aria-pressed={masked}
-          onClick={() => setMasked((value) => !value)}
+          onClick={onToggleMask}
         >
           {masked ? "Show original" : "Mask secrets"}
         </Button>

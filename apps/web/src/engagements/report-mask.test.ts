@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ReportBundle } from "@blackglass/contracts";
+import { ReportBundleSchema, type ReportBundle } from "@blackglass/contracts";
 
 import { maskReportBundle } from "./report-mask.js";
 
@@ -35,7 +35,7 @@ function bundleFixture(): ReportBundle {
         updatedAt: "2026-08-12T12:00:00.000Z",
       },
     ],
-    notesMarkdown: "see flag{synthetic-share-0001}",
+    notesMarkdown: "see flag{synthetic-share-0001} and flag{synthetic-share-0004}",
     notesUpdatedAt: "2026-08-12T12:00:00.000Z",
     services: {
       total: 1,
@@ -66,14 +66,17 @@ function bundleFixture(): ReportBundle {
 }
 
 describe("maskReportBundle", () => {
-  it("masks operator free text while preserving structured rows and identity", () => {
+  it("masks operator free text and counts changed fields, preserving structured rows and identity", () => {
     const bundle = bundleFixture();
     const masked = maskReportBundle(bundle);
 
-    expect(masked.redactions).toBe(3);
-    expect(masked.bundle.notesMarkdown).toBe("see [redacted]");
+    // Three changed fields (notes, title, description), even though the notes
+    // hold two secret hits. The count is changed fields, not hit totals.
+    expect(masked.maskedFields).toBe(3);
+    expect(masked.bundle.notesMarkdown).toBe("see [redacted] and [redacted]");
     expect(masked.bundle.findings[0]?.title).toBe("Creds password: [redacted]");
     expect(masked.bundle.findings[0]?.body).toBe("detail");
+    expect(masked.bundle.engagement.name).toBe("Target lab");
     expect(masked.bundle.engagement.description).toBe("auth [redacted]");
     expect(masked.bundle.engagement.authorizationContext).toBe(null);
 
@@ -88,16 +91,46 @@ describe("maskReportBundle", () => {
 
     // Identity metadata is byte-exact.
     expect(masked.bundle.engagement.id).toBe(bundle.engagement.id);
-    expect(masked.bundle.engagement.name).toBe(bundle.engagement.name);
     expect(masked.bundle.findings[0]?.id).toBe(bundle.findings[0]?.id);
     expect(masked.bundle.generatedAt).toBe(bundle.generatedAt);
 
     // The stored bundle is never mutated.
-    expect(bundle.notesMarkdown).toBe("see flag{synthetic-share-0001}");
+    expect(bundle.notesMarkdown).toContain("flag{synthetic-share-0001}");
     expect(bundle.findings[0]?.title).toBe("Creds password=synthetic-share-002");
   });
 
-  it("passes null context and secret-free text through with zero redactions", () => {
+  it("masks a secret-bearing engagement name while keeping the id", () => {
+    const bundle: ReportBundle = {
+      ...bundleFixture(),
+      engagement: {
+        ...bundleFixture().engagement,
+        name: "Lab flag{synthetic-share-0005}",
+      },
+    };
+    const masked = maskReportBundle(bundle);
+
+    expect(masked.bundle.engagement.name).toBe("Lab [redacted]");
+    expect(masked.bundle.engagement.id).toBe(bundle.engagement.id);
+    expect(masked.maskedFields).toBe(4);
+  });
+
+  it("counts a url-only strip as one masked field with zero secret hits", () => {
+    const bundle: ReportBundle = {
+      ...bundleFixture(),
+      engagement: {
+        ...bundleFixture().engagement,
+        description: null,
+      },
+      findings: [],
+      notesMarkdown: "see http://admin:synthetic@192.0.2.10/login for details",
+    };
+    const masked = maskReportBundle(bundle);
+
+    expect(masked.bundle.notesMarkdown).toBe("see http://192.0.2.10/login for details");
+    expect(masked.maskedFields).toBe(1);
+  });
+
+  it("passes null context and secret-free text through with zero masked fields", () => {
     const bundle: ReportBundle = {
       ...bundleFixture(),
       engagement: {
@@ -110,19 +143,33 @@ describe("maskReportBundle", () => {
     };
     const masked = maskReportBundle(bundle);
 
-    expect(masked.redactions).toBe(0);
+    expect(masked.maskedFields).toBe(0);
     expect(masked.bundle.notesMarkdown).toBe(bundle.notesMarkdown);
     expect(masked.bundle.engagement.description).toBe(null);
   });
 
-  it("strips credentialed urls from operator text", () => {
+  it("keeps an ordinarily masked bundle inside the report contract", () => {
+    const masked = maskReportBundle(bundleFixture());
+
+    expect(ReportBundleSchema.safeParse(masked.bundle).success).toBe(true);
+  });
+
+  it("never truncates when a replacement grows a bounded title past its schema limit", () => {
+    const title = `${"t".repeat(110)} token=x`;
+    expect(title.length).toBeLessThanOrEqual(120);
+    const base = bundleFixture();
     const bundle: ReportBundle = {
-      ...bundleFixture(),
-      findings: [],
-      notesMarkdown: "see http://admin:synthetic@192.0.2.10/login for details",
+      ...base,
+      findings: base.findings.map((finding) => ({ ...finding, title })),
     };
     const masked = maskReportBundle(bundle);
+    const maskedTitle = masked.bundle.findings[0]?.title ?? "";
 
-    expect(masked.bundle.notesMarkdown).toBe("see http://192.0.2.10/login for details");
+    // The derived copy is display/export only, so fidelity wins over the
+    // 120-code-point title bound: full text with the redaction, no silent cut.
+    expect(maskedTitle.length).toBeGreaterThan(120);
+    expect(maskedTitle.startsWith("t".repeat(110))).toBe(true);
+    expect(maskedTitle.endsWith("[redacted]")).toBe(true);
+    expect(masked.maskedFields).toBe(3);
   });
 });
