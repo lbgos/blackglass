@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { formatEngagementTimestamp } from "./format.js";
 import { useRunHistoryQuery } from "./run-history-query.js";
 import { RunNotFoundError, useRunOutputQuery } from "./run-output-query.js";
+import { useEngagementWorkspace } from "./workspace-context.js";
 
 export interface RunHistoryPanelProps {
   readonly engagementId: string | undefined;
@@ -438,6 +439,12 @@ function SelectedRunContent({
   onRefresh: () => void;
   output: RunOutputResponse;
 }) {
+  const { openAdvisor } = useEngagementWorkspace();
+  // Only real published artifact IDs from this run's preserved streams
+  // seed the advisor draft. A run ID is never an excerpt.
+  const askIds = [output.stdout, output.stderr].flatMap((stream) =>
+    stream.present ? [stream.artifactId] : [],
+  );
   return (
     <section aria-label="Selected run output">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -447,14 +454,26 @@ function SelectedRunContent({
             {output.run.id} · {output.run.state}
           </span>
         </h3>
-        <Button
-          type="button"
-          variant="quiet"
-          className="h-7 px-2 text-[12px]"
-          onClick={onRefresh}
-        >
-          Refresh
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {askIds.length > 0 ? (
+            <Button
+              type="button"
+              variant="quiet"
+              className="h-7 px-2 text-[12px]"
+              onClick={() => openAdvisor(askIds, [])}
+            >
+              Ask about this run
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="quiet"
+            className="h-7 px-2 text-[12px]"
+            onClick={onRefresh}
+          >
+            Refresh
+          </Button>
+        </div>
       </div>
       <div className="mt-3 grid gap-3">
         <SelectedRunStream label="stdout" runId={output.run.id} stream={output.stdout} />
@@ -464,9 +483,6 @@ function SelectedRunContent({
   );
 }
 
-// Minimal selected-run stream view. Mirrors the accessible shape of the
-// established raw output renderer without importing its unexported internals
-// (this slice must not edit shared output files). See handoff for the gap.
 function SelectedRunStream({
   label,
   runId,

@@ -7,6 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAppQueryClient } from "../query-client.js";
 import { RunHistoryPanel } from "./run-history-panel.js";
+import {
+  EngagementWorkspaceProvider,
+  useEngagementWorkspace,
+} from "./workspace-context.js";
 
 const ENGAGEMENT_ID = "eng-1";
 
@@ -56,6 +60,69 @@ function outputFor(runId: string, content: string, state = "succeeded") {
   };
 }
 
+function presentStream(artifactId: string, content: string) {
+  return {
+    present: true as const,
+    artifactId,
+    sizeBytes: content.length,
+    digest:
+      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    completeness: "complete" as const,
+    truncated: false as const,
+    content,
+  };
+}
+
+function absentStream() {
+  return { present: false as const, truncated: false as const, content: "" as const };
+}
+
+function outputWithStreams(
+  runId: string,
+  stdout: ReturnType<typeof presentStream> | ReturnType<typeof absentStream>,
+  stderr: ReturnType<typeof presentStream> | ReturnType<typeof absentStream>,
+  state = "succeeded",
+) {
+  return {
+    run: {
+      id: runId,
+      actionId: "action-1",
+      state,
+      terminalKind: state,
+      terminalReason: null,
+      updatedAt: "2026-08-09T12:00:00.000Z",
+    },
+    stdout,
+    stderr,
+  };
+}
+
+// Real workspace provider observer. The Runs tab lives inside
+// EngagementWorkspaceProvider in production (App shells the Outlet, workspace
+// renders RunHistoryPanel), so the panel's openAdvisor call only seeds this
+// draft. Workspace mounts AdvisorPanel when draft.open turns true; this probe
+// asserts the exact seeding without issuing any model request.
+function AdvisorDraftProbe() {
+  const { advisorDraft } = useEngagementWorkspace();
+  return (
+    <div
+      data-testid="advisor-draft"
+      data-open={advisorDraft.open ? "true" : "false"}
+      data-excerpts={advisorDraft.excerpts.join(",")}
+      data-findings={advisorDraft.findingIds.join(",")}
+    />
+  );
+}
+
+function draftExcerpts(): string[] {
+  const raw = screen.getByTestId("advisor-draft").getAttribute("data-excerpts") ?? "";
+  return raw.length === 0 ? [] : raw.split(",");
+}
+
+function draftOpen(): boolean {
+  return screen.getByTestId("advisor-draft").getAttribute("data-open") === "true";
+}
+
 const testQueryClients = new Set<QueryClient>();
 
 function renderPanel(props: {
@@ -69,11 +136,14 @@ function renderPanel(props: {
   const view = render(
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
-        <RunHistoryPanel
-          engagementId={props.engagementId ?? ENGAGEMENT_ID}
-          selectedRunId={props.selectedRunId}
-          onSelect={onSelect}
-        />
+        <EngagementWorkspaceProvider openCreate={() => undefined}>
+          <RunHistoryPanel
+            engagementId={props.engagementId ?? ENGAGEMENT_ID}
+            selectedRunId={props.selectedRunId}
+            onSelect={onSelect}
+          />
+          <AdvisorDraftProbe />
+        </EngagementWorkspaceProvider>
       </QueryClientProvider>
     </ThemeProvider>,
   );
@@ -176,11 +246,14 @@ describe("run history panel", () => {
     rerender(
       <ThemeProvider>
         <QueryClientProvider client={queryClient}>
-          <RunHistoryPanel
-            engagementId={ENGAGEMENT_ID}
-            selectedRunId="run-old"
-            onSelect={onSelect}
-          />
+          <EngagementWorkspaceProvider openCreate={() => undefined}>
+            <RunHistoryPanel
+              engagementId={ENGAGEMENT_ID}
+              selectedRunId="run-old"
+              onSelect={onSelect}
+            />
+            <AdvisorDraftProbe />
+          </EngagementWorkspaceProvider>
         </QueryClientProvider>
       </ThemeProvider>,
     );
@@ -610,11 +683,14 @@ describe("run history panel", () => {
       const view = render(
         <ThemeProvider>
           <QueryClientProvider client={queryClient}>
-            <RunHistoryPanel
-              engagementId={ENGAGEMENT_ID}
-              selectedRunId="run-1"
-              onSelect={() => undefined}
-            />
+            <EngagementWorkspaceProvider openCreate={() => undefined}>
+              <RunHistoryPanel
+                engagementId={ENGAGEMENT_ID}
+                selectedRunId="run-1"
+                onSelect={() => undefined}
+              />
+              <AdvisorDraftProbe />
+            </EngagementWorkspaceProvider>
           </QueryClientProvider>
         </ThemeProvider>,
       );
@@ -624,11 +700,14 @@ describe("run history panel", () => {
       view.rerender(
         <ThemeProvider>
           <QueryClientProvider client={queryClient}>
-            <RunHistoryPanel
-              engagementId={ENGAGEMENT_ID}
-              selectedRunId="run-2"
-              onSelect={() => undefined}
-            />
+            <EngagementWorkspaceProvider openCreate={() => undefined}>
+              <RunHistoryPanel
+                engagementId={ENGAGEMENT_ID}
+                selectedRunId="run-2"
+                onSelect={() => undefined}
+              />
+              <AdvisorDraftProbe />
+            </EngagementWorkspaceProvider>
           </QueryClientProvider>
         </ThemeProvider>,
       );
@@ -724,11 +803,14 @@ describe("run history panel", () => {
       const view = render(
         <ThemeProvider>
           <QueryClientProvider client={queryClient}>
-            <RunHistoryPanel
-              engagementId={ENGAGEMENT_ID}
-              selectedRunId="run-1"
-              onSelect={() => undefined}
-            />
+            <EngagementWorkspaceProvider openCreate={() => undefined}>
+              <RunHistoryPanel
+                engagementId={ENGAGEMENT_ID}
+                selectedRunId="run-1"
+                onSelect={() => undefined}
+              />
+              <AdvisorDraftProbe />
+            </EngagementWorkspaceProvider>
           </QueryClientProvider>
         </ThemeProvider>,
       );
@@ -739,11 +821,14 @@ describe("run history panel", () => {
       view.rerender(
         <ThemeProvider>
           <QueryClientProvider client={queryClient}>
-            <RunHistoryPanel
-              engagementId={ENGAGEMENT_ID}
-              selectedRunId="run-2"
-              onSelect={() => undefined}
-            />
+            <EngagementWorkspaceProvider openCreate={() => undefined}>
+              <RunHistoryPanel
+                engagementId={ENGAGEMENT_ID}
+                selectedRunId="run-2"
+                onSelect={() => undefined}
+              />
+              <AdvisorDraftProbe />
+            </EngagementWorkspaceProvider>
           </QueryClientProvider>
         </ThemeProvider>,
       );
@@ -927,11 +1012,14 @@ describe("run history panel", () => {
       const view = render(
         <ThemeProvider>
           <QueryClientProvider client={queryClient}>
-            <RunHistoryPanel
-              engagementId={ENGAGEMENT_ID}
-              selectedRunId="run-1"
-              onSelect={() => undefined}
-            />
+            <EngagementWorkspaceProvider openCreate={() => undefined}>
+              <RunHistoryPanel
+                engagementId={ENGAGEMENT_ID}
+                selectedRunId="run-1"
+                onSelect={() => undefined}
+              />
+              <AdvisorDraftProbe />
+            </EngagementWorkspaceProvider>
           </QueryClientProvider>
         </ThemeProvider>,
       );
@@ -1001,6 +1089,154 @@ describe("run history panel", () => {
       expect(screen.queryByText(/is still/)).toBeNull();
       expect(outputGetCount(fetchMock)).toBe(1);
       cleanup();
+    }
+  });
+
+  it("seeds the advisor draft with the stdout artifact only", async () => {
+    const stdoutId = "artifact-run-1-stdout";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/runs?")) {
+        return response({
+          runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z")],
+          nextCursor: null,
+        });
+      }
+      if (url.endsWith("/runs/run-1/output")) {
+        return response(
+          outputWithStreams("run-1", presentStream(stdoutId, "out-bytes"), absentStream()),
+        );
+      }
+      return response({ code: "invalid_request" }, 400);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPanel({ selectedRunId: "run-1" });
+    await screen.findByTestId("run-history-stdout");
+    expect(draftOpen()).toBe(false);
+    expect(draftExcerpts()).toEqual([]);
+    const ask = screen.getByRole("button", { name: "Ask about this run" });
+    fireEvent.click(ask);
+    await waitFor(() => expect(draftOpen()).toBe(true));
+    expect(draftExcerpts()).toEqual([stdoutId]);
+    expect(draftExcerpts()).not.toContain("run-1");
+    expect(screen.getByTestId("advisor-draft").getAttribute("data-findings")).toBe("");
+    assertReadOnly(fetchMock);
+    expect(fetchUrls(fetchMock).some((url) => url.includes("/advisor"))).toBe(false);
+  });
+
+  it("seeds the advisor draft with the stderr artifact only", async () => {
+    const stderrId = "artifact-run-1-stderr";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/runs?")) {
+        return response({
+          runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z")],
+          nextCursor: null,
+        });
+      }
+      if (url.endsWith("/runs/run-1/output")) {
+        return response(
+          outputWithStreams("run-1", absentStream(), presentStream(stderrId, "err-bytes")),
+        );
+      }
+      return response({ code: "invalid_request" }, 400);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPanel({ selectedRunId: "run-1" });
+    await waitFor(() => {
+      expect(screen.getByText(/No preserved stdout for this run/)).toBeTruthy();
+    });
+    const ask = screen.getByRole("button", { name: "Ask about this run" });
+    fireEvent.click(ask);
+    await waitFor(() => expect(draftOpen()).toBe(true));
+    expect(draftExcerpts()).toEqual([stderrId]);
+    expect(draftExcerpts()).not.toContain("run-1");
+    assertReadOnly(fetchMock);
+    expect(fetchUrls(fetchMock).some((url) => url.includes("/advisor"))).toBe(false);
+  });
+
+  it("seeds both published artifacts in stream order", async () => {
+    const stdoutId = "artifact-run-1-stdout";
+    const stderrId = "artifact-run-1-stderr";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/runs?")) {
+        return response({
+          runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z")],
+          nextCursor: null,
+        });
+      }
+      if (url.endsWith("/runs/run-1/output")) {
+        return response(
+          outputWithStreams(
+            "run-1",
+            presentStream(stdoutId, "out-bytes"),
+            presentStream(stderrId, "err-bytes"),
+          ),
+        );
+      }
+      return response({ code: "invalid_request" }, 400);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPanel({ selectedRunId: "run-1" });
+    await screen.findByTestId("run-history-stdout");
+    fireEvent.click(screen.getByRole("button", { name: "Ask about this run" }));
+    await waitFor(() => expect(draftOpen()).toBe(true));
+    expect(draftExcerpts()).toEqual([stdoutId, stderrId]);
+    expect(draftExcerpts()).not.toContain("run-1");
+    assertReadOnly(fetchMock);
+  });
+
+  it("shows no advisor action when neither stream is preserved", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/runs?")) {
+        return response({
+          runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z")],
+          nextCursor: null,
+        });
+      }
+      if (url.endsWith("/runs/run-1/output")) {
+        return response(outputWithStreams("run-1", absentStream(), absentStream()));
+      }
+      return response({ code: "invalid_request" }, 400);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPanel({ selectedRunId: "run-1" });
+    await waitFor(() => {
+      expect(screen.getByText(/No preserved stdout for this run/)).toBeTruthy();
+    });
+    expect(screen.getByText(/No preserved stderr for this run/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Ask about this run" })).toBeNull();
+    expect(draftOpen()).toBe(false);
+    expect(draftExcerpts()).toEqual([]);
+    assertReadOnly(fetchMock);
+  });
+
+  it("shows no advisor action for a pending selected run", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/runs?")) {
+          return response({
+            runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", "running")],
+            nextCursor: null,
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPanel({ selectedRunId: "run-1" });
+      await advancePanelTimers(0);
+      expect(screen.getByText(/is still running/)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Ask about this run" })).toBeNull();
+      expect(draftOpen()).toBe(false);
+      expect(draftExcerpts()).toEqual([]);
+      expect(outputGetCount(fetchMock)).toBe(0);
+      assertReadOnly(fetchMock);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });
