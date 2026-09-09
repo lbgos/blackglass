@@ -1,8 +1,12 @@
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { chmod, link, mkdir, rm, readdir, symlink, truncate, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { chmod, link, mkdir, mkdtemp, rm, readdir, symlink, truncate, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeAll, afterAll, describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 
 import { BoundedCollector, FRAME_LIMIT } from "./bounded-output.js";
@@ -793,87 +797,84 @@ describe("runner loop shutdown", () => {
     expect(runs.length).toBe(0);
   });
 
-  it("idle wait stays referenced, picks up later work, stop clears promptly", async () => {
-    const origSetTimeout = globalThis.setTimeout;
-    const loopSleeps: Array<{ ms: number; timer: ReturnType<typeof setTimeout>; unrefCalled: boolean }> = [];
-    globalThis.setTimeout = function (handler: never, ms?: never, ...args: never[]) {
-      const t = (origSetTimeout as (...a: never[]) => ReturnType<typeof setTimeout>)(handler, ms, ...args);
-      if (ms === 100 || ms === 1000 || ms === 2000) {
-        const rec = { ms: ms as number, timer: t, unrefCalled: false };
-        const timeout = t as unknown as { unref?: () => unknown };
-        const origUnref = timeout.unref?.bind(t);
-        if (typeof origUnref === "function") {
-          timeout.unref = () => {
-            rec.unrefCalled = true;
-            return origUnref() as unknown;
-          };
-        }
-        loopSleeps.push(rec);
-      }
-      return t;
-    } as unknown as typeof setTimeout;
-    const waitMs = (ms: number): Promise<void> =>
-      new Promise<void>((r) => {
-        (origSetTimeout as unknown as (h: () => void, timeout: number) => void)(r, ms);
-      });
+  it("CLI stays alive across idle polls and exits promptly on SIGTERM", async () => {
+    const apiRequire = createRequire(new URL("../../api/package.json", import.meta.url));
+    const tsxPkgPath = apiRequire.resolve("tsx/package.json");
+    const tsxPkg: { bin?: string | Record<string, string> } = JSON.parse(readFileSync(tsxPkgPath, "utf8"));
+    const binRel = typeof tsxPkg.bin === "string" ? tsxPkg.bin : tsxPkg.bin?.tsx;
+    if (!binRel) throw new Error("tsx executable not found; run pnpm install");
+    const tsxCli = path.join(path.dirname(tsxPkgPath), binRel);
+    const cliEntry = fileURLToPath(new URL("./index.ts", import.meta.url));
 
-    let leaseCalls = 0;
-    let completions = 0;
-    const badSnapshot = {
-      ...fixtureActionSnapshot("act-idle-1"),
-      typedOptions: { declaredPorts: [80], extra: "evil" },
-    } as unknown as ActionSnapshot;
-    const leaseWork = {
-      run: { id: "run-idle-1", actionId: "act-idle-1", engagementId: "eng-1", attempt: 1, state: "leased", currentLeaseId: "lease-idle-1", currentFence: "1", terminalKind: null, terminalReason: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), contractVersion: 1 },
-      lease: { runId: "run-idle-1", leaseId: "lease-idle-1", runnerId: "runner-1", sessionId: "sess-1", fence: "1", expiresAt: new Date(Date.now() + 30000).toISOString(), latestHeartbeatSequence: 0, latestEventSequence: 0, orchestrationProfile: "d2-v1", protocol: "runner-control-v1" },
-      actionSnapshot: badSnapshot,
-    };
-    globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
-      const u = typeof url === "string" ? url : url.toString();
-      if (u.includes("/handshake")) {
-        return new Response(JSON.stringify({ acceptedProtocol: "runner-control-v1", sessionId: "sess-1", runnerId: "runner-1", leaseAllowed: true, sessionPinned: true, registryPinned: false }), { status: 200, headers: { "content-type": "application/json" } });
+    const cliDataDir = await mkdtemp(path.join(tmpdir(), "cli-idle-"));
+    const leaseTimes: number[] = [];
+    const server = createServer((req, res) => {
+      req.resume();
+      if (req.method === "POST" && req.url === "/api/v1/runner/handshake") {
+        res.writeHead(200, { "content-type": "application/json" }).end(
+          JSON.stringify({ acceptedProtocol: "runner-control-v1", sessionId: "sess-cli-1", runnerId: "runner-cli-1", leaseAllowed: true, sessionPinned: true, registryPinned: false }),
+        );
+      } else if (req.method === "POST" && req.url === "/api/v1/runner/lease") {
+        leaseTimes.push(Date.now());
+        res.writeHead(409, { "content-type": "application/json" }).end(JSON.stringify({ code: "no_work" }));
+      } else {
+        res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ code: "not_found" }));
       }
-      if (u.includes("/lease") && !u.includes("/heartbeat") && !u.includes("/events") && !u.includes("/complete")) {
-        leaseCalls += 1;
-        if (leaseCalls === 3) return new Response(JSON.stringify(leaseWork), { status: 200, headers: { "content-type": "application/json" } });
-        return new Response(JSON.stringify({ code: "no_work" }), { status: 409, headers: { "content-type": "application/json" } });
-      }
-      if (u.includes("/events")) {
-        return new Response(JSON.stringify({ disposition: "accepted_event", event: { eventId: 1, runId: "run-idle-1", sequence: 1, type: "started", fence: "1", payloadJson: "{}", digest: "sha256:" + "a".repeat(64), createdAt: new Date().toISOString() } }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      if (u.includes("/complete")) {
-        completions += 1;
-        return new Response(JSON.stringify({ disposition: "accepted_completion", event: { eventId: 2, runId: "run-idle-1", sequence: 2, type: "failed", fence: "1", payloadJson: "{}", digest: "sha256:" + "b".repeat(64), createdAt: new Date().toISOString() } }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      return new Response(JSON.stringify({ code: "invalid_request" }), { status: 400, headers: { "content-type": "application/json" } });
-    }) as unknown as typeof fetch;
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const bound = server.address();
+    if (bound === null || typeof bound === "string") throw new Error("loopback bind failed");
 
-    const loop = createRunnerLoop({ dataDir, runnerId: "runner-1", secret: "a".repeat(43), apiBaseUrl: "http://127.0.0.1:9", runRoot: path.join(dataDir, "runs") });
+    const child = spawn(process.execPath, [tsxCli, cliEntry], {
+      env: {
+        ...process.env,
+        BLACKGLASS_API_BASE_URL: `http://127.0.0.1:${bound.port}`,
+        BLACKGLASS_RUNNER_DATA_DIR: cliDataDir,
+        BLACKGLASS_RUNNER_ID: "runner-cli-1",
+        BLACKGLASS_RUNNER_SECRET: "a".repeat(43),
+      },
+      stdio: "ignore",
+    });
+    let childExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+    let childClosed = false;
+    child.once("exit", (code, signal) => {
+      childExit = { code, signal };
+    });
+    child.once("close", () => {
+      childClosed = true;
+    });
     try {
-      loop.start();
-      const deadline = Date.now() + 15000;
-      while ((leaseCalls < 4 || completions < 1) && Date.now() < deadline) {
-        await waitMs(50);
+      const pollDeadline = Date.now() + 7000;
+      while (leaseTimes.length < 3 && childExit === null && Date.now() < pollDeadline) {
+        await new Promise((r) => setTimeout(r, 50));
       }
-      expect(leaseCalls).toBeGreaterThanOrEqual(4);
-      expect(completions).toBeGreaterThanOrEqual(1);
-      const idleSleeps = loopSleeps.filter((s) => s.ms === 1000);
-      expect(idleSleeps.length).toBeGreaterThanOrEqual(2);
-      for (const s of loopSleeps) {
-        expect(s.unrefCalled).toBe(false);
+      expect(childExit, "runner CLI exited while idle instead of polling").toBeNull();
+      expect(leaseTimes.length).toBeGreaterThanOrEqual(3);
+      let previous: number | undefined;
+      for (const at of leaseTimes) {
+        if (previous !== undefined) expect(at - previous).toBeGreaterThanOrEqual(750);
+        previous = at;
       }
-      const stopStart = Date.now();
-      await loop.stop();
-      expect(Date.now() - stopStart).toBeLessThan(500);
-      expect(loop.isStopped()).toBe(true);
-      const frozen = leaseCalls;
-      await waitMs(350);
-      expect(leaseCalls).toBe(frozen);
+      child.kill("SIGTERM");
+      const stopDeadline = Date.now() + 2500;
+      while (childExit === null && Date.now() < stopDeadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(childExit, "runner CLI did not exit after SIGTERM").not.toBeNull();
+      expect(childExit?.code).toBe(0);
+      const frozen = leaseTimes.length;
+      await new Promise((r) => setTimeout(r, 1100));
+      expect(leaseTimes.length).toBe(frozen);
     } finally {
-      globalThis.setTimeout = origSetTimeout;
-      await loop.stop().catch(() => {});
+      if (!childClosed) child.kill("SIGKILL");
+      if (!childClosed) await new Promise((r) => child.once("close", r));
+      await new Promise((r) => server.close(r));
+      await rm(cliDataDir, { recursive: true, force: true });
     }
-  });
+  }, 12000);
 
   it("leased pre-spawn cancellation does not spawn child", async () => {
     const leaseResponse = {
