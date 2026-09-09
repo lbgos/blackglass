@@ -6,7 +6,6 @@ import {
   assertLoopbackOrigin,
   assertLoopbackTarget,
   isLoopbackHostname,
-  isResettableDataDir,
   parseDemoArgs,
   resolveDemoPlan,
 } from "./demo-config.mjs";
@@ -31,22 +30,12 @@ test("demo rejects daily-driver and duplicate ports", () => {
   );
 });
 
-test("demo rejects daily-driver storage and unsafe reset", () => {
+test("demo rejects daily-driver storage and unknown flags", () => {
   assert.throws(
     () => resolveDemoPlan({ args: parseDemoArgs(["--data-dir", "/repo/.blackglass/dev"]), repositoryRoot: ROOT }),
     /daily-driver storage/,
   );
-  assert.throws(
-    () =>
-      resolveDemoPlan({
-        args: parseDemoArgs(["--data-dir", "/tmp/other", "--reset"]),
-        repositoryRoot: ROOT,
-      }),
-    /--reset is only allowed/,
-  );
-  assert.equal(isResettableDataDir("/repo/.blackglass/demo-1", ROOT), true);
-  assert.equal(isResettableDataDir("/repo/.blackglass/dev", ROOT), false);
-  assert.equal(isResettableDataDir("/tmp/other", ROOT), false);
+  assert.throws(() => parseDemoArgs(["--reset"]), /Unknown demo argument/);
 });
 
 test("demo targets stay on the loopback fixture port", () => {

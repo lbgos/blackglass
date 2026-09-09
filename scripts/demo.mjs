@@ -1,6 +1,7 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,23 +11,22 @@ import {
   DEMO_FIXTURE_HOST,
   assertLoopbackOrigin,
   assertLoopbackTarget,
-  isResettableDataDir,
   parseDemoArgs,
   resolveDemoPlan,
 } from "./demo-config.mjs";
+import { createChildRegistry, trackExit } from "./demo-lifecycle.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_READY_TIMEOUT_MS = 30_000;
 const WEB_READY_TIMEOUT_MS = 30_000;
-const RUNNER_BUILD_TIMEOUT_MS = 120_000;
 const NMAP_TIMEOUT_MS = 180_000;
 const PROBE_TIMEOUT_MS = 90_000;
 const FFUF_TIMEOUT_MS = 150_000;
 const POLL_INTERVAL_MS = 1_000;
-const STOP_TIMEOUT_MS = 10_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 const TERMINAL_ACTION_STATES = new Set(["succeeded", "failed", "cancelled", "capability_error"]);
 const WARNING_ACTION_STATES = new Set(["paused_for_warning", "active_paused_for_warning"]);
+const FINDING_EVIDENCE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,126}$/;
 
 function fingerprint() {
   return `sha256:${createHash("sha256").update("blackglass-demo-lab-v1").digest("hex")}`;
@@ -36,47 +36,10 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function signalGroup(child, signal) {
-  if (child.pid === undefined) return;
-  try {
-    process.kill(-child.pid, signal);
-  } catch (error) {
-    if (error?.code !== "ESRCH") throw error;
-  }
-}
-
-function groupAlive(child) {
-  if (child.pid === undefined) return false;
-  try {
-    process.kill(-child.pid, 0);
-    return true;
-  } catch (error) {
-    if (error?.code === "ESRCH") return false;
-    throw error;
-  }
-}
-
-async function stopChild(child, label) {
-  if (!groupAlive(child)) {
-    await child.exited;
-    return;
-  }
-  signalGroup(child, "SIGTERM");
-  const deadline = Date.now() + STOP_TIMEOUT_MS;
-  while (groupAlive(child) && Date.now() < deadline) await delay(100);
-  if (groupAlive(child)) signalGroup(child, "SIGKILL");
-  await child.exited;
-  void label;
-}
-
-function spawnChild(argv, { cwd, env }) {
-  const [command, ...args] = argv;
+// Flat argv only: spawn(command, args) rejects nested arrays.
+function spawnChild(command, args, { cwd, env }) {
   const child = spawn(command, args, { cwd, detached: true, env, shell: false, stdio: "inherit" });
-  const exited = new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code, signal) => resolve({ code, signal }));
-  });
-  return { child, exited };
+  return { child, exited: trackExit(child) };
 }
 
 async function apiJson(base, method, urlPath, { body, idempotencyKey } = {}) {
@@ -106,7 +69,7 @@ async function apiJson(base, method, urlPath, { body, idempotencyKey } = {}) {
   return payload;
 }
 
-async function waitForWebHealth(webBase, apiExited) {
+async function waitForWebHealth(webBase, anyExit) {
   const deadline = Date.now() + WEB_READY_TIMEOUT_MS;
   let lastError;
   while (Date.now() < deadline) {
@@ -114,7 +77,7 @@ async function waitForWebHealth(webBase, apiExited) {
       fetch(`${webBase}/health`, { signal: AbortSignal.timeout(500) })
         .then(async (response) => ({ response }))
         .catch((error) => ({ error })),
-      apiExited.then((result) => ({ exited: result })),
+      anyExit.then((result) => ({ exited: result })),
     ]);
     if ("exited" in settled) throw new Error("Web/API exited before web readiness.");
     if (!("error" in settled)) {
@@ -176,6 +139,11 @@ async function engagementRevision(apiBase, engagementId) {
   return revision;
 }
 
+function sectionRows(report, name) {
+  const rows = report?.[name]?.rows;
+  return Array.isArray(rows) ? rows : [];
+}
+
 function startFixture(fixturePort) {
   const server = http.createServer((request, response) => {
     const url = new URL(request.url ?? "/", `http://${DEMO_FIXTURE_HOST}:${fixturePort}`);
@@ -208,23 +176,20 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  const children = [];
+  // Current runner source through the existing tsx toolchain (same entry
+  // style as the API dev process). No dist build, nothing stale on disk.
+  const tsxBin = path.join(repositoryRoot, "apps", "api", "node_modules", ".bin", "tsx");
+  const runnerSrc = path.join(repositoryRoot, "apps", "runner", "src", "index.ts");
+  if (!existsSync(tsxBin)) throw new Error("Existing tsx toolchain is unavailable; refusing to run a stale build.");
+  if (!existsSync(runnerSrc)) throw new Error("Runner source entry is missing.");
+
+  const registry = createChildRegistry();
   let fixture = null;
-  const track = (entry) => {
-    children.push(entry);
-    return entry;
-  };
   let shutdownStarted = false;
   async function shutdown() {
     if (shutdownStarted) return;
     shutdownStarted = true;
-    for (let index = children.length - 1; index >= 0; index -= 1) {
-      try {
-        await stopChild(children[index], "demo");
-      } catch {
-        // Shutdown is best-effort; the exit code already tells the truth.
-      }
-    }
+    await registry.shutdown();
     if (fixture !== null) {
       await new Promise((resolve) => {
         try {
@@ -242,12 +207,6 @@ async function main() {
   process.once("SIGTERM", () => void shutdown().then(() => process.exit(143)));
 
   try {
-    if (plan.reset) {
-      if (!isResettableDataDir(plan.dataDir, repositoryRoot)) {
-        throw new Error("--reset refused outside a demo-owned data directory.");
-      }
-      await rm(plan.dataDir, { force: true, recursive: true });
-    }
     await mkdir(plan.dataDir, { mode: 0o700, recursive: true });
 
     const wordlistPath = path.join(plan.dataDir, "wordlist.txt");
@@ -262,39 +221,24 @@ async function main() {
       BLACKGLASS_DATA_DIR: plan.dataDir,
       BLACKGLASS_WEB_PORT: String(plan.webPort),
     };
-    const api = track(
-      spawnChild([process.execPath, [pnpmProgram, "--filter", "@blackglass/api", "run", "dev"]], {
-        cwd: repositoryRoot,
-        env: environment,
-      }),
+    const apiSpawned = spawnChild(
+      process.execPath,
+      [pnpmProgram, "--filter", "@blackglass/api", "run", "dev"],
+      { cwd: repositoryRoot, env: environment },
     );
+    const api = registry.track(apiSpawned.child, apiSpawned.exited);
     await waitForApiReadiness({ exited: api.exited, url: `${apiBase}/health`, timeoutMs: API_READY_TIMEOUT_MS });
     console.log(`API ready at ${apiBase}.`);
 
-    const web = track(
-      spawnChild([process.execPath, [pnpmProgram, "--filter", "@blackglass/web", "run", "dev"]], {
-        cwd: repositoryRoot,
-        env: environment,
-      }),
+    const webSpawned = spawnChild(
+      process.execPath,
+      [pnpmProgram, "--filter", "@blackglass/web", "run", "dev"],
+      { cwd: repositoryRoot, env: environment },
     );
+    const web = registry.track(webSpawned.child, webSpawned.exited);
     await waitForWebHealth(webBase, Promise.race([api.exited, web.exited]));
     console.log(`Web ready at ${webBase}/.`);
 
-    const runnerDist = path.join(repositoryRoot, "apps", "runner", "dist", "index.js");
-    const { default: fsSync } = await import("node:fs");
-    if (!fsSync.existsSync(runnerDist)) {
-      console.log("Runner dist missing; building with existing toolchain.");
-      const build = spawnSync(process.execPath, [pnpmProgram, "--filter", "@blackglass/runner", "build"], {
-        cwd: repositoryRoot,
-        env: environment,
-        shell: false,
-        timeout: RUNNER_BUILD_TIMEOUT_MS,
-        encoding: "utf8",
-      });
-      if (build.status !== 0) {
-        throw new Error(`Runner build failed status ${String(build.status)}: ${(build.stderr ?? "").slice(0, 500)}`);
-      }
-    }
     const runnerName = `demo-lab-${Date.now()}`;
     const challenge = await apiJson(apiBase, "POST", "/api/v1/runners/enrollment-challenges", {
       body: { name: runnerName, installationFingerprint: fingerprint() },
@@ -313,8 +257,10 @@ async function main() {
       throw new Error("Enrollment confirm returned no runner credentials.");
     }
     console.log(`Runner enrolled as ${runnerName}.`);
-    track(
-      spawnChild([process.execPath, [runnerDist]], {
+    const runnerSpawned = spawnChild(
+      process.execPath,
+      [tsxBin, "--conditions=development", runnerSrc],
+      {
         cwd: repositoryRoot,
         env: {
           ...environment,
@@ -325,11 +271,12 @@ async function main() {
           BLACKGLASS_INSTALLATION_FINGERPRINT: fingerprint(),
           BLACKGLASS_NMAP_EXECUTABLE: "/usr/bin/nmap",
         },
-      }),
+      },
     );
+    registry.track(runnerSpawned.child, runnerSpawned.exited);
 
     const created = await apiJson(apiBase, "POST", "/api/v1/engagements", {
-      body: { name: "Demo lab", kind: "lab" },
+      body: { name: "Demo lab", kind: "lab", autoContinueWarnings: false },
       idempotencyKey: randomUUID(),
     });
     const engagementId = created?.id;
@@ -392,15 +339,15 @@ async function main() {
     console.log("ffuf discovery succeeded.");
 
     const report = await apiJson(apiBase, "GET", `/api/v1/engagements/${engagementId}/report`);
-    const services = Array.isArray(report?.services) ? report.services : [];
-    const probes = Array.isArray(report?.probes) ? report.probes : [];
-    const ffufResults = Array.isArray(report?.ffufResults) ? report.ffufResults : [];
+    const services = sectionRows(report, "services");
+    const probes = sectionRows(report, "probes");
+    const ffufResults = sectionRows(report, "ffufResults");
     if (services.length === 0) throw new Error("Report carries no Nmap services.");
     if (probes.length === 0) throw new Error("Report carries no HTTP probes.");
     if (ffufResults.length === 0) throw new Error("Report carries no ffuf results.");
-    const evidenceIds = (Array.isArray(report?.evidenceArtifacts) ? report.evidenceArtifacts : [])
+    const evidenceIds = sectionRows(report, "evidenceArtifacts")
       .map((entry) => entry?.artifactId)
-      .filter((id) => typeof id === "string")
+      .filter((id) => typeof id === "string" && FINDING_EVIDENCE_ID_PATTERN.test(id))
       .slice(0, 4);
 
     await apiJson(apiBase, "POST", `/api/v1/engagements/${engagementId}/findings`, {

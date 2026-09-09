@@ -25,7 +25,6 @@ function readPortNumber(raw, name) {
 export function parseDemoArgs(argv) {
   const args = {
     smoke: false,
-    reset: false,
     apiPort: undefined,
     webPort: undefined,
     fixturePort: undefined,
@@ -35,8 +34,6 @@ export function parseDemoArgs(argv) {
     const token = argv[index];
     if (token === "--smoke") {
       args.smoke = true;
-    } else if (token === "--reset") {
-      args.reset = true;
     } else if (token === "--api-port" || token === "--web-port" || token === "--fixture-port" || token === "--data-dir") {
       const value = argv[index + 1];
       if (value === undefined || value.startsWith("--")) {
@@ -56,17 +53,6 @@ export function parseDemoArgs(argv) {
 
 function demoRoot(repositoryRoot) {
   return path.join(repositoryRoot, ".blackglass");
-}
-
-// A resettable directory is one the demo itself created: inside the demo
-// root and carrying the demo prefix. Anything else is never deleted.
-export function isResettableDataDir(dataDir, repositoryRoot) {
-  const root = path.resolve(demoRoot(repositoryRoot));
-  const resolved = path.resolve(dataDir);
-  const relative = path.relative(root, resolved);
-  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return false;
-  const first = relative.split(path.sep)[0];
-  return first !== undefined && first.startsWith(DEMO_DATA_DIR_PREFIX);
 }
 
 export function isDailyDriverDataDir(dataDir, repositoryRoot) {
@@ -111,10 +97,7 @@ export function resolveDemoPlan({ args, repositoryRoot, now = () => Date.now() }
       throw new Error("--data-dir must never point at daily-driver storage.");
     }
   }
-  if (args.reset && !isResettableDataDir(dataDir, repositoryRoot)) {
-    throw new Error("--reset is only allowed inside a demo-owned data directory.");
-  }
-  return { apiPort, webPort, fixturePort, dataDir, fresh, smoke: args.smoke, reset: args.reset };
+  return { apiPort, webPort, fixturePort, dataDir, fresh, smoke: args.smoke };
 }
 
 // Loopback-only guard: every scan/probe target must stay on this host.
