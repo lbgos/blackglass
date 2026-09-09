@@ -2,6 +2,7 @@ import {
   EngagementIdParamsSchema,
   EngagementNotesResponseSchema,
   EngagementQueryErrorSchema,
+  UpdateEngagementNotesErrorSchema,
   UpdateEngagementNotesRequestSchema,
 } from "@blackglass/contracts";
 import type { EngagementRepository } from "@blackglass/db";
@@ -50,7 +51,21 @@ export function registerEngagementNotesRoutes(app: FastifyInstance, repository: 
     if (!result.ok) {
       if (result.error.code === "engagement_not_found") return sendError(reply, 404, result.error.code);
       if (result.error.code === "engagement_archived") {
-        return reply.code(409).type("application/json").send({ code: "engagement_archived" });
+        const conflict = UpdateEngagementNotesErrorSchema.safeParse({
+          code: "engagement_archived",
+        });
+        if (!conflict.success) return sendError(reply, 500, "invalid_persisted_data");
+        return reply.code(409).type("application/json").send(conflict.data);
+      }
+      if (result.error.code === "revision_conflict") {
+        const conflict = UpdateEngagementNotesErrorSchema.safeParse({
+          code: "revision_conflict",
+          resourceType: "engagement_notes",
+          resourceId: params.data.engagementId,
+          currentRevision: result.error.currentRevision,
+        });
+        if (!conflict.success) return sendError(reply, 500, "invalid_persisted_data");
+        return reply.code(409).type("application/json").send(conflict.data);
       }
       if (result.error.code === "storage_busy") return sendError(reply, 503, result.error.code);
       return sendError(reply, 400, "invalid_request");

@@ -1,0 +1,1 @@
+ALTER TABLE `engagement_notes` ADD `revision` integer NOT NULL DEFAULT 1 CHECK(`revision` >= 1);

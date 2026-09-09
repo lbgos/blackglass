@@ -124,6 +124,7 @@ describe("engagement findings", () => {
               engagementId: activeEngagement.id,
               markdown: "",
               updatedAt: "2026-08-12T12:00:00.000Z",
+              revision: 0,
             }),
           );
         }
@@ -176,6 +177,7 @@ describe("engagement findings", () => {
               engagementId: activeEngagement.id,
               markdown: "",
               updatedAt: "2026-08-12T12:00:00.000Z",
+              revision: 0,
             }),
           );
         }
@@ -226,6 +228,7 @@ describe("engagement findings", () => {
               engagementId: activeEngagement.id,
               markdown: "",
               updatedAt: "2026-08-12T12:00:00.000Z",
+              revision: 0,
             }),
           );
         }

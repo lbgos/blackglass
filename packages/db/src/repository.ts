@@ -378,6 +378,7 @@ function engagementNotesFromRow(row: EngagementNotesRow): RepositoryResult<Engag
     engagementId: row.engagementId,
     markdown: row.markdown,
     updatedAt: row.updatedAt,
+    revision: row.revision,
   });
   return parsed.success
     ? { ok: true, value: parsed.data }
@@ -741,6 +742,7 @@ class TransactionRepository implements EngagementWriteTransaction {
           engagementId,
           markdown: "",
           updatedAt: current.value.updatedAt,
+          revision: 0,
         },
       };
     }
@@ -758,25 +760,62 @@ class TransactionRepository implements EngagementWriteTransaction {
     if (current.value.status === "archived") {
       return failed({ code: "engagement_archived" });
     }
+    const expectedRevision = parsed.data.expectedRevision;
+    const existing = this.client
+      .select()
+      .from(engagementNotes)
+      .where(eq(engagementNotes.engagementId, engagementId))
+      .get();
+    const currentRevision = existing?.revision ?? 0;
+    if (expectedRevision !== currentRevision) {
+      return failed({
+        code: "revision_conflict",
+        currentRevision,
+      });
+    }
+    if (expectedRevision >= Number.MAX_SAFE_INTEGER) {
+      return failed({ code: "invalid_repository_input" });
+    }
+    const nextRevision = expectedRevision + 1;
     const updatedAt = this.clock().toISOString();
-    this.client
-      .insert(engagementNotes)
-      .values({
-        engagementId,
-        markdown: parsed.data.markdown,
-        updatedAt,
-      })
-      .onConflictDoUpdate({
-        target: engagementNotes.engagementId,
-        set: { markdown: parsed.data.markdown, updatedAt },
-      })
-      .run();
+    if (existing === undefined) {
+      this.client
+        .insert(engagementNotes)
+        .values({
+          engagementId,
+          markdown: parsed.data.markdown,
+          updatedAt,
+          revision: nextRevision,
+        })
+        .run();
+    } else {
+      this.client
+        .update(engagementNotes)
+        .set({
+          markdown: parsed.data.markdown,
+          updatedAt,
+          revision: nextRevision,
+        })
+        .where(
+          and(
+            eq(engagementNotes.engagementId, engagementId),
+            eq(engagementNotes.revision, expectedRevision),
+          ),
+        )
+        .run();
+    }
     const stored = this.client
       .select()
       .from(engagementNotes)
       .where(eq(engagementNotes.engagementId, engagementId))
       .get();
     if (stored === undefined) return failed({ code: "invalid_persisted_data" });
+    if (stored.revision !== nextRevision) {
+      return failed({
+        code: "revision_conflict",
+        currentRevision: stored.revision,
+      });
+    }
     return engagementNotesFromRow(stored);
   }
 
@@ -1431,6 +1470,7 @@ export class EngagementRepository {
             engagementId,
             markdown: "",
             updatedAt: engagement.updatedAt,
+            revision: 0,
           },
         };
       }
