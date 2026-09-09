@@ -42,6 +42,8 @@ export const FINDING_MUTATION_ERROR_COPY = {
   request_failed: FINDING_MUTATION_ERROR_MESSAGE,
 } as const;
 
+export type FindingMutationErrorCode = keyof typeof FINDING_MUTATION_ERROR_COPY;
+
 export const ENGAGEMENT_NOTES_MUTATION_ERROR_COPY = {
   invalid_request: "The request was not accepted. Check the fields and try again.",
   engagement_not_found: "That engagement is no longer available.",
