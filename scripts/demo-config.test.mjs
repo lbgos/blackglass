@@ -48,3 +48,22 @@ test("demo targets stay on the loopback fixture port", () => {
   assertLoopbackTarget("127.0.0.1", 43860);
   assert.throws(() => assertLoopbackTarget("192.0.2.10", 43860), /loopback/);
 });
+
+test("assertPortsFree rejects an occupied own-lab port with zero mutations", async () => {
+  const { default: net } = await import("node:net");
+  const { assertPortsFree, checkPortOpen } = await import("./demo-config.mjs");
+  const held = net.createServer((socket) => socket.destroy());
+  await new Promise((resolve, reject) => {
+    held.once("error", reject);
+    held.listen({ host: "127.0.0.1", port: 0 }, resolve);
+  });
+  const occupied = held.address().port;
+  try {
+    assert.equal(await checkPortOpen("127.0.0.1", occupied), true);
+    await assert.rejects(assertPortsFree("127.0.0.1", [occupied]), new RegExp(String(occupied)));
+  } finally {
+    await new Promise((resolve) => held.close(resolve));
+  }
+  assert.equal(await checkPortOpen("127.0.0.1", occupied), false);
+  await assertPortsFree("127.0.0.1", [occupied]);
+});

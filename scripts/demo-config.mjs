@@ -1,3 +1,4 @@
+import net from "node:net";
 import path from "node:path";
 
 export const DEMO_DEFAULT_API_PORT = 3286;
@@ -136,5 +137,35 @@ export function assertLoopbackTarget(target, fixturePort) {
   }
   if (!isLoopbackHostname(target)) {
     throw new Error(`Demo scan target must stay on loopback: ${target}.`);
+  }
+}
+
+// Pre-flight listener check on our own lab ports only. A raw TCP connect
+// sends no HTTP and therefore zero mutations; an already-listening port
+// fails fast before any child starts, so readiness can never mistake a
+// foreign listener for our own stack.
+export function checkPortOpen(host, port, { connectTimeoutMs = 500 } = {}) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let done = false;
+    const finish = (occupied) => {
+      if (done) return;
+      done = true;
+      socket.destroy();
+      resolve(occupied);
+    };
+    socket.setTimeout(connectTimeoutMs);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+    socket.connect(port, host);
+  });
+}
+
+export async function assertPortsFree(host, ports) {
+  for (const port of ports) {
+    if (await checkPortOpen(host, port)) {
+      throw new Error(`Demo port ${port} on ${host} is already occupied; refusing to start.`);
+    }
   }
 }

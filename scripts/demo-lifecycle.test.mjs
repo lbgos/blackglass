@@ -69,3 +69,38 @@ test("describeChildExit names the owning child for truthful failures", async () 
   );
   assert.match(describeChildExit({ label: "api", pid: 8, code: 1 }), /api/);
 });
+
+test("createStopState aborts promptly and guards new work", async () => {
+  const { createStopState } = await import("./demo-lifecycle.mjs");
+  const stop = createStopState();
+  assert.equal(stop.stopping, false);
+  stop.throwIfStopping("unit");
+  let stoppedName = null;
+  stop.stopped.then((name) => {
+    stoppedName = name;
+  });
+  stop.requestStop("SIGINT");
+  assert.equal(stop.stopping, true);
+  assert.equal(stop.stopSignal.aborted, true);
+  assert.throws(() => stop.throwIfStopping("unit"), /SIGINT/);
+  await stop.stopped;
+  assert.equal(stoppedName, "SIGINT");
+  stop.requestStop("SIGTERM");
+  assert.equal(stop.signalName, "SIGINT");
+});
+
+test("raceTickOrExit sleeps the full interval when idle, exits promptly", async () => {
+  const { raceTickOrExit } = await import("./demo-lifecycle.mjs");
+  let resolveExit = null;
+  const pending = new Promise((resolve) => {
+    resolveExit = resolve;
+  });
+  const started = Date.now();
+  const tick = await raceTickOrExit([pending], 120);
+  assert.equal(tick.kind, "tick");
+  assert.ok(Date.now() - started >= 100, "idle wait must not resolve immediately");
+  const record = { label: "runner", pid: 9, code: 0 };
+  const fast = await raceTickOrExit([Promise.resolve(record)], 10_000);
+  assert.deepEqual(fast, { kind: "exit", exit: record });
+  resolveExit(record);
+}, { timeout: 30_000 });

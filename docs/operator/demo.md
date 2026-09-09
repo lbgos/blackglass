@@ -9,6 +9,8 @@ pnpm demo
 pnpm demo -- --smoke
 ```
 
+Prerequisites: the README toolchain plus installed `nmap` (`/usr/bin/nmap`, used for the discovery scan) and `ffuf` (`/usr/bin/ffuf`, used for content discovery with a generated 4-entry wordlist). The demo fails fast with a truthful error when either binary is missing.
+
 Open the printed UI URL. Keep the app alive until Ctrl+C; only processes started by the demo are cleaned up.
 
 Defaults: API `127.0.0.1:3286`, web `127.0.0.1:5286`, fixture `127.0.0.1:43860`, fresh data dir under `.stonehush/demo-<timestamp>`. Daily-driver ports `3001`/`5173` and storage `.stonehush/dev` are refused. Flags pass after `--`: `--smoke` proves the pipeline then stops with a truthful exit code, `--api-port`, `--web-port`, `--fixture-port`, `--data-dir` (absolute path). Reruns keep prior data; every default run starts fresh and nothing is ever deleted.

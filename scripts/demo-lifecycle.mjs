@@ -90,3 +90,45 @@ export function createChildRegistry() {
 export function describeChildExit(exit) {
   return `demo child ${exit.label ?? "unknown"} pid ${String(exit.pid)} exited code ${String(exit.code)}`;
 }
+
+// One wait primitive for polling loops. Races a single delay against live
+// exit promises that stay genuinely pending: no immediate-null branch, so
+// an idle stack waits the full interval instead of busy-polling, and no
+// extra timers accumulate per iteration.
+export function raceTickOrExit(exitPromises, intervalMs) {
+  return Promise.race([
+    delay(intervalMs).then(() => ({ kind: "tick" })),
+    ...exitPromises.map((pending) => pending.then((exit) => ({ kind: "exit", exit }))),
+  ]);
+}
+
+// Stop state for bounded cancellation. Signal handlers call requestStop;
+// stages call throwIfStopping before spawning children or sending requests,
+// and in-flight fetches observe stopSignal. Shutdown itself stays separate
+// and idempotent, touching only tracked children.
+export function createStopState() {
+  const controller = new AbortController();
+  let resolveStopped = null;
+  const stopped = new Promise((resolve) => {
+    resolveStopped = resolve;
+  });
+  const state = {
+    stopping: false,
+    signalName: null,
+    stopSignal: controller.signal,
+    stopped,
+    requestStop(name) {
+      if (state.stopping) return;
+      state.stopping = true;
+      state.signalName = name;
+      resolveStopped(name);
+      controller.abort();
+    },
+    throwIfStopping(label) {
+      if (state.stopping) {
+        throw new Error(`Demo stopping on ${state.signalName}; refusing to start ${label}.`);
+      }
+    },
+  };
+  return state;
+}
