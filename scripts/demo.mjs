@@ -13,7 +13,7 @@ import {
   parseDemoArgs,
   resolveDemoPlan,
 } from "./demo-config.mjs";
-import { createChildRegistry, classifyChildExit, trackExit } from "./demo-lifecycle.mjs";
+import { createChildRegistry, describeChildExit, trackExit } from "./demo-lifecycle.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_READY_TIMEOUT_MS = 30_000;
@@ -23,7 +23,6 @@ const PROBE_TIMEOUT_MS = 90_000;
 const FFUF_TIMEOUT_MS = 150_000;
 const POLL_INTERVAL_MS = 1_000;
 const REQUEST_TIMEOUT_MS = 10_000;
-const MAX_RUNNER_RESTARTS = 5;
 const TERMINAL_ACTION_STATES = new Set(["succeeded", "failed", "cancelled", "capability_error"]);
 const WARNING_ACTION_STATES = new Set(["paused_for_warning", "active_paused_for_warning"]);
 const FINDING_EVIDENCE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,126}$/;
@@ -103,7 +102,7 @@ function latestSnapshot(action) {
   return snapshots[snapshots.length - 1];
 }
 
-async function driveActionToTerminal(apiBase, engagementId, actionId, { timeoutMs, label, checkExit, onChildExit }) {
+async function driveActionToTerminal(apiBase, engagementId, actionId, { timeoutMs, label, checkExit, onUnexpectedExit }) {
   const deadline = Date.now() + timeoutMs;
   let continueAttempts = 0;
   for (;;) {
@@ -118,7 +117,7 @@ async function driveActionToTerminal(apiBase, engagementId, actionId, { timeoutM
     // reported as a stall just because an idle child reaped first.
     const exited = await checkExit();
     if (exited !== null) {
-      await onChildExit(exited);
+      await onUnexpectedExit(exited);
       continue;
     }
     if (WARNING_ACTION_STATES.has(state)) {
@@ -139,7 +138,7 @@ async function driveActionToTerminal(apiBase, engagementId, actionId, { timeoutM
     // iteration leaks an unhandled rejection when a child dies.
     const stalled = await Promise.race([delay(POLL_INTERVAL_MS).then(() => null), checkExit()]);
     if (stalled !== null) {
-      await onChildExit(stalled);
+      await onUnexpectedExit(stalled);
     }
   }
 }
@@ -193,24 +192,24 @@ async function main() {
   // resolution), never as a script argument to node. No dist, no compile.
   const runnerSrc = path.join(repositoryRoot, "apps", "runner", "src", "index.ts");
 
-    const registry = createChildRegistry();
-    // Live exit watchers, keyed by child label. Respawn replaces the
-    // runner entry so later checks never see a stale exit record.
-    const liveExits = new Map();
-    function watch(label, child, exited) {
-      const entry = registry.track(child, exited);
-      liveExits.set(
-        label,
-        exited.then(
-          (result) => ({ label, ...result }),
-          () => ({ label, code: 1, signal: null }),
-        ),
-      );
-      return entry;
-    }
-    function checkExit() {
-      return Promise.race([...liveExits.values(), Promise.resolve(null)]);
-    }
+  const registry = createChildRegistry();
+  // Live exit watchers, keyed by child label. Every pipeline stage throws
+  // on any exit, so reaching keep-alive means no exit has happened yet.
+  const liveExits = new Map();
+  function watch(label, child, exited) {
+    const entry = registry.track(child, exited, label);
+    liveExits.set(
+      label,
+      exited.then(
+        (result) => ({ label, ...result }),
+        () => ({ label, code: 1, signal: null }),
+      ),
+    );
+    return entry;
+  }
+  function checkExit() {
+    return Promise.race([...liveExits.values(), Promise.resolve(null)]);
+  }
   let fixture = null;
   let shutdownStarted = false;
   async function shutdown() {
@@ -230,8 +229,15 @@ async function main() {
       fixture = null;
     }
   }
-  process.once("SIGINT", () => void shutdown().then(() => process.exit(130)));
-  process.once("SIGTERM", () => void shutdown().then(() => process.exit(143)));
+  // Single signal path with explicit exit codes. Interactive keep-alive
+  // below also watches child health: a dead stack surfaces instead of
+  // awaiting forever.
+  let signalResolve = null;
+  const gotSignal = new Promise((resolve) => {
+    signalResolve = resolve;
+  });
+  process.once("SIGINT", () => signalResolve?.("SIGINT"));
+  process.once("SIGTERM", () => signalResolve?.("SIGTERM"));
 
   try {
     await mkdir(plan.dataDir, { mode: 0o700, recursive: true });
@@ -287,45 +293,35 @@ async function main() {
       throw new Error("Enrollment confirm returned no runner credentials.");
     }
     console.log(`Runner enrolled as ${runnerName}.`);
-    const runnerBaseEnv = {
-      ...environment,
-      BLACKGLASS_API_BASE_URL: apiBase,
-      BLACKGLASS_RUNNER_ID: runnerId,
-      BLACKGLASS_RUNNER_SECRET: runnerSecret,
-      BLACKGLASS_RUNNER_DATA_DIR: path.join(plan.dataDir, "runner"),
-      BLACKGLASS_INSTALLATION_FINGERPRINT: fingerprint(),
-      BLACKGLASS_NMAP_EXECUTABLE: "/usr/bin/nmap",
-    };
-    function spawnRunner() {
-      const spawned = spawnChild(
-        process.execPath,
-        [
-          pnpmProgram,
-          "--filter",
-          "@blackglass/api",
-          "exec",
-          "tsx",
-          "--conditions=development",
-          runnerSrc,
-        ],
-        { cwd: repositoryRoot, env: { ...runnerBaseEnv } },
-      );
-      return watch("runner", spawned.child, spawned.exited);
-    }
-    spawnRunner();
-    let runnerRestarts = 0;
-    async function handleChildExit(stage, exit) {
-      const decision = classifyChildExit(exit, {
-        restartsUsed: runnerRestarts,
-        maxRestarts: MAX_RUNNER_RESTARTS,
-      });
-      if (decision.action === "restart-runner") {
-        runnerRestarts += 1;
-        console.log(`Runner exited idle during ${stage}; restarting (${runnerRestarts}/${MAX_RUNNER_RESTARTS}).`);
-        spawnRunner();
-        return;
-      }
-      throw new Error(`${stage} stalled: ${decision.reason}.`);
+    const runnerSpawned = spawnChild(
+      process.execPath,
+      [
+        pnpmProgram,
+        "--filter",
+        "@blackglass/api",
+        "exec",
+        "tsx",
+        "--conditions=development",
+        runnerSrc,
+      ],
+      {
+        cwd: repositoryRoot,
+        env: {
+          ...environment,
+          BLACKGLASS_API_BASE_URL: apiBase,
+          BLACKGLASS_RUNNER_ID: runnerId,
+          BLACKGLASS_RUNNER_SECRET: runnerSecret,
+          BLACKGLASS_RUNNER_DATA_DIR: path.join(plan.dataDir, "runner"),
+          BLACKGLASS_INSTALLATION_FINGERPRINT: fingerprint(),
+          BLACKGLASS_NMAP_EXECUTABLE: "/usr/bin/nmap",
+        },
+      },
+    );
+    watch("runner", runnerSpawned.child, runnerSpawned.exited);
+    // Any unexpected child exit fails the stage truthfully. No respawn
+    // path: idle-loop supervision is the runner's own fix (PR130).
+    function onUnexpectedExit(stage, exit) {
+      throw new Error(`${stage} stalled: ${describeChildExit(exit)}.`);
     }
 
     const created = await apiJson(apiBase, "POST", "/api/v1/engagements", {
@@ -351,7 +347,7 @@ async function main() {
       timeoutMs: NMAP_TIMEOUT_MS,
       label: "Nmap discovery",
       checkExit,
-      onChildExit: (exit) => handleChildExit("Nmap discovery", exit),
+      onUnexpectedExit: (exit) => onUnexpectedExit("Nmap discovery", exit),
     });
     console.log("Nmap discovery succeeded.");
 
@@ -369,7 +365,7 @@ async function main() {
       timeoutMs: PROBE_TIMEOUT_MS,
       label: "HTTP probe",
       checkExit,
-      onChildExit: (exit) => handleChildExit("HTTP probe", exit),
+      onUnexpectedExit: (exit) => onUnexpectedExit("HTTP probe", exit),
     });
     console.log("HTTP probe succeeded.");
 
@@ -393,7 +389,7 @@ async function main() {
       timeoutMs: FFUF_TIMEOUT_MS,
       label: "ffuf discovery",
       checkExit,
-      onChildExit: (exit) => handleChildExit("ffuf discovery", exit),
+      onUnexpectedExit: (exit) => onUnexpectedExit("ffuf discovery", exit),
     });
     console.log("ffuf discovery succeeded.");
 
@@ -421,13 +417,13 @@ async function main() {
     console.log("Finding recorded.");
 
     const notes = await apiJson(apiBase, "GET", `/api/v1/engagements/${engagementId}/notes`);
-    const notesBody = { markdown: `# Demo lab\n\n- Fixture: http://${DEMO_FIXTURE_HOST}:${plan.fixturePort}/\n- Services: ${services.length}, probes: ${probes.length}, ffuf paths: ${ffufResults.length}\n` };
+    if (notes === null || typeof notes !== "object" || !Number.isInteger(notes.revision)) {
+      throw new Error("Notes read carries no revision; refusing revision-less write.");
+    }
+    const notesMarkdown = `# Demo lab\n\n- Fixture: http://${DEMO_FIXTURE_HOST}:${plan.fixturePort}/\n- Services: ${services.length}, probes: ${probes.length}, ffuf paths: ${ffufResults.length}\n`;
     try {
       await apiJson(apiBase, "PUT", `/api/v1/engagements/${engagementId}/notes`, {
-        body:
-          notes !== null && typeof notes === "object" && Number.isInteger(notes.revision)
-            ? { ...notesBody, expectedRevision: notes.revision }
-            : notesBody,
+        body: { markdown: notesMarkdown, expectedRevision: notes.revision },
         idempotencyKey: randomUUID(),
       });
     } catch (error) {
@@ -450,8 +446,8 @@ async function main() {
     if (finalProbes.length === 0) throw new Error("Final report carries no HTTP probes.");
     if (finalFfuf.length === 0) throw new Error("Final report carries no ffuf results.");
     if (finalFindings.length === 0) throw new Error("Final report carries no findings.");
-    if (typeof report?.notesMarkdown !== "string" || !report.notesMarkdown.includes("Demo lab")) {
-      throw new Error("Final report carries no demo notes.");
+    if (typeof report?.notesMarkdown !== "string" || !report.notesMarkdown.includes(notesMarkdown)) {
+      throw new Error("Final report JSON misses the demo notes.");
     }
     if (finalArtifacts.length === 0) throw new Error("Final report carries no evidence artifacts.");
     const proofArtifact = finalArtifacts[0]?.artifactId;
@@ -471,7 +467,9 @@ async function main() {
     });
     if (markdownResponse.status !== 200) throw new Error("Report markdown export failed.");
     const markdown = await markdownResponse.text();
-    if (!markdown.includes("Demo lab")) throw new Error("Report markdown export misses demo content.");
+    if (!markdown.includes("## Notes") || !markdown.includes(notesMarkdown)) {
+      throw new Error("Report markdown export misses the demo notes.");
+    }
     await writeFile(path.join(plan.dataDir, "report.md"), markdown, { mode: 0o600 });
 
     console.log(`UI: ${webBase}/engagements/${engagementId}`);
@@ -484,7 +482,14 @@ async function main() {
       return;
     }
     console.log("Demo running. Press Ctrl+C to stop; only demo-owned processes are cleaned up.");
-    await new Promise(() => undefined);
+    const settled = await Promise.race([gotSignal, registry.anyExit()]);
+    await shutdown();
+    if (settled === "SIGINT" || settled === "SIGTERM") {
+      process.exitCode = settled === "SIGINT" ? 130 : 143;
+      return;
+    }
+    console.error(`Demo stack unhealthy while running: ${describeChildExit(settled)}.`);
+    process.exitCode = 1;
   } catch (error) {
     console.error(`Demo failed: ${error instanceof Error ? error.message : String(error)}`);
     await shutdown();

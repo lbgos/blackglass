@@ -57,12 +57,12 @@ export function createChildRegistry() {
     notifyFirstExit = resolve;
   });
   return {
-    track(child, exited) {
+    track(child, exited, label = null) {
       const entry = { child, exited };
       entries.push(entry);
       exited.then(
-        (result) => notifyFirstExit({ pid: child.pid ?? null, ...result }),
-        () => notifyFirstExit({ pid: child.pid ?? null, code: 1, signal: null }),
+        (result) => notifyFirstExit({ label, pid: child.pid ?? null, ...result }),
+        () => notifyFirstExit({ label, pid: child.pid ?? null, code: 1, signal: null }),
       );
       return entry;
     },
@@ -84,18 +84,9 @@ export function createChildRegistry() {
   };
 }
 
-// Pure exit policy for a stalled pipeline stage. A clean (code 0) runner
-// exit while work is still pending is the runner's idle drain, so a bounded
-// respawn is safe. Anything else fails truthfully with the owning child.
-export function classifyChildExit(exit, { restartsUsed, maxRestarts }) {
-  if (exit.label !== "runner" || exit.code !== 0) {
-    return {
-      action: "fail",
-      reason: `demo child ${exit.label} pid ${String(exit.pid)} exited code ${String(exit.code)}`,
-    };
-  }
-  if (restartsUsed >= maxRestarts) {
-    return { action: "fail", reason: "runner restart budget exhausted" };
-  }
-  return { action: "restart-runner" };
+// Exit record for a stalled stage. Any unexpected child exit fails the
+// stage truthfully with the owning child named. There is deliberately no
+// restart path: child supervision lives in the runner itself.
+export function describeChildExit(exit) {
+  return `demo child ${exit.label ?? "unknown"} pid ${String(exit.pid)} exited code ${String(exit.code)}`;
 }

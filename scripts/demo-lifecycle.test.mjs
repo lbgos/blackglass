@@ -61,21 +61,11 @@ test("anyExit resolves with the first exit record while others keep running", as
   assert.equal(groupAlive(sleeper), false);
 }, { timeout: 30_000 });
 
-test("classifyChildExit restarts only clean runner exits within budget", async () => {
-  const { classifyChildExit } = await import("./demo-lifecycle.mjs");
-  assert.deepEqual(classifyChildExit({ label: "runner", pid: 1, code: 0 }, { restartsUsed: 0, maxRestarts: 5 }), {
-    action: "restart-runner",
-  });
+test("describeChildExit names the owning child for truthful failures", async () => {
+  const { describeChildExit } = await import("./demo-lifecycle.mjs");
   assert.equal(
-    classifyChildExit({ label: "runner", pid: 1, code: 0 }, { restartsUsed: 5, maxRestarts: 5 }).action,
-    "fail",
+    describeChildExit({ label: "runner", pid: 7, code: 0 }),
+    "demo child runner pid 7 exited code 0",
   );
-  assert.equal(
-    classifyChildExit({ label: "runner", pid: 1, code: 1 }, { restartsUsed: 0, maxRestarts: 5 }).action,
-    "fail",
-  );
-  assert.match(
-    classifyChildExit({ label: "api", pid: 2, code: 0 }, { restartsUsed: 0, maxRestarts: 5 }).reason,
-    /api/,
-  );
+  assert.match(describeChildExit({ label: "api", pid: 8, code: 1 }), /api/);
 });
