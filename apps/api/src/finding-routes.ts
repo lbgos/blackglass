@@ -6,8 +6,8 @@ import {
   FindingMutationErrorSchema,
   FindingQueryErrorSchema,
   FindingResponseSchema,
-} from "@blackglass/contracts";
-import type { EngagementRepository } from "@blackglass/db";
+} from "@stonehush/contracts";
+import type { EngagementRepository } from "@stonehush/db";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 type FindingsRepository = Pick<

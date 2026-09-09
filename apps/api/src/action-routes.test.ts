@@ -7,7 +7,7 @@ import {
   EngagementRepository,
   OperatorCommandRepository,
   openEngagementDatabase,
-} from "@blackglass/db";
+} from "@stonehush/db";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildApp } from "./app.js";
@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 async function fixture() {
-  const directory = await mkdtemp(path.join(tmpdir(), "blackglass-action-api-"));
+  const directory = await mkdtemp(path.join(tmpdir(), "stonehush-action-api-"));
   directories.push(directory);
   await chmod(directory, 0o700);
   const database = openEngagementDatabase({ dataDirectory: directory });

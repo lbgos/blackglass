@@ -3,7 +3,7 @@ import {
   FindingListResponseSchema,
   FindingResponseSchema,
   type Finding,
-} from "@blackglass/contracts";
+} from "@stonehush/contracts";
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {

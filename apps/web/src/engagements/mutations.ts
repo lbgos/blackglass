@@ -11,7 +11,7 @@ import {
   type PersistedAction,
   type SavedScopeRule,
   type ScopeRevision,
-} from "@blackglass/contracts";
+} from "@stonehush/contracts";
 import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 

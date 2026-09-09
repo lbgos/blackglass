@@ -1,4 +1,4 @@
-import { ApplicationShell, Button, Status, type ConsolePanel } from "@blackglass/ui";
+import { ApplicationShell, Button, Status, type ConsolePanel } from "@stonehush/ui";
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
@@ -70,12 +70,12 @@ function SidebarHeader() {
     <div className="flex h-12 items-center gap-2 px-3 pt-[env(safe-area-inset-top)]">
       <Link
         to="/"
-        aria-label="Blackglass home"
+        aria-label="Stonehush home"
         className="flex min-w-0 flex-1 items-center gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span className="size-3.5 shrink-0 rounded-[4px] bg-primary" aria-hidden="true" />
         <span className="m-0 min-w-0 flex-1 truncate text-[13px] font-semibold tracking-[-0.03em] text-sidebar-foreground">
-          BLACKGLASS
+          STONEHUSH
         </span>
       </Link>
     </div>
@@ -230,7 +230,7 @@ export function ApplicationLayout() {
               to="/"
               className="block truncate rounded outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             >
-              Blackglass
+              Stonehush
             </Link>
           }
           showConsole={showConsole}

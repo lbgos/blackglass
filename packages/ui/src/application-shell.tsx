@@ -39,7 +39,7 @@ export interface ApplicationShellProps {
   consolePanels: readonly ConsolePanel[];
   consoleStatus?: ReactNode;
   mobileTitle?: string;
-  /** Brand element in the mobile top bar. Defaults to plain "Blackglass" text. */
+  /** Brand element in the mobile top bar. Defaults to plain "Stonehush" text. */
   mobileBrand?: ReactNode;
   /** Renders the bottom console and its mobile trigger. Defaults to true. */
   showConsole?: boolean;
@@ -96,7 +96,7 @@ export function ApplicationShell({
   consolePanels,
   consoleStatus = "Console ready",
   mobileBrand,
-  mobileTitle = "Blackglass navigation",
+  mobileTitle = "Stonehush navigation",
   showConsole = true,
   showDesktopStageHeader = true,
   sidebarActions,
@@ -305,7 +305,7 @@ export function ApplicationShell({
       <div className="shell-workspace flex h-dvh min-w-0 flex-col">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-background px-2 pt-[env(safe-area-inset-top)] md:hidden">
           <FullScreenSheet
-            description="Global navigation and Blackglass settings."
+            description="Global navigation and Stonehush settings."
             onOpenChange={setMobileNavOpen}
             onOpenChangeComplete={(open) => {
               if (!open && window.innerWidth >= DESKTOP_BREAKPOINT) {
@@ -325,7 +325,7 @@ export function ApplicationShell({
             />
           </FullScreenSheet>
           <span className="min-w-0 flex-1 truncate text-[13px] font-semibold tracking-[-0.03em]">
-            {mobileBrand ?? "Blackglass"}
+            {mobileBrand ?? "Stonehush"}
           </span>
           {showConsole && (
             <FullScreenSheet

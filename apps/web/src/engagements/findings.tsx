@@ -1,13 +1,13 @@
 import { useState } from "react";
 
-import type { Finding } from "@blackglass/contracts";
+import type { Finding } from "@stonehush/contracts";
 import {
   Button,
   LoadingRegion,
   RecoverableError,
   Skeleton,
   StaleDataState,
-} from "@blackglass/ui";
+} from "@stonehush/ui";
 
 import { findingMutationMessage } from "./errors.js";
 import {

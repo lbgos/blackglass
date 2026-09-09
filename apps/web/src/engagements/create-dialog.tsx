@@ -4,8 +4,8 @@ import {
   type CreateEngagementInput,
   type Engagement,
   type EngagementKind,
-} from "@blackglass/contracts";
-import { Button, cn } from "@blackglass/ui";
+} from "@stonehush/contracts";
+import { Button, cn } from "@stonehush/ui";
 import { useNavigate } from "@tanstack/react-router";
 import {
   useEffect,

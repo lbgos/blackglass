@@ -11,13 +11,13 @@ import {
   useTheme,
   type ResolvedTheme,
   type ThemeFamily,
-} from "@blackglass/ui";
+} from "@stonehush/ui";
 import {
   ADVISOR_SETTINGS_DEFAULTS,
   FFUF_BINARY_PATH_DEFAULT,
   UpdateAdvisorSettingsRequestSchema,
   type AdvisorStatus,
-} from "@blackglass/contracts";
+} from "@stonehush/contracts";
 import { useEffect, useState, type ReactNode } from "react";
 
 import {
@@ -223,7 +223,7 @@ function GeneralSection() {
         <span className="text-[13px] text-muted-foreground">Not available in this version</span>
       </SetRow>
       <SetRow
-        description="Where Blackglass opens after launch. Dashboard stays the operational default."
+        description="Where Stonehush opens after launch. Dashboard stays the operational default."
         settingId="landing-view"
         title="Default landing view"
       >
@@ -951,7 +951,7 @@ function AdvisorSection() {
               value={keyVar}
               autoComplete="off"
               spellCheck={false}
-              placeholder="BLACKGLASS_ADVISOR_API_KEY"
+              placeholder="STONEHUSH_ADVISOR_API_KEY"
               type="text"
               disabled={!editable}
               onChange={(event) => {
@@ -1179,7 +1179,7 @@ export function SettingsPage() {
         </h1>
         {section === "appearance" ? (
           <p className="mt-0 mb-5.5 text-[13px] text-muted-foreground">
-            Choose how Blackglass looks. Use a built-in theme or make your own.
+            Choose how Stonehush looks. Use a built-in theme or make your own.
           </p>
         ) : STORED_SECTION_NOTES[section] ? (
           <p className="mt-0 mb-5.5 text-[13px] text-muted-foreground">

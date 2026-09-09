@@ -196,7 +196,7 @@ export class FatalErrorBoundary extends Component<
         onReload={this.reload}
         onRetry={this.retry}
         technicalDetails={error.stack ?? error.message}
-        title={this.props.title ?? "Blackglass hit a fatal error"}
+        title={this.props.title ?? "Stonehush hit a fatal error"}
       />
     );
   }

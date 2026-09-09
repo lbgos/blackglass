@@ -3,8 +3,8 @@ import {
   ADVISOR_FINDING_IDS_MAX,
   ADVISOR_QUESTION_MAX_BYTES,
   type AdvisorTurn,
-} from "@blackglass/contracts";
-import { Button } from "@blackglass/ui";
+} from "@stonehush/contracts";
+import { Button } from "@stonehush/ui";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 

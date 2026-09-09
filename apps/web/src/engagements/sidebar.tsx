@@ -6,7 +6,7 @@ import {
   SidebarRowAction,
   SidebarShelf,
   Skeleton,
-} from "@blackglass/ui";
+} from "@stonehush/ui";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import type { MouseEvent } from "react";
 

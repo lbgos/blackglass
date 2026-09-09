@@ -1,4 +1,4 @@
-import { cn } from "@blackglass/ui";
+import { cn } from "@stonehush/ui";
 import { useEffect, useRef, type ReactNode } from "react";
 
 import { SETTINGS_SECTIONS, searchSettings, type SettingsSectionId } from "./model.js";
