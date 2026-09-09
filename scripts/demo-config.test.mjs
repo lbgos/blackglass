@@ -70,7 +70,7 @@ test("assertPortsFree rejects an occupied own-lab port with zero mutations", asy
 
 test("tool preflight passes present binaries and names missing ones", async () => {
   const { assertExecutablePresent } = await import("./demo-config.mjs");
-  await assertExecutablePresent("/usr/bin/nmap", "nmap");
+  await assertExecutablePresent(process.execPath, "node");
   await assert.rejects(
     assertExecutablePresent("/nonexistent-demo-tool-xyz", "demo-tool"),
     /Demo needs demo-tool at \/nonexistent-demo-tool-xyz/,
