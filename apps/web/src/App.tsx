@@ -73,7 +73,14 @@ function SidebarHeader() {
         aria-label="Stonehush home"
         className="flex min-w-0 flex-1 items-center gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <span className="size-3.5 shrink-0 rounded-[4px] bg-primary" aria-hidden="true" />
+        <img
+          src="/brand/stonehush-icon.svg"
+          alt=""
+          aria-hidden="true"
+          width="20"
+          height="20"
+          className="size-5 shrink-0 rounded-[4px]"
+        />
         <span className="m-0 min-w-0 flex-1 truncate text-[13px] font-semibold tracking-[-0.03em] text-sidebar-foreground">
           STONEHUSH
         </span>

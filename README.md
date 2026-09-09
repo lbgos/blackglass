@@ -1,4 +1,4 @@
-# Stonehush
+<img src="apps/web/public/brand/stonehush-wordmark.svg" width="280" alt="stonehush">
 
 A local-first workspace for security assessments, CTFs, and labs.
 
