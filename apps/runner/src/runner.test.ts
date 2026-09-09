@@ -1,8 +1,12 @@
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { chmod, link, mkdir, rm, readdir, symlink, truncate, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { chmod, link, mkdir, mkdtemp, rm, readdir, symlink, truncate, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeAll, afterAll, describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 
 import { BoundedCollector, FRAME_LIMIT } from "./bounded-output.js";
@@ -792,6 +796,105 @@ describe("runner loop shutdown", () => {
     const runs = await readdir(path.join(dataDir, "runs")).catch(() => []);
     expect(runs.length).toBe(0);
   });
+
+  it("CLI stays alive across idle polls and exits promptly on SIGTERM", async () => {
+    const apiRequire = createRequire(new URL("../../api/package.json", import.meta.url));
+    const tsxPkgPath = apiRequire.resolve("tsx/package.json");
+    const tsxPkg: { bin?: string | Record<string, string> } = JSON.parse(readFileSync(tsxPkgPath, "utf8"));
+    const binRel = typeof tsxPkg.bin === "string" ? tsxPkg.bin : tsxPkg.bin?.tsx;
+    if (!binRel) throw new Error("tsx executable not found; run pnpm install");
+    const tsxCli = path.join(path.dirname(tsxPkgPath), binRel);
+    const cliEntry = fileURLToPath(new URL("./index.ts", import.meta.url));
+
+    const cliDataDir = await mkdtemp(path.join(tmpdir(), "cli-idle-"));
+    const leaseTimes: number[] = [];
+    const server = createServer((req, res) => {
+      req.resume();
+      if (req.method === "POST" && req.url === "/api/v1/runner/handshake") {
+        res.writeHead(200, { "content-type": "application/json" }).end(
+          JSON.stringify({ acceptedProtocol: "runner-control-v1", sessionId: "sess-cli-1", runnerId: "runner-cli-1", leaseAllowed: true, sessionPinned: true, registryPinned: false }),
+        );
+      } else if (req.method === "POST" && req.url === "/api/v1/runner/lease") {
+        leaseTimes.push(Date.now());
+        res.writeHead(409, { "content-type": "application/json" }).end(JSON.stringify({ code: "no_work" }));
+      } else {
+        res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ code: "not_found" }));
+      }
+    });
+    let child: ReturnType<typeof spawn> | undefined;
+    let closed = false;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+      const bound = server.address();
+      if (bound === null || typeof bound === "string") throw new Error("loopback bind failed");
+
+      child = spawn(process.execPath, [tsxCli, "--conditions=development", cliEntry], {
+        env: {
+          ...process.env,
+          BLACKGLASS_API_BASE_URL: `http://127.0.0.1:${bound.port}`,
+          BLACKGLASS_RUNNER_DATA_DIR: cliDataDir,
+          BLACKGLASS_RUNNER_ID: "runner-cli-1",
+          BLACKGLASS_RUNNER_SECRET: "a".repeat(43),
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      let stderrTail = "";
+      const stderr = child.stderr;
+      if (stderr) {
+        stderr.setEncoding("utf8");
+        stderr.on("data", (chunk: string) => {
+          stderrTail = (stderrTail + chunk).slice(-4000);
+        });
+      }
+      let spawnError: Error | null = null;
+      child.once("error", (err) => {
+        spawnError = err;
+      });
+      child.once("close", () => {
+        closed = true;
+      });
+      const describeChild = () =>
+        `exitCode=${String(child?.exitCode)} signalCode=${String(child?.signalCode)} spawnError=${spawnError?.message ?? "none"} stderr=${stderrTail}`;
+
+      const pollDeadline = Date.now() + 7000;
+      while (leaseTimes.length < 3 && child.exitCode === null && child.signalCode === null && Date.now() < pollDeadline) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(child.exitCode, `runner CLI exited while idle instead of polling (${describeChild()})`).toBeNull();
+      expect(child.signalCode, `runner CLI killed while idle instead of polling (${describeChild()})`).toBeNull();
+      expect(leaseTimes.length).toBeGreaterThanOrEqual(3);
+      let previous: number | undefined;
+      for (const at of leaseTimes) {
+        if (previous !== undefined) expect(at - previous).toBeGreaterThanOrEqual(750);
+        previous = at;
+      }
+      child.kill("SIGTERM");
+      const stopDeadline = Date.now() + 2500;
+      while (child.exitCode === null && child.signalCode === null && Date.now() < stopDeadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(child.signalCode, `runner CLI did not exit cleanly after SIGTERM (${describeChild()})`).toBeNull();
+      expect(child.exitCode, `runner CLI did not exit after SIGTERM (${describeChild()})`).toBe(0);
+      const frozen = leaseTimes.length;
+      await new Promise((r) => setTimeout(r, 1100));
+      expect(leaseTimes.length).toBe(frozen);
+    } finally {
+      if (child && child.exitCode === null && child.signalCode === null) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+      const runningChild = child;
+      if (runningChild && !closed) await new Promise((r) => runningChild.once("close", r));
+      await new Promise((r) => server.close(r));
+      await rm(cliDataDir, { recursive: true, force: true });
+    }
+  }, 12000);
 
   it("leased pre-spawn cancellation does not spawn child", async () => {
     const leaseResponse = {

@@ -847,6 +847,9 @@ export function createRunnerLoop(configOverrides: Partial<RunnerConfig> = {}): {
   let inFlight: Promise<boolean> | null = null;
   let loopPromise: Promise<void> | null = null;
 
+  // Loop idle wait stays referenced so a standalone CLI with no other
+  // handles keeps polling instead of exiting. stop() clears/resolves it
+  // for prompt exit. Per-run heartbeat/fence timers remain unref'd.
   const sleep = (ms: number): Promise<void> =>
     new Promise<void>((res) => {
       timerResolve = res;
@@ -855,7 +858,6 @@ export function createRunnerLoop(configOverrides: Partial<RunnerConfig> = {}): {
         timerResolve = null;
         res();
       }, ms);
-      timer.unref?.();
     });
 
   const loop = async (): Promise<void> => {
