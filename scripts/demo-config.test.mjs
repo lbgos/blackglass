@@ -17,7 +17,7 @@ test("demo defaults avoid daily-driver ports and use a fresh directory", () => {
   assert.equal(plan.apiPort, 3286);
   assert.equal(plan.webPort, 5286);
   assert.equal(plan.fixturePort, 43860);
-  assert.equal(plan.dataDir, path.join(ROOT, ".blackglass", "demo-123"));
+  assert.equal(plan.dataDir, path.join(ROOT, ".stonehush", "demo-123"));
   assert.equal(plan.fresh, true);
 });
 
@@ -32,7 +32,7 @@ test("demo rejects daily-driver and duplicate ports", () => {
 
 test("demo rejects daily-driver storage and unknown flags", () => {
   assert.throws(
-    () => resolveDemoPlan({ args: parseDemoArgs(["--data-dir", "/repo/.blackglass/dev"]), repositoryRoot: ROOT }),
+    () => resolveDemoPlan({ args: parseDemoArgs(["--data-dir", "/repo/.stonehush/dev"]), repositoryRoot: ROOT }),
     /daily-driver storage/,
   );
   assert.throws(() => parseDemoArgs(["--reset"]), /Unknown demo argument/);

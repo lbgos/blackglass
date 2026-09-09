@@ -17,7 +17,7 @@ function spawnSleeper() {
 }
 
 test("shutdown cleans a live group and a failed start while preserving data", async () => {
-  const dataDir = await mkdtemp(path.join(tmpdir(), "blackglass-demo-lifecycle-"));
+  const dataDir = await mkdtemp(path.join(tmpdir(), "stonehush-demo-lifecycle-"));
   const marker = path.join(dataDir, "report.json");
   await writeFile(marker, '{"demo":true}\n');
 

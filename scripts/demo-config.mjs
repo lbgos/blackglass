@@ -54,7 +54,7 @@ export function parseDemoArgs(argv) {
 }
 
 function demoRoot(repositoryRoot) {
-  return path.join(repositoryRoot, ".blackglass");
+  return path.join(repositoryRoot, ".stonehush");
 }
 
 export function isDailyDriverDataDir(dataDir, repositoryRoot) {

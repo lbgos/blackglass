@@ -28,7 +28,7 @@ const WARNING_ACTION_STATES = new Set(["paused_for_warning", "active_paused_for_
 const FINDING_EVIDENCE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,126}$/;
 
 function fingerprint() {
-  return `sha256:${createHash("sha256").update("blackglass-demo-lab-v1").digest("hex")}`;
+  return `sha256:${createHash("sha256").update("stonehush-demo-lab-v1").digest("hex")}`;
 }
 
 function delay(ms) {
@@ -253,13 +253,13 @@ async function main() {
 
     const environment = {
       ...process.env,
-      BLACKGLASS_API_PORT: String(plan.apiPort),
-      BLACKGLASS_DATA_DIR: plan.dataDir,
-      BLACKGLASS_WEB_PORT: String(plan.webPort),
+      STONEHUSH_API_PORT: String(plan.apiPort),
+      STONEHUSH_DATA_DIR: plan.dataDir,
+      STONEHUSH_WEB_PORT: String(plan.webPort),
     };
     const apiSpawned = spawnChild(
       process.execPath,
-      [pnpmProgram, "--filter", "@blackglass/api", "run", "dev"],
+      [pnpmProgram, "--filter", "@stonehush/api", "run", "dev"],
       { cwd: repositoryRoot, env: environment },
     );
     const api = watch("api", apiSpawned.child, apiSpawned.exited);
@@ -268,7 +268,7 @@ async function main() {
 
     const webSpawned = spawnChild(
       process.execPath,
-      [pnpmProgram, "--filter", "@blackglass/web", "run", "dev"],
+      [pnpmProgram, "--filter", "@stonehush/web", "run", "dev"],
       { cwd: repositoryRoot, env: environment },
     );
     const web = watch("web", webSpawned.child, webSpawned.exited);
@@ -298,7 +298,7 @@ async function main() {
       [
         pnpmProgram,
         "--filter",
-        "@blackglass/api",
+        "@stonehush/api",
         "exec",
         "tsx",
         "--conditions=development",
@@ -308,12 +308,12 @@ async function main() {
         cwd: repositoryRoot,
         env: {
           ...environment,
-          BLACKGLASS_API_BASE_URL: apiBase,
-          BLACKGLASS_RUNNER_ID: runnerId,
-          BLACKGLASS_RUNNER_SECRET: runnerSecret,
-          BLACKGLASS_RUNNER_DATA_DIR: path.join(plan.dataDir, "runner"),
-          BLACKGLASS_INSTALLATION_FINGERPRINT: fingerprint(),
-          BLACKGLASS_NMAP_EXECUTABLE: "/usr/bin/nmap",
+          STONEHUSH_API_BASE_URL: apiBase,
+          STONEHUSH_RUNNER_ID: runnerId,
+          STONEHUSH_RUNNER_SECRET: runnerSecret,
+          STONEHUSH_RUNNER_DATA_DIR: path.join(plan.dataDir, "runner"),
+          STONEHUSH_INSTALLATION_FINGERPRINT: fingerprint(),
+          STONEHUSH_NMAP_EXECUTABLE: "/usr/bin/nmap",
         },
       },
     );
