@@ -818,8 +818,8 @@
         }
       },
       "foreignKeys": {
-        "advisor_turns_engagement_id_engagements_id_fk": {
-          "name": "advisor_turns_engagement_id_engagements_id_fk",
+        "advisor_turn_belongs_to_engagement": {
+          "name": "advisor_turn_belongs_to_engagement",
           "tableFrom": "advisor_turns",
           "tableTo": "engagements",
           "columnsFrom": [
