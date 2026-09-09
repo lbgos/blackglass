@@ -597,6 +597,91 @@ describe("engagement notes", () => {
     expect(notesLeakInStorage(["# my draft"])).toBeNull();
   });
 
+  it("load server version clears dirty and saves next edit at the fresh revision", async () => {
+    let stored = "# base";
+    let storedRevision = 1;
+    const puts: { markdown: string; expectedRevision: number }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/system/status")) return Promise.resolve(response(readyStatus));
+        if (url === "/api/v1/engagements") return Promise.resolve(response([activeEngagement]));
+        if (url === `/api/v1/engagements/${activeEngagement.id}`) {
+          return Promise.resolve(
+            response({ engagement: activeEngagement, activeScopeRevision: null }),
+          );
+        }
+        if (url.endsWith("/services")) return Promise.resolve(response([]));
+        if (url.endsWith("/notes") && (init?.method === undefined || init.method === "GET")) {
+          return Promise.resolve(
+            response({
+              engagementId: activeEngagement.id,
+              markdown: stored,
+              updatedAt: "2026-08-12T12:00:00.000Z",
+              revision: storedRevision,
+            }),
+          );
+        }
+        if (url.endsWith("/notes") && init?.method === "PUT") {
+          const body = JSON.parse(String(init.body)) as {
+            markdown: string;
+            expectedRevision: number;
+          };
+          puts.push(body);
+          if (body.expectedRevision !== storedRevision) {
+            return Promise.resolve(
+              response(
+                {
+                  code: "revision_conflict",
+                  resourceType: "engagement_notes",
+                  resourceId: activeEngagement.id,
+                  currentRevision: storedRevision,
+                },
+                409,
+              ),
+            );
+          }
+          stored = body.markdown;
+          storedRevision += 1;
+          return Promise.resolve(
+            response({
+              engagementId: activeEngagement.id,
+              markdown: stored,
+              updatedAt: "2026-08-12T12:01:00.000Z",
+              revision: storedRevision,
+            }),
+          );
+        }
+        return Promise.resolve(response([]));
+      }),
+    );
+
+    await renderWorkspace(`/engagements/${activeEngagement.id}?tab=notes`);
+    const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
+    expect(editor.value).toBe("# base");
+
+    stored = "# server wins";
+    storedRevision = 2;
+    fireEvent.change(editor, { target: { value: "# mine" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
+    expect(await screen.findByText("Notes changed elsewhere")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Load server version" }));
+    await waitFor(() => expect(screen.getByText("Saved")).toBeTruthy());
+    expect((screen.getByLabelText("Markdown") as HTMLTextAreaElement).value).toBe("# server wins");
+    expect(screen.getByRole("button", { name: "Save notes" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByText("Notes changed elsewhere")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Markdown"), { target: { value: "# next" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
+    await waitFor(() => expect(screen.getByText("Saved")).toBeTruthy());
+    expect(puts).toEqual([
+      { markdown: "# mine", expectedRevision: 1 },
+      { markdown: "# next", expectedRevision: 2 },
+    ]);
+  });
+
   it("keeps the draft when recovery GET fails and retries", async () => {
     let getCalls = 0;
     vi.stubGlobal(

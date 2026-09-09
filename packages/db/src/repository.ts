@@ -781,29 +781,15 @@ class TransactionRepository implements EngagementWriteTransaction {
     const nextRevision = expectedRevision + 1;
     const updatedAt = this.clock().toISOString();
     if (existing === undefined) {
-      try {
-        this.client
-          .insert(engagementNotes)
-          .values({
-            engagementId,
-            markdown: parsed.data.markdown,
-            updatedAt,
-            revision: nextRevision,
-          })
-          .run();
-      } catch {
-        const raced = this.client
-          .select()
-          .from(engagementNotes)
-          .where(eq(engagementNotes.engagementId, engagementId))
-          .get();
-        return failed({
-          code: "revision_conflict",
-          currentRevision: raced?.revision ?? 1,
-          resourceType: "engagement_notes",
-          resourceId: engagementId,
-        });
-      }
+      this.client
+        .insert(engagementNotes)
+        .values({
+          engagementId,
+          markdown: parsed.data.markdown,
+          updatedAt,
+          revision: nextRevision,
+        })
+        .run();
     } else {
       this.client
         .update(engagementNotes)

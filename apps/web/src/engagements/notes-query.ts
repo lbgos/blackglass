@@ -114,6 +114,7 @@ interface NotesBase {
 export function useEngagementNotesEditor(engagementId: string) {
   const query = useEngagementNotesQuery(engagementId);
   const save = useSaveEngagementNotesMutation(engagementId);
+  const queryClient = useQueryClient();
   const serverNotes = query.data;
   const serverMarkdown = serverNotes?.markdown;
   const [draft, setDraftState] = useState<string | undefined>(undefined);
@@ -187,14 +188,7 @@ export function useEngagementNotesEditor(engagementId: string) {
     }
   };
 
-  const saveWithBase = (
-    markdown: string,
-    expectedRevision: number,
-    options?: {
-      onSuccess?: (notes: EngagementNotes) => void;
-      onError?: (error: unknown) => void;
-    },
-  ) => {
+  const saveWithBase = (markdown: string, expectedRevision: number) => {
     save.mutate(
       { markdown, expectedRevision },
       {
@@ -203,13 +197,12 @@ export function useEngagementNotesEditor(engagementId: string) {
           setBase({ markdown: notes.markdown, revision: notes.revision });
           setConflictServer(null);
           setRecoveryError(false);
-          options?.onSuccess?.(notes);
         },
         onError: (error) => {
+          if (engagementRef.current !== engagementId) return;
           if (isNotesRevisionConflict(error)) {
             void fetchRecovery();
           }
-          options?.onError?.(error);
         },
       },
     );
@@ -224,6 +217,7 @@ export function useEngagementNotesEditor(engagementId: string) {
     if (conflictServer === null) return;
     if (engagementRef.current !== engagementId) return;
     const server = conflictServer;
+    queryClient.setQueryData<EngagementNotes>(engagementNotesQueryKey(engagementId), server);
     setDraftState(server.markdown);
     setBase({ markdown: server.markdown, revision: server.revision });
     setConflictServer(null);
@@ -233,15 +227,7 @@ export function useEngagementNotesEditor(engagementId: string) {
 
   const keepMine = () => {
     if (conflictServer === null || draft === undefined) return;
-    const server = conflictServer;
-    const local = draft;
-    saveWithBase(local, server.revision, {
-      onError: (error) => {
-        if (isNotesRevisionConflict(error)) {
-          void fetchRecovery();
-        }
-      },
-    });
+    saveWithBase(draft, conflictServer.revision);
   };
 
   const retryRecovery = () => {
@@ -250,7 +236,7 @@ export function useEngagementNotesEditor(engagementId: string) {
 
   return {
     query,
-    save: { ...save, mutateWithBase: saveWithBase },
+    save,
     value,
     dirty,
     setDraft,
