@@ -114,8 +114,6 @@ describe("engagement notes persistence", () => {
       error: {
         code: "revision_conflict",
         currentRevision: 1,
-        resourceType: "engagement_notes",
-        resourceId: engagement.id,
       },
     });
     expect(repository.getEngagementNotes(engagement.id)).toMatchObject({

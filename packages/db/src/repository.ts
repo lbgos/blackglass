@@ -99,7 +99,7 @@ export type RepositoryError =
   | {
       code: "revision_conflict";
       currentRevision: number;
-      resourceType?: "engagement" | "action" | "engagement_notes";
+      resourceType?: "engagement" | "action";
       resourceId?: string;
     }
   | { code: "storage_busy" };
@@ -771,8 +771,6 @@ class TransactionRepository implements EngagementWriteTransaction {
       return failed({
         code: "revision_conflict",
         currentRevision,
-        resourceType: "engagement_notes",
-        resourceId: engagementId,
       });
     }
     if (expectedRevision >= Number.MAX_SAFE_INTEGER) {
@@ -816,8 +814,6 @@ class TransactionRepository implements EngagementWriteTransaction {
       return failed({
         code: "revision_conflict",
         currentRevision: stored.revision,
-        resourceType: "engagement_notes",
-        resourceId: engagementId,
       });
     }
     return engagementNotesFromRow(stored);
