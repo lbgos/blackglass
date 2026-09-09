@@ -34,8 +34,8 @@ import {
   type RetryActionContext,
   type ScopeRevision,
   type SavedScopeRule,
-} from "@blackglass/contracts";
-import { normalizeScopeRules, normalizeTarget } from "@blackglass/domain";
+} from "@stonehush/contracts";
+import { normalizeScopeRules, normalizeTarget } from "@stonehush/domain";
 import { and, asc, eq, inArray, max } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 

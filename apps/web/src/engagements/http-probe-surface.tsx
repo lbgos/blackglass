@@ -1,5 +1,5 @@
-import type { HttpProbeProjected } from "@blackglass/contracts";
-import { LoadingRegion, RecoverableError, Skeleton, StaleDataState } from "@blackglass/ui";
+import type { HttpProbeProjected } from "@stonehush/contracts";
+import { LoadingRegion, RecoverableError, Skeleton, StaleDataState } from "@stonehush/ui";
 
 import { formatEngagementTimestamp } from "./format.js";
 import { useEngagementHttpProbesQuery } from "./query.js";

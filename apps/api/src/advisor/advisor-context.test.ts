@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { EngagementWithActiveScope, Finding } from "@blackglass/contracts";
-import type { EngagementArtifactRecord } from "@blackglass/db";
+import type { EngagementWithActiveScope, Finding } from "@stonehush/contracts";
+import type { EngagementArtifactRecord } from "@stonehush/db";
 
 import {
   assembleAdvisorContext,

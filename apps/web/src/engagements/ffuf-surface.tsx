@@ -5,8 +5,8 @@ import {
   FFUF_TIMEOUT_SECONDS_DEFAULT,
   type PersistedAction,
   type SavedScopeRule,
-} from "@blackglass/contracts";
-import { Button, LoadingRegion, RecoverableError, Skeleton } from "@blackglass/ui";
+} from "@stonehush/contracts";
+import { Button, LoadingRegion, RecoverableError, Skeleton } from "@stonehush/ui";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 

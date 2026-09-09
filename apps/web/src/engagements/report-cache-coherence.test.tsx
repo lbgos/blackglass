@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { ThemeProvider } from "@blackglass/ui";
+import { ThemeProvider } from "@stonehush/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { engagementReportMarkdown, type ReportBundle } from "@blackglass/contracts";
+import { engagementReportMarkdown, type ReportBundle } from "@stonehush/contracts";
 import { createAppQueryClient } from "../query-client.js";
 import { EngagementWorkspaceProvider } from "./workspace-context.js";
 import { ActionPlanner } from "./action-planner.js";

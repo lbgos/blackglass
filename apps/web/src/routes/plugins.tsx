@@ -1,4 +1,4 @@
-import { Switch, cn } from "@blackglass/ui";
+import { Switch, cn } from "@stonehush/ui";
 import { createFileRoute } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 
