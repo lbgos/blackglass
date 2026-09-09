@@ -8,13 +8,24 @@ import { fileURLToPath } from "node:url";
 import { waitForApiReadiness } from "./dev-readiness.mjs";
 import {
   DEMO_FIXTURE_HOST,
+  assertExecutablePresent,
   assertLoopbackOrigin,
   assertLoopbackTarget,
   assertPortsFree,
   parseDemoArgs,
   resolveDemoPlan,
 } from "./demo-config.mjs";
-import { createChildRegistry, createStopState, describeChildExit, raceTickOrExit, trackExit } from "./demo-lifecycle.mjs";
+import {
+  closeServer,
+  createChildRegistry,
+  createFixtureOwner,
+  createSharedCleanup,
+  createStopState,
+  describeChildExit,
+  listenServer,
+  raceTickOrExit,
+  trackExit,
+} from "./demo-lifecycle.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_READY_TIMEOUT_MS = 30_000;
@@ -181,7 +192,7 @@ function sectionRows(report, name) {
   return Array.isArray(rows) ? rows : [];
 }
 
-function startFixture(fixturePort) {
+function createFixtureServer(fixturePort) {
   const server = http.createServer((request, response) => {
     const url = new URL(request.url ?? "/", `http://${DEMO_FIXTURE_HOST}:${fixturePort}`);
     if (url.pathname === "/") {
@@ -197,10 +208,7 @@ function startFixture(fixturePort) {
       response.end("not found");
     }
   });
-  return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen({ host: DEMO_FIXTURE_HOST, port: fixturePort }, () => resolve(server));
-  });
+  return server;
 }
 
 async function main() {
@@ -244,25 +252,15 @@ async function main() {
   function exitPromises() {
     return [...liveExits.values()];
   }
-  let fixture = null;
-  let shutdownStarted = false;
-  async function shutdown() {
-    if (shutdownStarted) return;
-    shutdownStarted = true;
+  // Fixture ownership is race-safe: the server is registered as pending
+  // before the listen await, so a concurrent shutdown always finds and
+  // closes the just-created server. Shared shutdown lets concurrent
+  // callers join one cleanup run instead of racing past it.
+  const owner = createFixtureOwner((server) => closeServer(server));
+  const shutdown = createSharedCleanup(async () => {
     await registry.shutdown();
-    if (fixture !== null) {
-      await new Promise((resolve) => {
-        try {
-          fixture.closeAllConnections();
-        } catch {
-          // Older Node: fall through to close.
-        }
-        fixture.close(() => resolve());
-        setTimeout(resolve, 2_000).unref?.();
-      });
-      fixture = null;
-    }
-  }
+    await owner.closeAll();
+  });
   // Single signal path with explicit exit codes. Signals abort in-flight
   // work, stop new children and requests via throwIfStopping, and shut
   // down only tracked groups; data on disk is never touched by cleanup.
@@ -284,6 +282,8 @@ async function main() {
     // Reject occupied lab ports before anything binds, enrolls, or
     // mutates: readiness must never mistake a foreign listener for ours.
     await assertPortsFree(DEMO_FIXTURE_HOST, [plan.apiPort, plan.webPort, plan.fixturePort]);
+    await assertExecutablePresent("/usr/bin/nmap", "nmap");
+    await assertExecutablePresent("/usr/bin/ffuf", "ffuf");
     stop.throwIfStopping("data directory setup");
     await mkdir(plan.dataDir, { mode: 0o700, recursive: true });
     // The runner requires its run root to exist before the first lease;
@@ -294,7 +294,15 @@ async function main() {
     await writeFile(wordlistPath, "admin\nlogin\ndashboard\nno-such-demo-path-zzz\n", { mode: 0o600 });
 
     stop.throwIfStopping("fixture startup");
-    fixture = await startFixture(plan.fixturePort);
+    const server = createFixtureServer(plan.fixturePort);
+    owner.takePending(server);
+    try {
+      await listenServer(server, { host: DEMO_FIXTURE_HOST, port: plan.fixturePort });
+    } finally {
+      owner.releasePending(server);
+    }
+    owner.takeOwned(server);
+    stop.throwIfStopping("fixture startup");
     console.log(`Fixture listening on http://${DEMO_FIXTURE_HOST}:${plan.fixturePort}/`);
 
     const environment = {

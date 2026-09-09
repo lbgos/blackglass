@@ -104,3 +104,55 @@ test("raceTickOrExit sleeps the full interval when idle, exits promptly", async 
   assert.deepEqual(fast, { kind: "exit", exit: record });
   resolveExit(record);
 }, { timeout: 30_000 });
+
+test("concurrent shutdown callers join one cleanup run", async () => {
+  const { createSharedCleanup } = await import("./demo-lifecycle.mjs");
+  let runs = 0;
+  const shutdown = createSharedCleanup(async () => {
+    runs += 1;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return "cleaned";
+  });
+  const results = await Promise.all([shutdown(), shutdown(), shutdown()]);
+  assert.deepEqual(results, ["cleaned", "cleaned", "cleaned"]);
+  assert.equal(runs, 1);
+  assert.equal(await shutdown(), "cleaned");
+  assert.equal(runs, 1);
+}, { timeout: 30_000 });
+
+test("signal during pending fixture start leaves no open server", async () => {
+  const { default: http } = await import("node:http");
+  const { default: net } = await import("node:net");
+  const { closeServer, createFixtureOwner, listenServer } = await import("./demo-lifecycle.mjs");
+  const holder = net.createServer((socket) => socket.destroy());
+  await new Promise((resolve, reject) => {
+    holder.once("error", reject);
+    holder.listen({ host: "127.0.0.1", port: 0 }, resolve);
+  });
+  const holderPort = holder.address().port;
+  const free = await new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once("error", reject);
+    probe.listen({ host: "127.0.0.1", port: 0 }, () => {
+      const port = probe.address().port;
+      probe.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
+  const owner = createFixtureOwner((server) => closeServer(server));
+  const server = http.createServer((request, response) => response.end("x"));
+  owner.takePending(server);
+  const listening = listenServer(server, { host: "127.0.0.1", port: free });
+  // Signal wins mid-bind: shutdown drains the pending server first.
+  const closing = owner.closeAll();
+  await assert.rejects(listening, /closed before listening/);
+  owner.releasePending(server);
+  await closing;
+  assert.equal(owner.isEmpty(), true);
+  assert.equal(server.listening, false);
+  // The port is genuinely free: a fresh bind succeeds.
+  const rebind = http.createServer((request, response) => response.end("y"));
+  await listenServer(rebind, { host: "127.0.0.1", port: free });
+  await closeServer(rebind);
+  await new Promise((resolve) => holder.close(resolve));
+  assert.ok(holderPort > 0);
+}, { timeout: 30_000 });

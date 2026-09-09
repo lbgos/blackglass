@@ -9,7 +9,7 @@ pnpm demo
 pnpm demo -- --smoke
 ```
 
-Prerequisites: the README toolchain plus installed `nmap` (`/usr/bin/nmap`, used for the discovery scan) and `ffuf` (`/usr/bin/ffuf`, used for content discovery with a generated 4-entry wordlist). The demo fails fast with a truthful error when either binary is missing.
+Prerequisites: the README toolchain plus installed `nmap` (`/usr/bin/nmap`, used for the discovery scan) and `ffuf` (`/usr/bin/ffuf`, used for content discovery with a generated 4-entry wordlist). The demo checks both binaries before starting and refuses to run when either is missing; a tool that breaks mid-run still surfaces as a truthful run failure.
 
 Open the printed UI URL. Keep the app alive until Ctrl+C; only processes started by the demo are cleaned up.
 

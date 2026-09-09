@@ -1,3 +1,4 @@
+import { access, constants } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 
@@ -167,5 +168,15 @@ export async function assertPortsFree(host, ports) {
     if (await checkPortOpen(host, port)) {
       throw new Error(`Demo port ${port} on ${host} is already occupied; refusing to start.`);
     }
+  }
+}
+
+// Minimal tool preflight: the runner fails a run late when its binary is
+// missing, so check executability up front for a fast truthful error.
+export async function assertExecutablePresent(executable, label) {
+  try {
+    await access(executable, constants.X_OK);
+  } catch {
+    throw new Error(`Demo needs ${label} at ${executable}; install it before running.`);
   }
 }

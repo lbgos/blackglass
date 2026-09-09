@@ -67,3 +67,12 @@ test("assertPortsFree rejects an occupied own-lab port with zero mutations", asy
   assert.equal(await checkPortOpen("127.0.0.1", occupied), false);
   await assertPortsFree("127.0.0.1", [occupied]);
 });
+
+test("tool preflight passes present binaries and names missing ones", async () => {
+  const { assertExecutablePresent } = await import("./demo-config.mjs");
+  await assertExecutablePresent("/usr/bin/nmap", "nmap");
+  await assert.rejects(
+    assertExecutablePresent("/nonexistent-demo-tool-xyz", "demo-tool"),
+    /Demo needs demo-tool at \/nonexistent-demo-tool-xyz/,
+  );
+});

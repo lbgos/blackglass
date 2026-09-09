@@ -91,6 +91,73 @@ export function describeChildExit(exit) {
   return `demo child ${exit.label ?? "unknown"} pid ${String(exit.pid)} exited code ${String(exit.code)}`;
 }
 
+// Shared cleanup: concurrent callers join one in-flight run instead of
+// each racing ahead while cleanup is still working.
+export function createSharedCleanup(cleanup) {
+  let promise = null;
+  return () => {
+    promise ??= (async () => cleanup())();
+    return promise;
+  };
+}
+
+// Bind a server, settling promptly on error or on a close that wins the
+// race against listen. A close during bind rejects instead of hanging.
+export function listenServer(server, { host, port }) {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.once("close", () => reject(new Error("Server closed before listening.")));
+    server.listen({ host, port }, () => resolve(server));
+  });
+}
+
+export function closeServer(server, { graceMs = 2_000 } = {}) {
+  return new Promise((resolve) => {
+    try {
+      server.closeAllConnections();
+    } catch {
+      // Older Node: fall through to close.
+    }
+    server.close(() => resolve());
+    setTimeout(resolve, graceMs).unref?.();
+  });
+}
+
+// Ownership for a server that binds asynchronously. takePending runs
+// before the listen await so a concurrent closeAll always finds the
+// just-created server; releasePending runs in a finally once listen
+// settles. No listener is ever left unowned.
+export function createFixtureOwner(close) {
+  let owned = null;
+  let pending = null;
+  return {
+    takePending(server) {
+      pending = server;
+    },
+    releasePending(server) {
+      if (pending === server) pending = null;
+    },
+    takeOwned(server) {
+      owned = server;
+    },
+    isEmpty() {
+      return owned === null && pending === null;
+    },
+    async closeAll() {
+      const servers = [];
+      if (owned !== null) {
+        servers.push(owned);
+        owned = null;
+      }
+      if (pending !== null && !servers.includes(pending)) {
+        servers.push(pending);
+        pending = null;
+      }
+      for (const server of servers) await close(server);
+    },
+  };
+}
+
 // One wait primitive for polling loops. Races a single delay against live
 // exit promises that stay genuinely pending: no immediate-null branch, so
 // an idle stack waits the full interval instead of busy-polling, and no
