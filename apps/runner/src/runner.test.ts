@@ -889,7 +889,8 @@ describe("runner loop shutdown", () => {
           // already gone
         }
       }
-      if (child && !closed) await new Promise((r) => child.once("close", r));
+      const runningChild = child;
+      if (runningChild && !closed) await new Promise((r) => runningChild.once("close", r));
       await new Promise((r) => server.close(r));
       await rm(cliDataDir, { recursive: true, force: true });
     }
