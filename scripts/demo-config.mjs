@@ -32,7 +32,9 @@ export function parseDemoArgs(argv) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
-    if (token === "--smoke") {
+    if (token === "--") {
+      continue;
+    } else if (token === "--smoke") {
       args.smoke = true;
     } else if (token === "--api-port" || token === "--web-port" || token === "--fixture-port" || token === "--data-dir") {
       const value = argv[index + 1];

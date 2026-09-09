@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -14,7 +13,7 @@ import {
   parseDemoArgs,
   resolveDemoPlan,
 } from "./demo-config.mjs";
-import { createChildRegistry, trackExit } from "./demo-lifecycle.mjs";
+import { createChildRegistry, classifyChildExit, trackExit } from "./demo-lifecycle.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_READY_TIMEOUT_MS = 30_000;
@@ -24,6 +23,7 @@ const PROBE_TIMEOUT_MS = 90_000;
 const FFUF_TIMEOUT_MS = 150_000;
 const POLL_INTERVAL_MS = 1_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+const MAX_RUNNER_RESTARTS = 5;
 const TERMINAL_ACTION_STATES = new Set(["succeeded", "failed", "cancelled", "capability_error"]);
 const WARNING_ACTION_STATES = new Set(["paused_for_warning", "active_paused_for_warning"]);
 const FINDING_EVIDENCE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,126}$/;
@@ -103,13 +103,24 @@ function latestSnapshot(action) {
   return snapshots[snapshots.length - 1];
 }
 
-async function driveActionToTerminal(apiBase, engagementId, actionId, { timeoutMs, label }) {
+async function driveActionToTerminal(apiBase, engagementId, actionId, { timeoutMs, label, checkExit, onChildExit }) {
   const deadline = Date.now() + timeoutMs;
   let continueAttempts = 0;
   for (;;) {
     if (Date.now() > deadline) throw new Error(`${label} did not finish before its timeout.`);
     const current = await apiJson(apiBase, "GET", `/api/v1/engagements/${engagementId}/actions/${actionId}`);
     const state = current?.action?.state;
+    if (TERMINAL_ACTION_STATES.has(state)) {
+      if (state !== "succeeded") throw new Error(`${label} ended terminal with state ${state}.`);
+      return current;
+    }
+    // Terminal state wins over exit detection: a finished action is never
+    // reported as a stall just because an idle child reaped first.
+    const exited = await checkExit();
+    if (exited !== null) {
+      await onChildExit(exited);
+      continue;
+    }
     if (WARNING_ACTION_STATES.has(state)) {
       if (continueAttempts >= 3) throw new Error(`${label} warning continue exhausted retries.`);
       continueAttempts += 1;
@@ -124,11 +135,12 @@ async function driveActionToTerminal(apiBase, engagementId, actionId, { timeoutM
       });
       continue;
     }
-    if (TERMINAL_ACTION_STATES.has(state)) {
-      if (state !== "succeeded") throw new Error(`${label} ended terminal with state ${state}.`);
-      return current;
+    // Race resolving promises only: checkExit never rejects, so no
+    // iteration leaks an unhandled rejection when a child dies.
+    const stalled = await Promise.race([delay(POLL_INTERVAL_MS).then(() => null), checkExit()]);
+    if (stalled !== null) {
+      await onChildExit(stalled);
     }
-    await delay(POLL_INTERVAL_MS);
   }
 }
 
@@ -176,14 +188,29 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  // Current runner source through the existing tsx toolchain (same entry
-  // style as the API dev process). No dist build, nothing stale on disk.
-  const tsxBin = path.join(repositoryRoot, "apps", "api", "node_modules", ".bin", "tsx");
+  // Current runner source through the existing tsx toolchain. tsx ships
+  // as a shell wrapper, so it runs via pnpm exec (direct executable
+  // resolution), never as a script argument to node. No dist, no compile.
   const runnerSrc = path.join(repositoryRoot, "apps", "runner", "src", "index.ts");
-  if (!existsSync(tsxBin)) throw new Error("Existing tsx toolchain is unavailable; refusing to run a stale build.");
-  if (!existsSync(runnerSrc)) throw new Error("Runner source entry is missing.");
 
-  const registry = createChildRegistry();
+    const registry = createChildRegistry();
+    // Live exit watchers, keyed by child label. Respawn replaces the
+    // runner entry so later checks never see a stale exit record.
+    const liveExits = new Map();
+    function watch(label, child, exited) {
+      const entry = registry.track(child, exited);
+      liveExits.set(
+        label,
+        exited.then(
+          (result) => ({ label, ...result }),
+          () => ({ label, code: 1, signal: null }),
+        ),
+      );
+      return entry;
+    }
+    function checkExit() {
+      return Promise.race([...liveExits.values(), Promise.resolve(null)]);
+    }
   let fixture = null;
   let shutdownStarted = false;
   async function shutdown() {
@@ -208,6 +235,9 @@ async function main() {
 
   try {
     await mkdir(plan.dataDir, { mode: 0o700, recursive: true });
+    // The runner requires its run root to exist before the first lease;
+    // otherwise run directory setup fails closed as nmap_unavailable.
+    await mkdir(path.join(plan.dataDir, "runner", "runs"), { mode: 0o700, recursive: true });
 
     const wordlistPath = path.join(plan.dataDir, "wordlist.txt");
     await writeFile(wordlistPath, "admin\nlogin\ndashboard\nno-such-demo-path-zzz\n", { mode: 0o600 });
@@ -226,7 +256,7 @@ async function main() {
       [pnpmProgram, "--filter", "@blackglass/api", "run", "dev"],
       { cwd: repositoryRoot, env: environment },
     );
-    const api = registry.track(apiSpawned.child, apiSpawned.exited);
+    const api = watch("api", apiSpawned.child, apiSpawned.exited);
     await waitForApiReadiness({ exited: api.exited, url: `${apiBase}/health`, timeoutMs: API_READY_TIMEOUT_MS });
     console.log(`API ready at ${apiBase}.`);
 
@@ -235,7 +265,7 @@ async function main() {
       [pnpmProgram, "--filter", "@blackglass/web", "run", "dev"],
       { cwd: repositoryRoot, env: environment },
     );
-    const web = registry.track(webSpawned.child, webSpawned.exited);
+    const web = watch("web", webSpawned.child, webSpawned.exited);
     await waitForWebHealth(webBase, Promise.race([api.exited, web.exited]));
     console.log(`Web ready at ${webBase}/.`);
 
@@ -257,23 +287,46 @@ async function main() {
       throw new Error("Enrollment confirm returned no runner credentials.");
     }
     console.log(`Runner enrolled as ${runnerName}.`);
-    const runnerSpawned = spawnChild(
-      process.execPath,
-      [tsxBin, "--conditions=development", runnerSrc],
-      {
-        cwd: repositoryRoot,
-        env: {
-          ...environment,
-          BLACKGLASS_API_BASE_URL: apiBase,
-          BLACKGLASS_RUNNER_ID: runnerId,
-          BLACKGLASS_RUNNER_SECRET: runnerSecret,
-          BLACKGLASS_RUNNER_DATA_DIR: path.join(plan.dataDir, "runner"),
-          BLACKGLASS_INSTALLATION_FINGERPRINT: fingerprint(),
-          BLACKGLASS_NMAP_EXECUTABLE: "/usr/bin/nmap",
-        },
-      },
-    );
-    registry.track(runnerSpawned.child, runnerSpawned.exited);
+    const runnerBaseEnv = {
+      ...environment,
+      BLACKGLASS_API_BASE_URL: apiBase,
+      BLACKGLASS_RUNNER_ID: runnerId,
+      BLACKGLASS_RUNNER_SECRET: runnerSecret,
+      BLACKGLASS_RUNNER_DATA_DIR: path.join(plan.dataDir, "runner"),
+      BLACKGLASS_INSTALLATION_FINGERPRINT: fingerprint(),
+      BLACKGLASS_NMAP_EXECUTABLE: "/usr/bin/nmap",
+    };
+    function spawnRunner() {
+      const spawned = spawnChild(
+        process.execPath,
+        [
+          pnpmProgram,
+          "--filter",
+          "@blackglass/api",
+          "exec",
+          "tsx",
+          "--conditions=development",
+          runnerSrc,
+        ],
+        { cwd: repositoryRoot, env: { ...runnerBaseEnv } },
+      );
+      return watch("runner", spawned.child, spawned.exited);
+    }
+    spawnRunner();
+    let runnerRestarts = 0;
+    async function handleChildExit(stage, exit) {
+      const decision = classifyChildExit(exit, {
+        restartsUsed: runnerRestarts,
+        maxRestarts: MAX_RUNNER_RESTARTS,
+      });
+      if (decision.action === "restart-runner") {
+        runnerRestarts += 1;
+        console.log(`Runner exited idle during ${stage}; restarting (${runnerRestarts}/${MAX_RUNNER_RESTARTS}).`);
+        spawnRunner();
+        return;
+      }
+      throw new Error(`${stage} stalled: ${decision.reason}.`);
+    }
 
     const created = await apiJson(apiBase, "POST", "/api/v1/engagements", {
       body: { name: "Demo lab", kind: "lab", autoContinueWarnings: false },
@@ -297,6 +350,8 @@ async function main() {
     await driveActionToTerminal(apiBase, engagementId, nmap.action.actionId, {
       timeoutMs: NMAP_TIMEOUT_MS,
       label: "Nmap discovery",
+      checkExit,
+      onChildExit: (exit) => handleChildExit("Nmap discovery", exit),
     });
     console.log("Nmap discovery succeeded.");
 
@@ -313,6 +368,8 @@ async function main() {
     await driveActionToTerminal(apiBase, engagementId, probe.action.actionId, {
       timeoutMs: PROBE_TIMEOUT_MS,
       label: "HTTP probe",
+      checkExit,
+      onChildExit: (exit) => handleChildExit("HTTP probe", exit),
     });
     console.log("HTTP probe succeeded.");
 
@@ -335,17 +392,19 @@ async function main() {
     await driveActionToTerminal(apiBase, engagementId, ffuf.action.actionId, {
       timeoutMs: FFUF_TIMEOUT_MS,
       label: "ffuf discovery",
+      checkExit,
+      onChildExit: (exit) => handleChildExit("ffuf discovery", exit),
     });
     console.log("ffuf discovery succeeded.");
 
-    const report = await apiJson(apiBase, "GET", `/api/v1/engagements/${engagementId}/report`);
-    const services = sectionRows(report, "services");
-    const probes = sectionRows(report, "probes");
-    const ffufResults = sectionRows(report, "ffufResults");
+    const midReport = await apiJson(apiBase, "GET", `/api/v1/engagements/${engagementId}/report?format=json`);
+    const services = sectionRows(midReport, "services");
+    const probes = sectionRows(midReport, "probes");
+    const ffufResults = sectionRows(midReport, "ffufResults");
     if (services.length === 0) throw new Error("Report carries no Nmap services.");
     if (probes.length === 0) throw new Error("Report carries no HTTP probes.");
     if (ffufResults.length === 0) throw new Error("Report carries no ffuf results.");
-    const evidenceIds = sectionRows(report, "evidenceArtifacts")
+    const evidenceIds = sectionRows(midReport, "evidenceArtifacts")
       .map((entry) => entry?.artifactId)
       .filter((id) => typeof id === "string" && FINDING_EVIDENCE_ID_PATTERN.test(id))
       .slice(0, 4);
@@ -379,16 +438,45 @@ async function main() {
     }
     console.log("Notes saved.");
 
+    // Fresh report AFTER finding and notes writes: the written bundle must
+    // contain them, never the stale pre-write object.
+    const report = await apiJson(apiBase, "GET", `/api/v1/engagements/${engagementId}/report?format=json`);
+    const finalServices = sectionRows(report, "services");
+    const finalProbes = sectionRows(report, "probes");
+    const finalFfuf = sectionRows(report, "ffufResults");
+    const finalFindings = Array.isArray(report?.findings) ? report.findings : [];
+    const finalArtifacts = sectionRows(report, "evidenceArtifacts");
+    if (finalServices.length === 0) throw new Error("Final report carries no Nmap services.");
+    if (finalProbes.length === 0) throw new Error("Final report carries no HTTP probes.");
+    if (finalFfuf.length === 0) throw new Error("Final report carries no ffuf results.");
+    if (finalFindings.length === 0) throw new Error("Final report carries no findings.");
+    if (typeof report?.notesMarkdown !== "string" || !report.notesMarkdown.includes("Demo lab")) {
+      throw new Error("Final report carries no demo notes.");
+    }
+    if (finalArtifacts.length === 0) throw new Error("Final report carries no evidence artifacts.");
+    const proofArtifact = finalArtifacts[0]?.artifactId;
+    if (typeof proofArtifact !== "string") throw new Error("Final report artifact carries no id.");
+    const proofResponse = await fetch(
+      `${apiBase}/api/v1/engagements/${engagementId}/artifacts/${encodeURIComponent(proofArtifact)}/content`,
+      { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+    );
+    if (proofResponse.status !== 200) throw new Error("Evidence artifact download failed.");
+    const proofBytes = (await proofResponse.arrayBuffer()).byteLength;
+    if (proofBytes === 0) throw new Error("Evidence artifact download is empty.");
+    console.log(`Evidence proof: ${proofBytes} bytes from ${proofArtifact}.`);
+
     await writeFile(path.join(plan.dataDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
     const markdownResponse = await fetch(`${apiBase}/api/v1/engagements/${engagementId}/report?format=markdown`, {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (markdownResponse.status !== 200) throw new Error("Report markdown export failed.");
-    await writeFile(path.join(plan.dataDir, "report.md"), await markdownResponse.text(), { mode: 0o600 });
+    const markdown = await markdownResponse.text();
+    if (!markdown.includes("Demo lab")) throw new Error("Report markdown export misses demo content.");
+    await writeFile(path.join(plan.dataDir, "report.md"), markdown, { mode: 0o600 });
 
     console.log(`UI: ${webBase}/engagements/${engagementId}`);
     console.log(
-      `Results: services ${services.length}, probes ${probes.length}, ffuf paths ${ffufResults.length}, finding 1, notes saved, report in ${plan.dataDir}.`,
+      `Results: services ${finalServices.length}, probes ${finalProbes.length}, ffuf paths ${finalFfuf.length}, findings ${finalFindings.length}, artifacts ${finalArtifacts.length}, notes saved, report in ${plan.dataDir}.`,
     );
     if (plan.smoke) {
       console.log("Smoke pipeline proved; stopping.");
