@@ -311,7 +311,7 @@ function FindingRow({
                 disabled={archived}
                 onChange={onToggleAdvisor}
                 aria-label={`Select finding ${finding.title} for advisor`}
-                className="mt-0.5 shrink-0 accent-primary"
+                className="mt-0.5 size-4 shrink-0 cursor-pointer accent-primary"
               />
             ) : null}
             <span className="min-w-0 flex-1 truncate">{finding.title}</span>

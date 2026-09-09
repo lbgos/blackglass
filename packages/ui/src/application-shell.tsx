@@ -39,6 +39,8 @@ export interface ApplicationShellProps {
   consolePanels: readonly ConsolePanel[];
   consoleStatus?: ReactNode;
   mobileTitle?: string;
+  /** Brand element in the mobile top bar. Defaults to plain "Blackglass" text. */
+  mobileBrand?: ReactNode;
   /** Renders the bottom console and its mobile trigger. Defaults to true. */
   showConsole?: boolean;
   /** Renders the desktop stage header row. Mobile navigation always stays. Defaults to true. */
@@ -93,6 +95,7 @@ export function ApplicationShell({
   children,
   consolePanels,
   consoleStatus = "Console ready",
+  mobileBrand,
   mobileTitle = "Blackglass navigation",
   showConsole = true,
   showDesktopStageHeader = true,
@@ -322,7 +325,7 @@ export function ApplicationShell({
             />
           </FullScreenSheet>
           <span className="min-w-0 flex-1 truncate text-[13px] font-semibold tracking-[-0.03em]">
-            Blackglass
+            {mobileBrand ?? "Blackglass"}
           </span>
           {showConsole && (
             <FullScreenSheet
@@ -400,7 +403,7 @@ export function ApplicationShell({
               />
             )}
             {desktopConsoleCollapsed ? (
-              <div className="flex h-11 items-center gap-3 px-4 text-sm text-muted-foreground">
+              <div className="flex h-11 items-center gap-3 px-4 text-[13px] text-muted-foreground">
                 <Terminal className="size-4" aria-hidden="true" />
                 <span className="min-w-0 flex-1 truncate">{consoleStatus}</span>
                 <button
@@ -409,7 +412,7 @@ export function ApplicationShell({
                   className="inline-flex size-11 items-center justify-center rounded-md outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:size-8"
                   onClick={() => setDesktopConsoleCollapsed(false)}
                 >
-                  <ChevronUp className="size-5" aria-hidden="true" />
+                  <ChevronUp className="size-4" aria-hidden="true" />
                 </button>
               </div>
             ) : (
@@ -420,7 +423,7 @@ export function ApplicationShell({
                   className="absolute top-0 right-2 z-20 inline-flex size-11 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:size-8"
                   onClick={() => setDesktopConsoleCollapsed(true)}
                 >
-                  <ChevronDown className="size-5" aria-hidden="true" />
+                  <ChevronDown className="size-4" aria-hidden="true" />
                 </button>
                 <ConsoleTabs panels={consolePanels} />
               </div>

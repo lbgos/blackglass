@@ -16,11 +16,6 @@ import { StageHeader } from "./stage-header.js";
 import { AdvisorStatusCard } from "./advisor-status-card.js";
 import { useSystemStatusQuery } from "./system-status-query.js";
 
-const navigationLinks = [
-  { label: "Dashboard", to: "/" },
-  { label: "Engagements", to: "/engagements" },
-] as const;
-
 const consolePanels: readonly ConsolePanel[] = [
   {
     value: "advisor",
@@ -46,7 +41,7 @@ const consolePanels: readonly ConsolePanel[] = [
 
 function SearchIcon() {
   return (
-    <svg viewBox="0 0 16 16" className="size-3.5 shrink-0" aria-hidden="true">
+    <svg viewBox="0 0 16 16" className="size-4 shrink-0" aria-hidden="true">
       <circle cx="7" cy="7" r="4.25" fill="none" stroke="currentColor" strokeWidth="1.7" />
       <path d="M10.4 10.4 14 14" fill="none" stroke="currentColor" strokeWidth="1.7" />
     </svg>
@@ -55,7 +50,7 @@ function SearchIcon() {
 
 function PlusIcon() {
   return (
-    <svg viewBox="0 0 16 16" className="size-3.5 shrink-0" aria-hidden="true">
+    <svg viewBox="0 0 16 16" className="size-4 shrink-0" aria-hidden="true">
       <path d="M8 3.2v9.6M3.2 8h9.6" fill="none" stroke="currentColor" strokeWidth="1.7" />
     </svg>
   );
@@ -71,25 +66,18 @@ function ConsolePlaceholder({ detail, title }: { detail: string; title: string }
 }
 
 function SidebarHeader() {
-  const systemStatus = useSystemStatusQuery();
-  const ready = systemStatus.data?.overall === "ready";
-  const badge = !systemStatus.data
-    ? systemStatus.isError
-      ? "Offline"
-      : "Checking"
-    : ready
-      ? "Ready"
-      : "Not ready";
-
   return (
     <div className="flex h-12 items-center gap-2 px-3 pt-[env(safe-area-inset-top)]">
-      <span className="size-3.5 shrink-0 rounded-[4px] bg-primary" aria-hidden="true" />
-      <p className="m-0 min-w-0 flex-1 truncate text-[13px] font-semibold tracking-[-0.03em] text-sidebar-foreground">
-        BLACKGLASS
-      </p>
-      <span className="shrink-0 font-mono text-[10px] tracking-wide text-sidebar-muted-foreground uppercase">
-        {badge}
-      </span>
+      <Link
+        to="/"
+        aria-label="Blackglass home"
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span className="size-3.5 shrink-0 rounded-[4px] bg-primary" aria-hidden="true" />
+        <span className="m-0 min-w-0 flex-1 truncate text-[13px] font-semibold tracking-[-0.03em] text-sidebar-foreground">
+          BLACKGLASS
+        </span>
+      </Link>
     </div>
   );
 }
@@ -132,40 +120,9 @@ function SidebarActions({
   );
 }
 
-function SidebarNavigation({ onNavigate }: { onNavigate: () => void }) {
-  return (
-    <div>
-      <nav aria-label="Global" className="px-2 pt-1 pb-2">
-        <ul className="m-0 list-none space-y-0.5 p-0">
-          {navigationLinks.map((link) => (
-            <li key={link.label}>
-              <Link
-                to={link.to}
-                activeOptions={{ exact: link.to !== "/engagements" }}
-                activeProps={{
-                  className: "bg-sidebar-active text-sidebar-foreground",
-                }}
-                className="flex min-h-11 items-center rounded-md px-3 text-[13px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-8"
-                inactiveProps={{
-                  className:
-                    "text-sidebar-muted-foreground hover:bg-sidebar-hover hover:text-sidebar-foreground",
-                }}
-                onClick={onNavigate}
-              >
-                {link.label}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </nav>
-      <EngagementSidebarList onNavigate={onNavigate} />
-    </div>
-  );
-}
-
 function PluginsIcon() {
   return (
-    <svg viewBox="0 0 16 16" className="size-[15px] shrink-0" aria-hidden="true">
+    <svg viewBox="0 0 16 16" className="size-4 shrink-0" aria-hidden="true">
       <path d="M4.2 5.2h7.6v7.2H4.2z" fill="none" stroke="currentColor" strokeWidth="1.7" />
       <path d="M6 5.2V3.8h4v1.4" fill="none" stroke="currentColor" strokeWidth="1.7" />
     </svg>
@@ -174,7 +131,7 @@ function PluginsIcon() {
 
 function SettingsIcon() {
   return (
-    <svg viewBox="0 0 16 16" className="size-[15px] shrink-0" aria-hidden="true">
+    <svg viewBox="0 0 16 16" className="size-4 shrink-0" aria-hidden="true">
       <circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.7" />
       <path
         d="M8 2.2v1.4M8 12.4v1.4M2.2 8h1.4M12.4 8h1.4M3.9 3.9l1 1M11.1 11.1l1 1M12.1 3.9l-1 1M4.9 11.1l-1 1"
@@ -268,6 +225,14 @@ export function ApplicationLayout() {
         <ApplicationShell
           consolePanels={consolePanels}
           consoleStatus={consoleStatusLabel(systemStatus)}
+          mobileBrand={
+            <Link
+              to="/"
+              className="block truncate rounded outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Blackglass
+            </Link>
+          }
           showConsole={showConsole}
           showDesktopStageHeader={showDesktopStageHeader}
           sidebarActions={
@@ -279,12 +244,12 @@ export function ApplicationLayout() {
             onSettings ? (
               <SettingsNav onCloseMobile={closeMobile} />
             ) : (
-              <SidebarNavigation onNavigate={closeMobile} />
+              <EngagementSidebarList onNavigate={closeMobile} />
             )
           }
           sidebarFooter={(closeMobile) =>
             onSettings ? (
-              <div className="px-2 pb-2.5">
+              <div className="px-2 py-2.5">
                 <SettingsBackButton onBack={goBackFromSettings} onCloseMobile={closeMobile} />
               </div>
             ) : (

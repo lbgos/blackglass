@@ -206,6 +206,7 @@ function ReportBody({
           type="button"
           variant="secondary"
           aria-pressed={masked}
+          className={masked ? "bg-accent" : ""}
           onClick={onToggleMask}
         >
           {masked ? "Show original" : "Mask secrets"}

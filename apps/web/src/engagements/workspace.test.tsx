@@ -386,7 +386,7 @@ describe("engagement workspace", () => {
     expect(screen.queryByText("Next in this engagement")).toBeNull();
     expect(screen.queryByRole("button", { name: /Evidence/ })).toBeNull();
 
-    fireEvent.click(screen.getByRole("link", { name: "Dashboard" }));
+    fireEvent.click(screen.getAllByRole("link", { name: "Blackglass home" })[0]!);
     expect(await screen.findByRole("heading", { level: 1, name: "Workspace" })).toBeTruthy();
     expect(screen.getByTestId("workspace-notice").textContent).toBe("");
   });

@@ -4,6 +4,7 @@ import {
   LoadingRegion,
   RecoverableError,
   Skeleton,
+  Switch,
   cn,
   listenForSystemTheme,
   resolveTheme,
@@ -77,45 +78,6 @@ function SetRow({
       </div>
       <div className="flex items-center justify-end gap-2">{children}</div>
     </div>
-  );
-}
-
-function ToggleSwitch({
-  checked,
-  label,
-  locked = true,
-  onCheckedChange,
-  disabled = false,
-}: {
-  checked: boolean;
-  label: string;
-  locked?: boolean;
-  onCheckedChange?: (checked: boolean) => void;
-  disabled?: boolean;
-}) {
-  const controlDisabled = disabled || (locked && !onCheckedChange);
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-disabled={controlDisabled || undefined}
-      aria-label={label}
-      disabled={controlDisabled || undefined}
-      className={cn(
-        "flex h-[18px] w-8 shrink-0 items-center rounded-full px-[2px] transition-colors duration-100",
-        checked ? "bg-primary" : "bg-foreground/15",
-        controlDisabled ? "cursor-default opacity-55" : "cursor-pointer",
-      )}
-      onClick={onCheckedChange ? () => onCheckedChange(!checked) : undefined}
-    >
-      <span
-        className={cn(
-          "size-3.5 shrink-0 rounded-full bg-white transition-transform duration-100",
-          checked ? "translate-x-[14px]" : "translate-x-0",
-        )}
-      />
-    </button>
   );
 }
 
@@ -229,7 +191,7 @@ function GeneralSection() {
         settingId="auto-continue"
         title="Auto-continue engagement warnings"
       >
-        <ToggleSwitch checked={false} label="Auto-continue engagement warnings" />
+        <Switch checked={false} label="Auto-continue engagement warnings" disabled />
       </SetRow>
       <SetRow
         description="24-hour UTC clock. Used in tables, console, and history."
@@ -436,10 +398,9 @@ function AppearanceSection() {
         settingId="reduced-motion"
         title="Reduced motion"
       >
-        <ToggleSwitch
+        <Switch
           checked={reducedMotion}
           label="Reduced motion"
-          locked={false}
           onCheckedChange={setReducedMotion}
         />
       </SetRow>
@@ -1020,10 +981,9 @@ function AdvisorSection() {
         settingId="advisor-public-opt-in"
         title="Public endpoint opt-in"
       >
-        <ToggleSwitch
+        <Switch
           checked={publicOptIn}
           label="Public endpoint opt-in"
-          locked={false}
           disabled={!editable}
           onCheckedChange={(next) => {
             setPublicOptIn(next);
@@ -1110,7 +1070,7 @@ function EvidenceSection() {
         settingId="immutable-evidence"
         title="Immutable raw evidence"
       >
-        <ToggleSwitch checked label="Immutable raw evidence" />
+        <Switch checked label="Immutable raw evidence" disabled />
       </SetRow>
     </>
   );
@@ -1214,7 +1174,7 @@ export function SettingsPage() {
     <main className="min-h-full bg-background" data-testid="settings-page">
       <div className="mx-auto w-full max-w-[860px] px-4 pt-7 pb-18 sm:px-7">
         <p className="mt-0 mb-7 text-[13px] text-muted-foreground">Settings</p>
-        <h1 className="mt-0 mb-2 text-[22px] leading-tight font-semibold tracking-[-0.03em]">
+        <h1 className="mt-0 mb-2 text-[26px] leading-none font-semibold tracking-[-0.04em]">
           {current?.label ?? "General"}
         </h1>
         {section === "appearance" ? (
