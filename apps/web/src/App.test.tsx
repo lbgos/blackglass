@@ -437,7 +437,9 @@ describe("Application shell", () => {
     expect(await screen.findByRole("dialog", { name: "Blackglass navigation" })).toBeTruthy();
     expect(screen.getByTestId("application-shell").dataset.sidebarOpen).toBe("false");
 
-    fireEvent.click(screen.getAllByRole("link", { name: "Engagements" })[0]!);
+    const dialog = await screen.findByRole("dialog", { name: "Blackglass navigation" });
+    fireEvent.click(within(dialog).getByRole("link", { name: "Settings" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Appearance" })).toBeTruthy();
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Blackglass navigation" })).toBeNull(),
     );
@@ -1226,13 +1228,13 @@ describe("Application routes", () => {
   });
 
   it.each([
-    ["/", "Workspace", "Dashboard"],
-    ["/engagements", "Engagements", "Engagements"],
-    ["/plugins", "Plugins", null],
-    ["/settings", "Appearance", null],
+    ["/", "Workspace"],
+    ["/engagements", "Engagements"],
+    ["/plugins", "Plugins"],
+    ["/settings", "Appearance"],
   ])(
     "renders a direct entry for %s inside the shell",
-    async (path, heading, globalActiveLabel) => {
+    async (path, heading) => {
       await renderApp(path);
 
       expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeTruthy();
@@ -1247,57 +1249,32 @@ describe("Application routes", () => {
         return;
       }
 
-      const globalNavigation = screen.getByRole("navigation", { name: "Global" });
-      const activeGlobalLinks = within(globalNavigation)
-        .getAllByRole("link")
-        .filter((link) => link.getAttribute("aria-current") === "page");
-      if (globalActiveLabel === null) {
-        // Plugins lives in the sidebar footer, not the global navigation.
-        expect(activeGlobalLinks).toHaveLength(0);
+      // The sidebar engagement list is the navigator; no global nav section remains.
+      expect(screen.queryByRole("navigation", { name: "Global" })).toBeNull();
+      if (path === "/plugins") {
+        // Plugins lives in the sidebar footer and still carries active state.
         expect(screen.getByRole("link", { name: "Plugins" }).getAttribute("aria-current")).toBe(
           "page",
         );
-      } else {
-        expect(activeGlobalLinks).toHaveLength(1);
-        expect(activeGlobalLinks[0]?.textContent).toBe(globalActiveLabel);
+      }
+      // The brand always links home.
+      const homeLinks = screen.getAllByRole("link", { name: "Blackglass home" });
+      expect(homeLinks.length).toBeGreaterThanOrEqual(1);
+      for (const link of homeLinks) {
+        expect(link.getAttribute("href")).toBe("/");
       }
     },
   );
 
-  it("navigates with exact active state while preserving the shell node", async () => {
-    await renderApp();
+  it("navigates home via the brand link while preserving the shell node", async () => {
+    await renderApp("/plugins");
     const shell = screen.getByTestId("application-shell");
-    const globalNavigation = screen.getByRole("navigation", { name: "Global" });
 
-    expect(
-      within(globalNavigation)
-        .getByRole("link", { name: "Dashboard" })
-        .getAttribute("aria-current"),
-    ).toBe("page");
-    fireEvent.click(within(globalNavigation).getByRole("link", { name: "Engagements" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "Engagements" })).toBeTruthy();
-    expect(screen.getByTestId("application-shell")).toBe(shell);
-    expect(
-      within(globalNavigation)
-        .getByRole("link", { name: "Dashboard" })
-        .getAttribute("aria-current"),
-    ).toBeNull();
-    expect(
-      within(globalNavigation)
-        .getByRole("link", { name: "Engagements" })
-        .getAttribute("aria-current"),
-    ).toBe("page");
-
-    // Plugins moved into the sidebar footer next to Settings.
-    fireEvent.click(screen.getByRole("link", { name: "Plugins" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "Plugins" })).toBeTruthy();
-    expect(screen.getByTestId("application-shell")).toBe(shell);
-    expect(
-      within(globalNavigation)
-        .getByRole("link", { name: "Engagements" })
-        .getAttribute("aria-current"),
-    ).toBeNull();
     expect(screen.getByRole("link", { name: "Plugins" }).getAttribute("aria-current")).toBe("page");
+    fireEvent.click(screen.getAllByRole("link", { name: "Blackglass home" })[0]!);
+    expect(await screen.findByRole("heading", { level: 1, name: "Workspace" })).toBeTruthy();
+    expect(screen.getByTestId("application-shell")).toBe(shell);
+    expect(screen.getByRole("link", { name: "Plugins" }).getAttribute("aria-current")).toBeNull();
   });
 
   it("renders the reference appearance layout with paired orbs and no extra Scheme block", async () => {
@@ -1406,8 +1383,8 @@ describe("Application routes", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
     let dialog = await screen.findByRole("dialog", { name: "Blackglass navigation" });
-    fireEvent.click(within(dialog).getByRole("link", { name: "Engagements" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "Engagements" })).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("link", { name: "Plugins" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Plugins" })).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
     fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
@@ -1565,11 +1542,7 @@ describe("Application routes", () => {
       "/",
     );
     expect(screen.getByTestId("application-shell")).toBeTruthy();
-    expect(
-      within(screen.getByRole("navigation", { name: "Global" }))
-        .getAllByRole("link")
-        .filter((link) => link.getAttribute("aria-current") === "page"),
-    ).toHaveLength(0);
+    expect(screen.queryByRole("navigation", { name: "Global" })).toBeNull();
   });
 
   it("keeps unknown engagement paths inside the shell", async () => {
