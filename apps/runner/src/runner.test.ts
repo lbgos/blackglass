@@ -821,37 +821,50 @@ describe("runner loop shutdown", () => {
         res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ code: "not_found" }));
       }
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-    const bound = server.address();
-    if (bound === null || typeof bound === "string") throw new Error("loopback bind failed");
-
-    const child = spawn(process.execPath, [tsxCli, cliEntry], {
-      env: {
-        ...process.env,
-        BLACKGLASS_API_BASE_URL: `http://127.0.0.1:${bound.port}`,
-        BLACKGLASS_RUNNER_DATA_DIR: cliDataDir,
-        BLACKGLASS_RUNNER_ID: "runner-cli-1",
-        BLACKGLASS_RUNNER_SECRET: "a".repeat(43),
-      },
-      stdio: "ignore",
-    });
-    let childExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-    let childClosed = false;
-    child.once("exit", (code, signal) => {
-      childExit = { code, signal };
-    });
-    child.once("close", () => {
-      childClosed = true;
-    });
+    let child: ReturnType<typeof spawn> | undefined;
+    let closed = false;
     try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+      const bound = server.address();
+      if (bound === null || typeof bound === "string") throw new Error("loopback bind failed");
+
+      child = spawn(process.execPath, [tsxCli, "--conditions=development", cliEntry], {
+        env: {
+          ...process.env,
+          BLACKGLASS_API_BASE_URL: `http://127.0.0.1:${bound.port}`,
+          BLACKGLASS_RUNNER_DATA_DIR: cliDataDir,
+          BLACKGLASS_RUNNER_ID: "runner-cli-1",
+          BLACKGLASS_RUNNER_SECRET: "a".repeat(43),
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      let stderrTail = "";
+      const stderr = child.stderr;
+      if (stderr) {
+        stderr.setEncoding("utf8");
+        stderr.on("data", (chunk: string) => {
+          stderrTail = (stderrTail + chunk).slice(-4000);
+        });
+      }
+      let spawnError: Error | null = null;
+      child.once("error", (err) => {
+        spawnError = err;
+      });
+      child.once("close", () => {
+        closed = true;
+      });
+      const describeChild = () =>
+        `exitCode=${String(child?.exitCode)} signalCode=${String(child?.signalCode)} spawnError=${spawnError?.message ?? "none"} stderr=${stderrTail}`;
+
       const pollDeadline = Date.now() + 7000;
-      while (leaseTimes.length < 3 && childExit === null && Date.now() < pollDeadline) {
+      while (leaseTimes.length < 3 && child.exitCode === null && child.signalCode === null && Date.now() < pollDeadline) {
         await new Promise((r) => setTimeout(r, 50));
       }
-      expect(childExit, "runner CLI exited while idle instead of polling").toBeNull();
+      expect(child.exitCode, `runner CLI exited while idle instead of polling (${describeChild()})`).toBeNull();
+      expect(child.signalCode, `runner CLI killed while idle instead of polling (${describeChild()})`).toBeNull();
       expect(leaseTimes.length).toBeGreaterThanOrEqual(3);
       let previous: number | undefined;
       for (const at of leaseTimes) {
@@ -860,17 +873,23 @@ describe("runner loop shutdown", () => {
       }
       child.kill("SIGTERM");
       const stopDeadline = Date.now() + 2500;
-      while (childExit === null && Date.now() < stopDeadline) {
+      while (child.exitCode === null && child.signalCode === null && Date.now() < stopDeadline) {
         await new Promise((r) => setTimeout(r, 25));
       }
-      expect(childExit, "runner CLI did not exit after SIGTERM").not.toBeNull();
-      expect(childExit?.code).toBe(0);
+      expect(child.signalCode, `runner CLI did not exit cleanly after SIGTERM (${describeChild()})`).toBeNull();
+      expect(child.exitCode, `runner CLI did not exit after SIGTERM (${describeChild()})`).toBe(0);
       const frozen = leaseTimes.length;
       await new Promise((r) => setTimeout(r, 1100));
       expect(leaseTimes.length).toBe(frozen);
     } finally {
-      if (!childClosed) child.kill("SIGKILL");
-      if (!childClosed) await new Promise((r) => child.once("close", r));
+      if (child && child.exitCode === null && child.signalCode === null) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+      if (child && !closed) await new Promise((r) => child.once("close", r));
       await new Promise((r) => server.close(r));
       await rm(cliDataDir, { recursive: true, force: true });
     }
