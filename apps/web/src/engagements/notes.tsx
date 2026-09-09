@@ -1,7 +1,7 @@
 import { Button, LoadingRegion, RecoverableError, Skeleton, StaleDataState } from "@blackglass/ui";
 import { useId } from "react";
 
-import { engagementMutationMessage } from "./errors.js";
+import { engagementNotesMutationMessage, isNotesRevisionConflict } from "./errors.js";
 import { useNotesDraftGuard } from "./notes-guard.js";
 import { useEngagementNotesEditor } from "./notes-query.js";
 
@@ -12,7 +12,20 @@ export function EngagementNotesSection({
   archived: boolean;
   engagementId: string;
 }) {
-  const { query, save, value, dirty, setDraft } = useEngagementNotesEditor(engagementId);
+  const {
+    query,
+    save,
+    value,
+    dirty,
+    setDraft,
+    conflictServer,
+    recoveryError,
+    recovering,
+    onSave,
+    loadServerVersion,
+    keepMine,
+    retryRecovery,
+  } = useEngagementNotesEditor(engagementId);
   const retry = () => void query.refetch();
   const hasData = query.data !== undefined;
   const guardActive = dirty && !archived && hasData;
@@ -20,18 +33,30 @@ export function EngagementNotesSection({
   const blocked = draftBlocker.status === "blocked";
   const titleId = useId();
   const copyId = useId();
+  const isConflict =
+    conflictServer !== null ||
+    (save.isError && isNotesRevisionConflict(save.error)) ||
+    recovering ||
+    recoveryError;
+  const conflictError = save.isError ? engagementNotesMutationMessage(save.error) : undefined;
   const body = (
     <NotesEditorBody
       archived={archived}
       value={value}
       dirty={dirty}
       pending={save.isPending}
-      error={save.isError ? engagementMutationMessage(save.error) : undefined}
+      error={save.isError && !isNotesRevisionConflict(save.error) ? conflictError : undefined}
+      conflictServer={conflictServer}
+      recoveryError={recoveryError}
+      recovering={recovering}
+      showConflict={isConflict}
       onChange={(next) => {
         setDraft(next);
-        if (save.isError) save.reset();
       }}
-      onSave={() => save.mutate(value)}
+      onSave={onSave}
+      onLoadServer={loadServerVersion}
+      onKeepMine={keepMine}
+      onRetryRecovery={retryRecovery}
     />
   );
 
@@ -99,16 +124,30 @@ function NotesEditorBody({
   dirty,
   pending,
   error,
+  conflictServer,
+  recoveryError,
+  recovering,
+  showConflict,
   onChange,
   onSave,
+  onLoadServer,
+  onKeepMine,
+  onRetryRecovery,
 }: {
   archived: boolean;
   value: string;
   dirty: boolean;
   pending: boolean;
   error: string | undefined;
+  conflictServer: { markdown: string; updatedAt: string; revision: number } | null;
+  recoveryError: boolean;
+  recovering: boolean;
+  showConflict: boolean;
   onChange: (next: string) => void;
   onSave: () => void;
+  onLoadServer: () => void;
+  onKeepMine: () => void;
+  onRetryRecovery: () => void;
 }) {
   return (
     <div>
@@ -134,6 +173,71 @@ function NotesEditorBody({
         <p className="mt-2 mb-0 text-[13px] text-destructive" role="alert">
           {error}
         </p>
+      ) : null}
+      {showConflict ? (
+        <div className="mt-3 rounded-[10px] border border-border px-3 py-3" role="alert">
+          <p className="m-0 text-[13px] font-semibold text-foreground">Notes changed elsewhere</p>
+          <p className="mt-1 mb-0 text-[12px] leading-5 text-muted-foreground">
+            Your edits are kept. Load the server version to discard yours, or keep yours to
+            overwrite the server version.
+          </p>
+          {recovering && conflictServer === null && !recoveryError ? (
+            <p className="mt-2 mb-0 text-[12px] text-muted-foreground">Checking server version…</p>
+          ) : null}
+          {recoveryError && conflictServer === null ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <p className="m-0 text-[12px] text-destructive">
+                Could not load the server version. Your edits are kept.
+              </p>
+              <Button type="button" variant="secondary" disabled={archived} onClick={onRetryRecovery}>
+                Retry loading server
+              </Button>
+            </div>
+          ) : null}
+          {conflictServer !== null ? (
+            <div className="mt-2">
+              <p className="m-0 text-[12px] text-muted-foreground">
+                Server revision {conflictServer.revision} saved {conflictServer.updatedAt}
+              </p>
+              <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-md border border-input bg-transparent px-2.5 py-2 font-mono text-[12px] text-foreground">
+                {conflictServer.markdown === "" ? "(empty notes)" : conflictServer.markdown}
+              </pre>
+              {recoveryError ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <p className="m-0 text-[12px] text-destructive">
+                    Could not refresh the server version. Your edits are kept.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={archived}
+                    onClick={onRetryRecovery}
+                  >
+                    Retry loading server
+                  </Button>
+                </div>
+              ) : null}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={archived || pending || recovering}
+                  onClick={onLoadServer}
+                >
+                  Load server version
+                </Button>
+                <Button
+                  type="button"
+                  disabled={archived || pending || recovering}
+                  onClick={onKeepMine}
+                  title={`Overwrite server revision ${conflictServer.revision} with your edits`}
+                >
+                  Keep mine
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </div>
       ) : null}
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <p className="m-0 text-[12px] text-muted-foreground" aria-live="polite">

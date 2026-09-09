@@ -18,15 +18,34 @@ export const EngagementNotesSchema = z.strictObject({
   engagementId: EngagementSchema.shape.id,
   markdown: EngagementNotesMarkdownSchema,
   updatedAt: z.iso.datetime(),
+  revision: z.number().int().safe().nonnegative(),
 });
 
 export const UpdateEngagementNotesRequestSchema = z.strictObject({
   markdown: EngagementNotesMarkdownSchema,
+  expectedRevision: z.number().int().safe().nonnegative(),
 });
 
 export const EngagementNotesResponseSchema = EngagementNotesSchema;
 
+export const UpdateEngagementNotesErrorSchema = z.union([
+  z.strictObject({ code: z.literal("invalid_request") }),
+  z.strictObject({ code: z.literal("engagement_not_found") }),
+  z.strictObject({ code: z.literal("engagement_archived") }),
+  z.strictObject({
+    code: z.literal("revision_conflict"),
+    resourceType: z.literal("engagement_notes"),
+    resourceId: EngagementSchema.shape.id,
+    currentRevision: z.number().int().safe().nonnegative(),
+  }),
+  z.strictObject({ code: z.literal("invalid_persisted_data") }),
+  z.strictObject({ code: z.literal("storage_busy") }),
+]);
+
 export type EngagementNotes = z.infer<typeof EngagementNotesSchema>;
 export type UpdateEngagementNotesRequest = z.infer<
   typeof UpdateEngagementNotesRequestSchema
+>;
+export type UpdateEngagementNotesError = z.infer<
+  typeof UpdateEngagementNotesErrorSchema
 >;

@@ -4,11 +4,12 @@ import {
   type EngagementNotes,
 } from "@blackglass/contracts";
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
-  EngagementMutationClientError,
-  parseEngagementMutationError,
+  EngagementNotesMutationClientError,
+  isNotesRevisionConflict,
+  parseEngagementNotesMutationError,
 } from "./errors.js";
 import { reportQueryKey } from "./report-query.js";
 
@@ -52,10 +53,10 @@ export async function fetchEngagementNotes(
 
 export async function saveEngagementNotesRequest(
   engagementId: string,
-  markdown: string,
+  input: { markdown: string; expectedRevision: number },
   signal?: AbortSignal,
 ): Promise<EngagementNotes> {
-  const body = UpdateEngagementNotesRequestSchema.parse({ markdown });
+  const body = UpdateEngagementNotesRequestSchema.parse(input);
   let response: Response;
   try {
     response = await fetch(`/api/v1/engagements/${engagementId}/notes`, {
@@ -65,17 +66,17 @@ export async function saveEngagementNotesRequest(
       ...(signal ? { signal } : {}),
     });
   } catch {
-    throw new EngagementMutationClientError("request_failed");
+    throw new EngagementNotesMutationClientError("request_failed");
   }
   let payload: unknown;
   try {
     payload = await response.json();
   } catch {
-    throw new EngagementMutationClientError("request_failed");
+    throw new EngagementNotesMutationClientError("request_failed");
   }
-  if (response.status !== 200) throw parseEngagementMutationError(payload);
+  if (response.status !== 200) throw parseEngagementNotesMutationError(payload);
   const parsed = EngagementNotesResponseSchema.safeParse(payload);
-  if (!parsed.success) throw new EngagementMutationClientError("invalid_persisted_data");
+  if (!parsed.success) throw new EngagementNotesMutationClientError("invalid_persisted_data");
   return parsed.data;
 }
 
@@ -93,7 +94,8 @@ export function useEngagementNotesQuery(engagementId: string) {
 export function useSaveEngagementNotesMutation(engagementId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (markdown: string) => saveEngagementNotesRequest(engagementId, markdown),
+    mutationFn: (input: { markdown: string; expectedRevision: number }) =>
+      saveEngagementNotesRequest(engagementId, input),
     onSuccess: (notes) => {
       queryClient.setQueryData<EngagementNotes>(
         engagementNotesQueryKey(engagementId),
@@ -104,20 +106,161 @@ export function useSaveEngagementNotesMutation(engagementId: string) {
   });
 }
 
+interface NotesBase {
+  markdown: string;
+  revision: number;
+}
+
 export function useEngagementNotesEditor(engagementId: string) {
   const query = useEngagementNotesQuery(engagementId);
   const save = useSaveEngagementNotesMutation(engagementId);
-  const serverMarkdown = query.data?.markdown;
-  const [draft, setDraft] = useState<string | undefined>(undefined);
+  const serverNotes = query.data;
+  const serverMarkdown = serverNotes?.markdown;
+  const [draft, setDraftState] = useState<string | undefined>(undefined);
+  const [base, setBase] = useState<NotesBase | undefined>(undefined);
+  const [conflictServer, setConflictServer] = useState<EngagementNotes | null>(null);
+  const [recoveryError, setRecoveryError] = useState(false);
+  const [recovering, setRecovering] = useState(false);
+  const engagementRef = useRef(engagementId);
+  engagementRef.current = engagementId;
+  const requestSeq = useRef(0);
+
   useEffect(() => {
-    setDraft(undefined);
+    setDraftState(undefined);
+    setBase(undefined);
+    setConflictServer(null);
+    setRecoveryError(false);
+    setRecovering(false);
+    requestSeq.current += 1;
   }, [engagementId]);
+
   useEffect(() => {
-    if (serverMarkdown !== undefined) {
-      setDraft((current) => (current === undefined ? serverMarkdown : current));
+    if (serverNotes === undefined) return;
+    if (base === undefined && draft === undefined) {
+      setDraftState(serverNotes.markdown);
+      setBase({ markdown: serverNotes.markdown, revision: serverNotes.revision });
+      return;
     }
-  }, [serverMarkdown]);
+    if (base !== undefined && draft !== undefined) {
+      const wasClean = draft === base.markdown;
+      const serverAdvanced =
+        serverNotes.markdown !== base.markdown || serverNotes.revision !== base.revision;
+      if (wasClean && serverAdvanced) {
+        setDraftState(serverNotes.markdown);
+        setBase({ markdown: serverNotes.markdown, revision: serverNotes.revision });
+        return;
+      }
+      if (!wasClean && draft === serverNotes.markdown && serverNotes.revision !== base.revision) {
+        setBase({ markdown: serverNotes.markdown, revision: serverNotes.revision });
+      }
+    }
+  }, [serverNotes, base, draft]);
+
+  const setDraft = (next: string) => {
+    setDraftState(next);
+    if (save.isError) save.reset();
+  };
+
   const value = draft ?? serverMarkdown ?? "";
   const dirty = draft !== undefined && draft !== (serverMarkdown ?? "");
-  return { query, save, value, dirty, setDraft };
+  const baseRevision = base?.revision ?? serverNotes?.revision ?? 0;
+
+  const fetchRecovery = async (): Promise<EngagementNotes | null> => {
+    const seen = engagementId;
+    const seq = ++requestSeq.current;
+    setRecovering(true);
+    setRecoveryError(false);
+    try {
+      const fresh = await fetchEngagementNotes(seen);
+      if (engagementRef.current !== seen || requestSeq.current !== seq) return null;
+      setConflictServer(fresh);
+      setRecoveryError(false);
+      return fresh;
+    } catch {
+      if (engagementRef.current !== seen || requestSeq.current !== seq) return null;
+      setRecoveryError(true);
+      return null;
+    } finally {
+      if (engagementRef.current === seen && requestSeq.current === seq) {
+        setRecovering(false);
+      }
+    }
+  };
+
+  const saveWithBase = (
+    markdown: string,
+    expectedRevision: number,
+    options?: {
+      onSuccess?: (notes: EngagementNotes) => void;
+      onError?: (error: unknown) => void;
+    },
+  ) => {
+    save.mutate(
+      { markdown, expectedRevision },
+      {
+        onSuccess: (notes) => {
+          if (engagementRef.current !== engagementId) return;
+          setBase({ markdown: notes.markdown, revision: notes.revision });
+          setConflictServer(null);
+          setRecoveryError(false);
+          options?.onSuccess?.(notes);
+        },
+        onError: (error) => {
+          if (isNotesRevisionConflict(error)) {
+            void fetchRecovery();
+          }
+          options?.onError?.(error);
+        },
+      },
+    );
+  };
+
+  const onSave = () => {
+    if (draft === undefined) return;
+    saveWithBase(draft, baseRevision);
+  };
+
+  const loadServerVersion = () => {
+    if (conflictServer === null) return;
+    if (engagementRef.current !== engagementId) return;
+    const server = conflictServer;
+    setDraftState(server.markdown);
+    setBase({ markdown: server.markdown, revision: server.revision });
+    setConflictServer(null);
+    setRecoveryError(false);
+    if (save.isError) save.reset();
+  };
+
+  const keepMine = () => {
+    if (conflictServer === null || draft === undefined) return;
+    const server = conflictServer;
+    const local = draft;
+    saveWithBase(local, server.revision, {
+      onError: (error) => {
+        if (isNotesRevisionConflict(error)) {
+          void fetchRecovery();
+        }
+      },
+    });
+  };
+
+  const retryRecovery = () => {
+    void fetchRecovery();
+  };
+
+  return {
+    query,
+    save: { ...save, mutateWithBase: saveWithBase },
+    value,
+    dirty,
+    setDraft,
+    baseRevision,
+    conflictServer,
+    recoveryError,
+    recovering,
+    onSave,
+    loadServerVersion,
+    keepMine,
+    retryRecovery,
+  };
 }

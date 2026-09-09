@@ -123,6 +123,7 @@ function baseStubResponse(url: string): Response | undefined {
       engagementId: activeEngagement.id,
       markdown: "",
       updatedAt: "2026-08-12T12:00:00.000Z",
+      revision: 0,
     });
   }
   if (url.endsWith("/findings")) return response([]);
@@ -412,6 +413,7 @@ describe("engagement tabs", () => {
           engagementId: activeEngagement.id,
           markdown: "# draft",
           updatedAt: "2026-08-12T12:01:00.000Z",
+          revision: 1,
         });
       }
       if (init?.method !== undefined && init.method !== "GET") {
@@ -461,12 +463,16 @@ describe("engagement tabs", () => {
         );
       }
       if (url.endsWith("/notes") && init?.method === "PUT") {
-        const body = JSON.parse(String(init.body)) as { markdown: string };
+        const body = JSON.parse(String(init.body)) as {
+          markdown: string;
+          expectedRevision: number;
+        };
         stored = body.markdown;
         return response({
           engagementId: activeEngagement.id,
           markdown: stored,
           updatedAt: "2026-08-12T14:00:00.000Z",
+          revision: body.expectedRevision + 1,
         });
       }
       if (url.endsWith("/notes")) {
@@ -474,6 +480,7 @@ describe("engagement tabs", () => {
           engagementId: activeEngagement.id,
           markdown: stored,
           updatedAt: "2026-08-12T12:00:00.000Z",
+          revision: 1,
         });
       }
       if (init?.method !== undefined && init.method !== "GET") {
@@ -522,6 +529,7 @@ describe("engagement tabs", () => {
           engagementId: activeEngagement.id,
           markdown: "# draft",
           updatedAt: "2026-08-12T12:01:00.000Z",
+          revision: 1,
         });
       }
       if (init?.method !== undefined && init.method !== "GET") {

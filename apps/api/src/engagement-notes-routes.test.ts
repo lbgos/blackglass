@@ -43,7 +43,7 @@ async function createRepositoryBackedApp() {
 }
 
 describe("engagement notes routes", () => {
-  it("round-trips markdown with a byte-identical body", async () => {
+  it("round-trips markdown with revision 0 -> 1", async () => {
     const { app, repository } = await createRepositoryBackedApp();
     const created = repository.createEngagement({
       name: "Notes lab",
@@ -56,12 +56,13 @@ describe("engagement notes routes", () => {
     const saved = await app.inject({
       method: "PUT",
       url: `/api/v1/engagements/${created.value.id}/notes`,
-      payload: { markdown },
+      payload: { markdown, expectedRevision: 0 },
     });
     expect(saved.statusCode).toBe(200);
     expect(saved.json()).toMatchObject({
       engagementId: created.value.id,
       markdown,
+      revision: 1,
     });
 
     const loaded = await app.inject({
@@ -72,11 +73,12 @@ describe("engagement notes routes", () => {
     expect(loaded.json()).toMatchObject({
       engagementId: created.value.id,
       markdown,
+      revision: 1,
     });
     expect(loaded.json().markdown).toBe(markdown);
   });
 
-  it("returns an empty document before the first save", async () => {
+  it("returns revision 0 before the first save", async () => {
     const { app, repository } = await createRepositoryBackedApp();
     const created = repository.createEngagement({
       name: "Notes lab",
@@ -93,7 +95,72 @@ describe("engagement notes routes", () => {
     expect(response.json()).toMatchObject({
       engagementId: created.value.id,
       markdown: "",
+      revision: 0,
     });
+  });
+
+  it("rejects a stale revision without overwriting", async () => {
+    const { app, repository } = await createRepositoryBackedApp();
+    const created = repository.createEngagement({
+      name: "Notes lab",
+      kind: "lab",
+      autoContinueWarnings: false,
+    });
+    if (!created.ok) throw new Error(`Fixture failed: ${created.error.code}`);
+    const first = await app.inject({
+      method: "PUT",
+      url: `/api/v1/engagements/${created.value.id}/notes`,
+      payload: { markdown: "# v1", expectedRevision: 0 },
+    });
+    expect(first.statusCode).toBe(200);
+
+    const stale = await app.inject({
+      method: "PUT",
+      url: `/api/v1/engagements/${created.value.id}/notes`,
+      payload: { markdown: "# stale", expectedRevision: 0 },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toEqual({
+      code: "revision_conflict",
+      resourceType: "engagement_notes",
+      resourceId: created.value.id,
+      currentRevision: 1,
+    });
+
+    const loaded = await app.inject({
+      method: "GET",
+      url: `/api/v1/engagements/${created.value.id}/notes`,
+    });
+    expect(loaded.json()).toMatchObject({ markdown: "# v1", revision: 1 });
+  });
+
+  it("rejects missing revisions and unsafe integers", async () => {
+    const { app, repository } = await createRepositoryBackedApp();
+    const created = repository.createEngagement({
+      name: "Notes lab",
+      kind: "lab",
+      autoContinueWarnings: false,
+    });
+    if (!created.ok) throw new Error(`Fixture failed: ${created.error.code}`);
+
+    expect(
+      (
+        await app.inject({
+          method: "PUT",
+          url: `/api/v1/engagements/${created.value.id}/notes`,
+          payload: { markdown: "# notes" },
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: "PUT",
+          url: `/api/v1/engagements/${created.value.id}/notes`,
+          payload: { markdown: "# notes", expectedRevision: -1 },
+        })
+      ).statusCode,
+    ).toBe(400);
   });
 
   it("rejects oversize bodies and unknown engagements", async () => {
@@ -110,7 +177,7 @@ describe("engagement notes routes", () => {
         await app.inject({
           method: "PUT",
           url: `/api/v1/engagements/${created.value.id}/notes`,
-          payload: { markdown: "a".repeat(65_537) },
+          payload: { markdown: "a".repeat(65_537), expectedRevision: 0 },
         })
       ).statusCode,
     ).toBe(400);
@@ -119,7 +186,7 @@ describe("engagement notes routes", () => {
         await app.inject({
           method: "PUT",
           url: "/api/v1/engagements/10000000-0000-4000-8000-000000000099/notes",
-          payload: { markdown: "# notes" },
+          payload: { markdown: "# notes", expectedRevision: 0 },
         })
       ).statusCode,
     ).toBe(404);
@@ -147,7 +214,7 @@ describe("engagement notes routes", () => {
     const response = await app.inject({
       method: "PUT",
       url: `/api/v1/engagements/${created.value.id}/notes`,
-      payload: { markdown: "# notes" },
+      payload: { markdown: "# notes", expectedRevision: 0 },
     });
     expect(response.statusCode).toBe(409);
     expect(response.json()).toEqual({ code: "engagement_archived" });

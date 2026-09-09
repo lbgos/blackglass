@@ -112,6 +112,7 @@ export const engagementNotes = sqliteTable(
       .references(() => engagements.id, { onDelete: "restrict" }),
     markdown: text("markdown").notNull(),
     updatedAt: text("updated_at").notNull(),
+    revision: integer("revision").notNull(),
   },
   (table) => [
     check(
@@ -119,6 +120,7 @@ export const engagementNotes = sqliteTable(
       sql`length(cast(${table.markdown} as blob)) <= 65536`,
     ),
     check("engagement_notes_updated_at", sql`length(${table.updatedAt}) >= 20`),
+    check("engagement_notes_revision", sql`${table.revision} >= 1`),
   ],
 );
 

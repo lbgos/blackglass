@@ -112,6 +112,7 @@ afterEach(() => {
 describe("engagement notes", () => {
   it("loads an empty scratchpad, tracks dirt, and saves explicitly", async () => {
     let stored = "";
+    let storedRevision = 0;
     const puts: unknown[] = [];
     vi.stubGlobal(
       "fetch",
@@ -131,18 +132,24 @@ describe("engagement notes", () => {
               engagementId: activeEngagement.id,
               markdown: stored,
               updatedAt: "2026-08-12T12:00:00.000Z",
+              revision: storedRevision,
             }),
           );
         }
         if (url.endsWith("/notes") && init?.method === "PUT") {
-          const body = JSON.parse(String(init.body)) as { markdown: string };
+          const body = JSON.parse(String(init.body)) as {
+            markdown: string;
+            expectedRevision: number;
+          };
           puts.push(body);
           stored = body.markdown;
+          storedRevision = body.expectedRevision + 1;
           return Promise.resolve(
             response({
               engagementId: activeEngagement.id,
               markdown: stored,
               updatedAt: "2026-08-12T12:01:00.000Z",
+              revision: storedRevision,
             }),
           );
         }
@@ -164,7 +171,7 @@ describe("engagement notes", () => {
 
     fireEvent.click(save);
     await waitFor(() => expect(screen.getByText("Saved")).toBeTruthy());
-    expect(puts).toEqual([{ markdown: "# creds\nadmin / secret" }]);
+    expect(puts).toEqual([{ markdown: "# creds\nadmin / secret", expectedRevision: 0 }]);
     expect((screen.getByLabelText("Markdown") as HTMLTextAreaElement).value).toBe(
       "# creds\nadmin / secret",
     );
@@ -192,6 +199,7 @@ describe("engagement notes", () => {
               engagementId: activeEngagement.id,
               markdown: "",
               updatedAt: "2026-08-12T12:00:00.000Z",
+              revision: 0,
             }),
           );
         }
@@ -229,6 +237,7 @@ describe("engagement notes", () => {
               engagementId: activeEngagement.id,
               markdown: "",
               updatedAt: "2026-08-12T12:00:00.000Z",
+              revision: 0,
             }),
           );
         }
@@ -239,6 +248,7 @@ describe("engagement notes", () => {
               engagementId: activeEngagement.id,
               markdown: "# draft",
               updatedAt: "2026-08-12T12:01:00.000Z",
+              revision: 1,
             }),
           );
         }
@@ -289,6 +299,7 @@ describe("engagement notes", () => {
               engagementId: activeEngagement.id,
               markdown: "",
               updatedAt: "2026-08-12T12:00:00.000Z",
+              revision: 0,
             }),
           );
         }
@@ -307,6 +318,7 @@ describe("engagement notes", () => {
 
   it("allows navigation after saving and after reverting to saved", async () => {
     let stored = "";
+    let storedRevision = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -325,17 +337,23 @@ describe("engagement notes", () => {
               engagementId: activeEngagement.id,
               markdown: stored,
               updatedAt: "2026-08-12T12:00:00.000Z",
+              revision: storedRevision,
             }),
           );
         }
         if (url.endsWith("/notes") && init?.method === "PUT") {
-          const body = JSON.parse(String(init.body)) as { markdown: string };
+          const body = JSON.parse(String(init.body)) as {
+            markdown: string;
+            expectedRevision: number;
+          };
           stored = body.markdown;
+          storedRevision = body.expectedRevision + 1;
           return Promise.resolve(
             response({
               engagementId: activeEngagement.id,
               markdown: stored,
               updatedAt: "2026-08-12T12:01:00.000Z",
+              revision: storedRevision,
             }),
           );
         }
@@ -371,6 +389,7 @@ describe("engagement notes", () => {
   it("does not transplant a dirty draft when switching engagement", async () => {
     const secondEngagement = { ...activeEngagement, id: "10000000-0000-4000-8000-000000000002", name: "Second lab" };
     const stored: Record<string, string> = { [activeEngagement.id]: "", [secondEngagement.id]: "saved second" };
+    const revisions: Record<string, number> = { [activeEngagement.id]: 0, [secondEngagement.id]: 1 };
     const puts: unknown[] = [];
     vi.stubGlobal(
       "fetch",
@@ -403,6 +422,7 @@ describe("engagement notes", () => {
               engagementId: id,
               markdown: stored[id] ?? "",
               updatedAt: "2026-08-12T12:00:00.000Z",
+              revision: revisions[id] ?? 0,
             }),
           );
         }
@@ -451,11 +471,15 @@ describe("engagement notes", () => {
               engagementId: activeEngagement.id,
               markdown: "",
               updatedAt: "2026-08-12T12:00:00.000Z",
+              revision: 0,
             }),
           );
         }
         if (url.endsWith("/notes") && init?.method === "PUT") {
-          const body = JSON.parse(String(init.body)) as { markdown: string };
+          const body = JSON.parse(String(init.body)) as {
+            markdown: string;
+            expectedRevision: number;
+          };
           return new Promise<Response>((resolve) => {
             resolvePut = () =>
               resolve(
@@ -463,6 +487,7 @@ describe("engagement notes", () => {
                   engagementId: activeEngagement.id,
                   markdown: body.markdown,
                   updatedAt: "2026-08-12T12:01:00.000Z",
+                  revision: body.expectedRevision + 1,
                 }),
               );
           });
@@ -482,5 +507,231 @@ describe("engagement notes", () => {
     resolvePut?.();
     await waitFor(() => expect(screen.getByText("Unsaved changes")).toBeTruthy());
     expect((screen.getByLabelText("Markdown") as HTMLTextAreaElement).value).toBe("second");
+  });
+
+  it("preserves a stale draft on 409 and recovers via explicit actions", async () => {
+    let stored = "# server v1";
+    let storedRevision = 1;
+    const puts: { markdown: string; expectedRevision: number }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/system/status")) return Promise.resolve(response(readyStatus));
+        if (url === "/api/v1/engagements") return Promise.resolve(response([activeEngagement]));
+        if (url === `/api/v1/engagements/${activeEngagement.id}`) {
+          return Promise.resolve(
+            response({ engagement: activeEngagement, activeScopeRevision: null }),
+          );
+        }
+        if (url.endsWith("/services")) return Promise.resolve(response([]));
+        if (url.endsWith("/notes") && (init?.method === undefined || init.method === "GET")) {
+          return Promise.resolve(
+            response({
+              engagementId: activeEngagement.id,
+              markdown: stored,
+              updatedAt: "2026-08-12T12:00:00.000Z",
+              revision: storedRevision,
+            }),
+          );
+        }
+        if (url.endsWith("/notes") && init?.method === "PUT") {
+          const body = JSON.parse(String(init.body)) as {
+            markdown: string;
+            expectedRevision: number;
+          };
+          puts.push(body);
+          if (body.expectedRevision !== storedRevision) {
+            return Promise.resolve(
+              response(
+                {
+                  code: "revision_conflict",
+                  resourceType: "engagement_notes",
+                  resourceId: activeEngagement.id,
+                  currentRevision: storedRevision,
+                },
+                409,
+              ),
+            );
+          }
+          stored = body.markdown;
+          storedRevision += 1;
+          return Promise.resolve(
+            response({
+              engagementId: activeEngagement.id,
+              markdown: stored,
+              updatedAt: "2026-08-12T12:01:00.000Z",
+              revision: storedRevision,
+            }),
+          );
+        }
+        return Promise.resolve(response([]));
+      }),
+    );
+
+    // Simulate the other tab winning before this tab loads its base.
+    stored = "# other tab";
+    storedRevision = 2;
+    await renderWorkspace(`/engagements/${activeEngagement.id}?tab=notes`);
+    const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
+    expect(editor.value).toBe("# other tab");
+
+    // Make the server advance again so this tab's base goes stale.
+    stored = "# newer server";
+    storedRevision = 3;
+    fireEvent.change(editor, { target: { value: "# my draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
+
+    expect(await screen.findByText("Notes changed elsewhere")).toBeTruthy();
+    expect((screen.getByLabelText("Markdown") as HTMLTextAreaElement).value).toBe("# my draft");
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    expect(puts).toEqual([{ markdown: "# my draft", expectedRevision: 2 }]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Keep mine" }));
+    await waitFor(() => expect(screen.getByText("Saved")).toBeTruthy());
+    expect((screen.getByLabelText("Markdown") as HTMLTextAreaElement).value).toBe("# my draft");
+    expect(puts).toEqual([
+      { markdown: "# my draft", expectedRevision: 2 },
+      { markdown: "# my draft", expectedRevision: 3 },
+    ]);
+    expect(notesLeakInStorage(["# my draft"])).toBeNull();
+  });
+
+  it("keeps the draft when recovery GET fails and retries", async () => {
+    let getCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/system/status")) return Promise.resolve(response(readyStatus));
+        if (url === "/api/v1/engagements") return Promise.resolve(response([activeEngagement]));
+        if (url === `/api/v1/engagements/${activeEngagement.id}`) {
+          return Promise.resolve(
+            response({ engagement: activeEngagement, activeScopeRevision: null }),
+          );
+        }
+        if (url.endsWith("/services")) return Promise.resolve(response([]));
+        if (url.endsWith("/notes") && (init?.method === undefined || init.method === "GET")) {
+          getCalls += 1;
+          if (getCalls === 1) {
+            return Promise.resolve(
+              response({
+                engagementId: activeEngagement.id,
+                markdown: "",
+                updatedAt: "2026-08-12T12:00:00.000Z",
+                revision: 0,
+              }),
+            );
+          }
+          return Promise.resolve(response({ code: "storage_busy" }, 503));
+        }
+        if (url.endsWith("/notes") && init?.method === "PUT") {
+          return Promise.resolve(
+            response(
+              {
+                code: "revision_conflict",
+                resourceType: "engagement_notes",
+                resourceId: activeEngagement.id,
+                currentRevision: 2,
+              },
+              409,
+            ),
+          );
+        }
+        return Promise.resolve(response([]));
+      }),
+    );
+
+    await renderWorkspace(`/engagements/${activeEngagement.id}?tab=notes`);
+    const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: "# local" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
+
+    expect(await screen.findByText("Could not load the server version. Your edits are kept.")).toBeTruthy();
+    expect((screen.getByLabelText("Markdown") as HTMLTextAreaElement).value).toBe("# local");
+    expect(screen.queryByRole("button", { name: "Keep mine" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading server" }));
+    await waitFor(() =>
+      expect(screen.getByText("Could not load the server version. Your edits are kept.")).toBeTruthy(),
+    );
+    expect((screen.getByLabelText("Markdown") as HTMLTextAreaElement).value).toBe("# local");
+  });
+
+  it("does not upgrade the base on background refetch while dirty", async () => {
+    let stored = "";
+    let storedRevision = 0;
+    let allowRefetch = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/system/status")) return Promise.resolve(response(readyStatus));
+        if (url === "/api/v1/engagements") return Promise.resolve(response([activeEngagement]));
+        if (url === `/api/v1/engagements/${activeEngagement.id}`) {
+          return Promise.resolve(
+            response({ engagement: activeEngagement, activeScopeRevision: null }),
+          );
+        }
+        if (url.endsWith("/services")) return Promise.resolve(response([]));
+        if (url.endsWith("/notes") && (init?.method === undefined || init.method === "GET")) {
+          if (allowRefetch) {
+            return Promise.resolve(
+              response({
+                engagementId: activeEngagement.id,
+                markdown: "# other tab",
+                updatedAt: "2026-08-12T12:02:00.000Z",
+                revision: 2,
+              }),
+            );
+          }
+          return Promise.resolve(
+            response({
+              engagementId: activeEngagement.id,
+              markdown: stored,
+              updatedAt: "2026-08-12T12:00:00.000Z",
+              revision: storedRevision,
+            }),
+          );
+        }
+        if (url.endsWith("/notes") && init?.method === "PUT") {
+          const body = JSON.parse(String(init.body)) as {
+            markdown: string;
+            expectedRevision: number;
+          };
+          if (allowRefetch || body.expectedRevision !== storedRevision) {
+            return Promise.resolve(
+              response(
+                {
+                  code: "revision_conflict",
+                  resourceType: "engagement_notes",
+                  resourceId: activeEngagement.id,
+                  currentRevision: 2,
+                },
+                409,
+              ),
+            );
+          }
+          stored = body.markdown;
+          storedRevision = body.expectedRevision + 1;
+          return Promise.resolve(
+            response({
+              engagementId: activeEngagement.id,
+              markdown: stored,
+              updatedAt: "2026-08-12T12:01:00.000Z",
+              revision: storedRevision,
+            }),
+          );
+        }
+        return Promise.resolve(response([]));
+      }),
+    );
+
+    await renderWorkspace(`/engagements/${activeEngagement.id}?tab=notes`);
+    const editor = (await screen.findByLabelText("Markdown")) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: "# mine" } });
+    allowRefetch = true;
+    fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
+    expect(await screen.findByText("Notes changed elsewhere")).toBeTruthy();
+    expect((screen.getByLabelText("Markdown") as HTMLTextAreaElement).value).toBe("# mine");
   });
 });
