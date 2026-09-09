@@ -834,10 +834,10 @@ describe("runner loop shutdown", () => {
       child = spawn(process.execPath, [tsxCli, "--conditions=development", cliEntry], {
         env: {
           ...process.env,
-          BLACKGLASS_API_BASE_URL: `http://127.0.0.1:${bound.port}`,
-          BLACKGLASS_RUNNER_DATA_DIR: cliDataDir,
-          BLACKGLASS_RUNNER_ID: "runner-cli-1",
-          BLACKGLASS_RUNNER_SECRET: "a".repeat(43),
+          STONEHUSH_API_BASE_URL: `http://127.0.0.1:${bound.port}`,
+          STONEHUSH_RUNNER_DATA_DIR: cliDataDir,
+          STONEHUSH_RUNNER_ID: "runner-cli-1",
+          STONEHUSH_RUNNER_SECRET: "a".repeat(43),
         },
         stdio: ["ignore", "ignore", "pipe"],
       });
