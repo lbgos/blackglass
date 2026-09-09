@@ -1,13 +1,13 @@
 import { useState } from "react";
 
-import type { Finding } from "@blackglass/contracts";
+import type { Finding } from "@stonehush/contracts";
 import {
   Button,
   LoadingRegion,
   RecoverableError,
   Skeleton,
   StaleDataState,
-} from "@blackglass/ui";
+} from "@stonehush/ui";
 
 import { findingMutationMessage } from "./errors.js";
 import {
@@ -311,7 +311,7 @@ function FindingRow({
                 disabled={archived}
                 onChange={onToggleAdvisor}
                 aria-label={`Select finding ${finding.title} for advisor`}
-                className="mt-0.5 shrink-0 accent-primary"
+                className="mt-0.5 size-4 shrink-0 cursor-pointer accent-primary"
               />
             ) : null}
             <span className="min-w-0 flex-1 truncate">{finding.title}</span>

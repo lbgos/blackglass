@@ -7,7 +7,7 @@ import {
   type EngagementMutationError,
   type FindingMutationError,
   type UpdateEngagementNotesError,
-} from "@blackglass/contracts";
+} from "@stonehush/contracts";
 
 export const ENGAGEMENTS_QUERY_ERROR_MESSAGE = "The engagement list request failed.";
 export const ENGAGEMENT_DETAIL_QUERY_ERROR_MESSAGE = "The engagement request failed.";

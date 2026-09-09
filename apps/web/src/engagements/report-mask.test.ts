@@ -4,8 +4,8 @@ import {
   ENGAGEMENT_NOTES_MAX_BYTES,
   ReportBundleSchema,
   type ReportBundle,
-} from "@blackglass/contracts";
-import { ADVISOR_REDACTION_TOKEN } from "@blackglass/domain";
+} from "@stonehush/contracts";
+import { ADVISOR_REDACTION_TOKEN } from "@stonehush/domain";
 
 import { maskReportBundle } from "./report-mask.js";
 

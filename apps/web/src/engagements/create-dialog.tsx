@@ -4,8 +4,8 @@ import {
   type CreateEngagementInput,
   type Engagement,
   type EngagementKind,
-} from "@blackglass/contracts";
-import { Button, cn } from "@blackglass/ui";
+} from "@stonehush/contracts";
+import { Button, cn } from "@stonehush/ui";
 import { useNavigate } from "@tanstack/react-router";
 import {
   useEffect,
@@ -191,7 +191,7 @@ export function CreateEngagementDialog({ onOpenChange, open }: CreateEngagementD
         <h2 id={titleId} className="mt-2 mb-1 text-lg font-semibold tracking-[-0.03em]">
           Start an engagement
         </h2>
-        <p id={descriptionId} className="mt-0 mb-4 text-sm text-muted-foreground">
+        <p id={descriptionId} className="mt-0 mb-4 text-[13px] text-muted-foreground">
           Creates a local engagement record. Targets, recipes, and runs are not available yet.
         </p>
         <form className="grid gap-3" onSubmit={submit}>
@@ -275,7 +275,7 @@ export function CreateEngagementDialog({ onOpenChange, open }: CreateEngagementD
               }
             />
           </Field>
-          <label className="flex min-h-11 items-start gap-3 text-sm text-foreground">
+          <label className="flex min-h-11 items-start gap-3 text-[13px] text-foreground">
             <input
               type="checkbox"
               name="autoContinueWarnings"
@@ -291,7 +291,7 @@ export function CreateEngagementDialog({ onOpenChange, open }: CreateEngagementD
             <span>Always continue warnings for this engagement</span>
           </label>
           {mutationError && (
-            <p className="m-0 text-sm text-destructive" role="alert">
+            <p className="m-0 text-[13px] text-destructive" role="alert">
               {mutationError}
             </p>
           )}

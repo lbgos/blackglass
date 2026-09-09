@@ -4,8 +4,8 @@ import type {
   PersistedAction,
   SavedScopeRule,
   WarningReasonCode,
-} from "@blackglass/contracts";
-import { normalizeTarget } from "@blackglass/domain";
+} from "@stonehush/contracts";
+import { normalizeTarget } from "@stonehush/domain";
 
 import { createDraftScopeRule, SCOPE_TARGET_FIELD_ERROR } from "./scope-rules.js";
 

@@ -4,7 +4,7 @@ import {
   SYSTEM_STATUS_VERSION,
   SystemStatusResponseSchema,
   type Readiness,
-} from "@blackglass/contracts";
+} from "@stonehush/contracts";
 import Fastify, {
   type FastifyInstance,
   type FastifyServerOptions,
@@ -21,7 +21,7 @@ import type {
   RunRepository,
   RunnerRepository,
   SettingsRepository,
-} from "@blackglass/db";
+} from "@stonehush/db";
 
 import { registerActionMutationRoutes } from "./action-mutation-routes.js";
 import { registerActionRoutes } from "./action-routes.js";

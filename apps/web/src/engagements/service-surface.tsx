@@ -1,5 +1,5 @@
-import type { NmapProjectedService } from "@blackglass/contracts";
-import { LoadingRegion, RecoverableError, Skeleton, StaleDataState } from "@blackglass/ui";
+import type { NmapProjectedService } from "@stonehush/contracts";
+import { LoadingRegion, RecoverableError, Skeleton, StaleDataState } from "@stonehush/ui";
 
 import { formatEngagementTimestamp } from "./format.js";
 import { useEngagementServicesQuery } from "./query.js";
