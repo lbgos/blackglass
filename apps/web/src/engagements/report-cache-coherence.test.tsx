@@ -118,15 +118,17 @@ function renderReport(client: QueryClient, engagementId: string) {
 function NotesSaver({
   engagementId,
   markdown,
+  expectedRevision = 0,
   onSettled,
 }: {
   engagementId: string;
   markdown: string;
+  expectedRevision?: number;
   onSettled: () => void;
 }) {
   const save = useSaveEngagementNotesMutation(engagementId);
   useEffect(() => {
-    save.mutate(markdown, { onSettled });
+    save.mutate({ markdown, expectedRevision }, { onSettled });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return null;
@@ -205,6 +207,7 @@ describe("report cache coherence", () => {
               engagementId: engagementA,
               markdown: "notes-v2",
               updatedAt: "2026-08-12T14:00:00.000Z",
+              revision: 1,
             }),
           );
         }
@@ -240,7 +243,12 @@ describe("report cache coherence", () => {
         if (url.endsWith(`/engagements/${engagementB}/report`)) return Promise.resolve(jsonResponse(b1));
         if (url.endsWith(`/engagements/${engagementA}/notes`) && init?.method === "PUT") {
           return Promise.resolve(
-            jsonResponse({ engagementId: engagementA, markdown: "a-v2", updatedAt: "2026-08-12T14:00:00.000Z" }),
+            jsonResponse({
+              engagementId: engagementA,
+              markdown: "a-v2",
+              updatedAt: "2026-08-12T14:00:00.000Z",
+              revision: 1,
+            }),
           );
         }
         return Promise.reject(new Error(`unexpected ${url}`));

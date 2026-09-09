@@ -94,6 +94,7 @@ async function createEngagementWithContent(
   const engagementId = created.value.id;
   const noted = engagementRepository.putEngagementNotes(engagementId, {
     markdown: "# creds\nadmin:admin",
+    expectedRevision: 0,
   });
   if (!noted.ok) throw new Error(`Fixture failed: ${noted.error.code}`);
   const found = engagementRepository.createFinding(engagementId, {

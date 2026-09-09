@@ -2,9 +2,11 @@ import {
   ActionMutationErrorSchema,
   EngagementMutationErrorSchema,
   FindingMutationErrorSchema,
+  UpdateEngagementNotesErrorSchema,
   type ActionMutationError,
   type EngagementMutationError,
   type FindingMutationError,
+  type UpdateEngagementNotesError,
 } from "@blackglass/contracts";
 
 export const ENGAGEMENTS_QUERY_ERROR_MESSAGE = "The engagement list request failed.";
@@ -41,6 +43,20 @@ export const FINDING_MUTATION_ERROR_COPY = {
 } as const;
 
 export type FindingMutationErrorCode = keyof typeof FINDING_MUTATION_ERROR_COPY;
+
+export const ENGAGEMENT_NOTES_MUTATION_ERROR_COPY = {
+  invalid_request: "The request was not accepted. Check the fields and try again.",
+  engagement_not_found: "That engagement is no longer available.",
+  engagement_archived: "This engagement is archived.",
+  revision_conflict:
+    "Notes changed elsewhere. Your edits are kept. Load the server version or keep yours.",
+  invalid_persisted_data: "The server returned data this client cannot use.",
+  storage_busy: "Storage is busy. Try again.",
+  request_failed: ENGAGEMENT_MUTATION_ERROR_MESSAGE,
+} as const;
+
+export type EngagementNotesMutationErrorCode =
+  keyof typeof ENGAGEMENT_NOTES_MUTATION_ERROR_COPY;
 
 export const ACTION_MUTATION_ERROR_COPY = {
   action_not_found: "That action is no longer available.",
@@ -165,6 +181,63 @@ export function mutationErrorFromActionContract(
 
 export function engagementMutationMessage(error: unknown): string {
   if (error instanceof EngagementMutationClientError) return error.message;
+  return ENGAGEMENT_MUTATION_ERROR_MESSAGE;
+}
+
+export class EngagementNotesMutationClientError extends Error {
+  readonly code: EngagementNotesMutationErrorCode;
+  readonly currentRevision?: number;
+  readonly resourceId?: string;
+
+  constructor(
+    code: EngagementNotesMutationErrorCode,
+    details?: { currentRevision: number; resourceId: string },
+  ) {
+    super(ENGAGEMENT_NOTES_MUTATION_ERROR_COPY[code]);
+    this.name = "EngagementNotesMutationClientError";
+    this.code = code;
+    if (details) {
+      this.currentRevision = details.currentRevision;
+      this.resourceId = details.resourceId;
+    }
+  }
+}
+
+export function isNotesRevisionConflict(
+  error: unknown,
+): error is EngagementNotesMutationClientError & {
+  code: "revision_conflict";
+  currentRevision: number;
+} {
+  return (
+    error instanceof EngagementNotesMutationClientError &&
+    error.code === "revision_conflict" &&
+    typeof error.currentRevision === "number"
+  );
+}
+
+function notesErrorFromContract(
+  error: UpdateEngagementNotesError,
+): EngagementNotesMutationClientError {
+  if (error.code === "revision_conflict") {
+    return new EngagementNotesMutationClientError("revision_conflict", {
+      currentRevision: error.currentRevision,
+      resourceId: error.resourceId,
+    });
+  }
+  return new EngagementNotesMutationClientError(error.code);
+}
+
+export function parseEngagementNotesMutationError(
+  payload: unknown,
+): EngagementNotesMutationClientError {
+  const parsed = UpdateEngagementNotesErrorSchema.safeParse(payload);
+  if (parsed.success) return notesErrorFromContract(parsed.data);
+  return new EngagementNotesMutationClientError("request_failed");
+}
+
+export function engagementNotesMutationMessage(error: unknown): string {
+  if (error instanceof EngagementNotesMutationClientError) return error.message;
   return ENGAGEMENT_MUTATION_ERROR_MESSAGE;
 }
 

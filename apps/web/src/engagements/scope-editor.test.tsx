@@ -153,6 +153,7 @@ function readResponse(
       engagementId: notesMatch[1],
       markdown: "",
       updatedAt: engagement.updatedAt,
+      revision: 0,
     });
   }
   if (url === `/api/v1/engagements/${engagement.id}`) {
