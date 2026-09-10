@@ -65,7 +65,8 @@ export {
   matchTechniquePrereqs,
   type FilledTemplate,
   type TechniquePrereqMatch,
-} from "./technique.js";export {
+} from "./technique.js";
+export {
   ADVISOR_EXPLANATION_PROMPT_VERSION,
   ADVISOR_EXPLANATION_SYSTEM_PROMPT,
   ADVISOR_HISTORY_ENTRY_MAX_BYTES,
