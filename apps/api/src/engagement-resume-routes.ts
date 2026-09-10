@@ -139,7 +139,10 @@ export function registerEngagementResumeRoutes(
         for (const service of services.value.slice(0, 50)) {
           inputs.push({
             kind: "service",
-            id: `${service.address}:${service.port}`,
+            // Artifact id keeps the change id unique when several runs
+            // observe the same address:port (duplicate React keys in
+            // ResumeChangeList otherwise).
+            id: `${service.address}:${service.port}:${service.artifactId}`,
             at: service.observedAt,
             summary: `Service observed at ${service.address}:${service.port}.`,
             preEventRecord: true,

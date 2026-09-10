@@ -121,7 +121,8 @@ describe("ffuf grouping with hide and undo", () => {
   it("labels unusual responses without vulnerability claims", () => {
     const label = labelUnusualFfufResponse(rows[2]!);
     expect(label).toContain("Observed behavior only");
-    expect(label).not.toMatch(/vulnerab/i);
+    expect(label).toContain("not a vulnerability claim");
+    expect(label).not.toMatch(/vulnerability (found|detected|confirmed|present)/i);
   });
 });
 
@@ -144,7 +145,9 @@ describe("run diff truthfulness", () => {
       },
     });
     expect(diff.removedFromView.join(" ")).toContain("Not observed is not closed");
-    expect(diff.removedFromView.join(" ")).not.toMatch(/closed/i);
+    // Tightened negative: the disclaimer itself contains "closed", so only a
+    // positive closure claim ("is closed" / "was closed") may fail the suite.
+    expect(diff.removedFromView.join(" ")).not.toMatch(/\b(is|was)\s+closed\b/i);
   });
 
   it("marks incomplete sides as disproving nothing and refuses cross-tool compare", () => {
