@@ -1,8 +1,40 @@
-import type { NmapProjectedService } from "@blackglass/contracts";
+import type {
+  FfufProjected,
+  HttpProbeProjected,
+  NmapProjectedService,
+} from "@blackglass/contracts";
 import { LoadingRegion, RecoverableError, Skeleton, StaleDataState } from "@blackglass/ui";
+import { useRef, useState } from "react";
 
 import { formatEngagementTimestamp } from "./format.js";
-import { useEngagementServicesQuery } from "./query.js";
+import {
+  ActionLauncher,
+  SurfaceInspector,
+  decodeSurfaceSelection,
+  defaultSchemeForPort,
+  focusSurfaceRow,
+  isWebServiceCandidate,
+  pathInspectorRecord,
+  pathSelectionKey,
+  probeInspectorRecord,
+  probeSelectionKey,
+  restoreSurfacePosition,
+  serviceInspectorRecord,
+  serviceSelectionKey,
+  splitOriginUrl,
+  withOriginScheme,
+  type BelowOrigin,
+  type ExtraRowActions,
+  type InspectorRecord,
+  type LauncherRequest,
+  type OriginScheme,
+} from "./inspector.js";
+import {
+  useEngagementFfufResultsQuery,
+  useEngagementHttpProbesQuery,
+  useEngagementServicesQuery,
+} from "./query.js";
+import { copyTextToClipboard } from "./report-query.js";
 
 function deriveServiceStats(services: readonly NmapProjectedService[]) {
   const hostCount = new Set(services.map((service) => service.address)).size;
@@ -44,8 +76,49 @@ function sortServices(services: readonly NmapProjectedService[]): NmapProjectedS
   });
 }
 
-export function EngagementServicesSection({ engagementId }: { engagementId: string }) {
+export interface EngagementServicesSectionProps {
+  readonly archived?: boolean | undefined;
+  readonly belowOrigin?: BelowOrigin | undefined;
+  readonly engagementId: string;
+  readonly extraRowActions?: ExtraRowActions | undefined;
+  readonly onAskAbout?: ((target: string) => void) | undefined;
+  readonly onOpenNotes?: (() => void) | undefined;
+  readonly onSelectKey?: ((key: string | undefined) => void) | undefined;
+  readonly onSelectTarget?: ((target: string) => void) | undefined;
+  readonly onStartLead?: ((target: string) => void) | undefined;
+  readonly selectedKey?: string | undefined;
+  readonly selectedTarget?: string | undefined;
+}
+
+export function EngagementServicesSection({
+  archived = false,
+  belowOrigin,
+  engagementId,
+  extraRowActions,
+  onAskAbout,
+  onOpenNotes,
+  onSelectKey,
+  onSelectTarget,
+  onStartLead,
+  selectedKey,
+  selectedTarget,
+}: EngagementServicesSectionProps) {
   const servicesQuery = useEngagementServicesQuery(engagementId);
+  const probesQuery = useEngagementHttpProbesQuery(engagementId);
+  const ffufQuery = useEngagementFfufResultsQuery(engagementId);
+  const [internalTarget, setInternalTarget] = useState<string | undefined>(undefined);
+  const [internalKey, setInternalKey] = useState<string | undefined>(undefined);
+  const [schemes, setSchemes] = useState<Readonly<Record<string, OriginScheme>>>({});
+  const [launcher, setLauncher] = useState<LauncherRequest | null>(null);
+  const scrollRestoreRef = useRef(0);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const returnKeyRef = useRef<string | undefined>(undefined);
+
+  const effectiveTarget = selectedTarget ?? internalTarget;
+  const effectiveKey = selectedKey ?? internalKey;
+  const selectTarget = onSelectTarget ?? setInternalTarget;
+  const selectKey = onSelectKey ?? setInternalKey;
+
   const hasData = servicesQuery.data !== undefined;
   const retry = () => void servicesQuery.refetch();
 
@@ -62,10 +135,92 @@ export function EngagementServicesSection({ engagementId }: { engagementId: stri
   if (!hasData) return <ServicesLoadingState />;
 
   const services = servicesQuery.data;
+  const probes = probesQuery.data;
+  const ffufResults = ffufQuery.data;
   const stats = deriveServiceStats(services);
   const sorted = sortServices(services);
   const latestLabel =
     stats.latestObservedAt !== undefined ? formatEngagementTimestamp(stats.latestObservedAt) : "-";
+
+  const targets = collectTargets(sorted, probes, ffufResults);
+  const activeTarget =
+    effectiveTarget !== undefined && targets.some((entry) => entry.target === effectiveTarget)
+      ? effectiveTarget
+      : targets[0]?.target;
+
+  const openSelection = (key: string) => {
+    scrollRestoreRef.current = window.scrollY;
+    returnKeyRef.current = key;
+    selectKey(key);
+  };
+  const closeInspector = () => {
+    const key = returnKeyRef.current;
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    selectKey(undefined);
+    const savedY = scrollRestoreRef.current;
+    returnKeyRef.current = undefined;
+    requestAnimationFrame(() => {
+      restoreSurfacePosition(savedY, undefined);
+      if (active !== null && active !== document.body && document.contains(active)) {
+        active.focus({ preventScroll: true });
+      } else if (key !== undefined) {
+        focusSurfaceRow(key);
+      }
+    });
+  };
+  const openLauncher = (request: LauncherRequest, sourceKey: string | undefined) => {
+    scrollRestoreRef.current = window.scrollY;
+    returnFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    returnKeyRef.current = sourceKey;
+    setLauncher(request);
+  };
+  const closeLauncher = () => {
+    const key = returnKeyRef.current;
+    const returnElement = returnFocusRef.current;
+    setLauncher(null);
+    returnFocusRef.current = null;
+    returnKeyRef.current = undefined;
+    const savedY = scrollRestoreRef.current;
+    requestAnimationFrame(() => {
+      restoreSurfacePosition(savedY, undefined);
+      if (returnElement !== null && document.contains(returnElement)) {
+        returnElement.focus({ preventScroll: true });
+      } else if (key !== undefined) {
+        focusSurfaceRow(key);
+      }
+    });
+  };
+
+  const selection = decodeSurfaceSelection(effectiveKey);
+  const inspector =
+    selection === undefined ? null : (
+      <SurfaceInspectorLoader
+        engagementId={engagementId}
+        ffufQuery={{ data: ffufResults, isFetching: ffufQuery.isFetching }}
+        probesQuery={{ data: probes, isFetching: probesQuery.isFetching }}
+        selectionKey={selection.key}
+        services={sorted}
+        onAskAbout={onAskAbout}
+        onClose={closeInspector}
+        onDiscoverOrigin={(origin, scopeHint) =>
+          openLauncher(
+            {
+              kind: "ffuf",
+              origin,
+              ...(scopeHint === undefined ? {} : { scopeHint }),
+              sourceLabel: selection.key,
+            },
+            selection.key,
+          )
+        }
+        onOpenNotes={onOpenNotes}
+        onProbeOrigin={(origin) =>
+          openLauncher({ kind: "probe", origin, sourceLabel: selection.key }, selection.key)
+        }
+        onStartLead={onStartLead}
+      />
+    );
 
   const statBar = (
     <section aria-label="Engagement totals" className="overflow-hidden rounded-[10px] border border-border bg-card">
@@ -106,51 +261,888 @@ export function EngagementServicesSection({ engagementId }: { engagementId: stri
             surface.
           </p>
         </div>
+        <ObservedOriginsWithoutServices
+          belowOrigin={belowOrigin}
+          engagementId={engagementId}
+          extraRowActions={extraRowActions}
+          ffufResults={ffufResults}
+          onAskAbout={onAskAbout}
+          onOpenLauncher={openLauncher}
+          onSelectKey={openSelection}
+          onStartLead={onStartLead}
+          probes={probes}
+          selectedKey={effectiveKey}
+        />
       </section>
     ) : (
       <section aria-label="Attack surface" className="overflow-hidden rounded-[10px] border border-border bg-card">
         <div className="flex min-h-10 items-center justify-between border-b border-border px-3">
           <h2 className="m-0 text-[13px] font-semibold">Attack surface</h2>
-          <span className="hidden text-[11px] text-muted-foreground sm:inline">Projected Nmap services</span>
+          <span className="hidden text-[11px] text-muted-foreground sm:inline">Targets with services and origins</span>
         </div>
-        <div className="divide-y divide-border">
-          <div className="hidden grid-cols-[minmax(0,1.4fr)_96px_minmax(0,1.2fr)_130px] gap-3 bg-muted/40 px-3 py-2 text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase md:grid">
-            <span>Address</span>
-            <span>Port</span>
-            <span>Service</span>
-            <span>Observed</span>
-          </div>
-          {sorted.map((service) => (
-            <ServiceRow
-              key={`${service.address}:${service.port}:${service.artifactId}`}
-              service={service}
-              engagementId={engagementId}
-            />
-          ))}
-        </div>
+        <TargetSelector
+          activeTarget={activeTarget}
+          onSelectTarget={(target) => selectTarget(target)}
+          targets={targets}
+        />
+        {activeTarget === undefined ? null : (
+          <TargetGroup
+            belowOrigin={belowOrigin}
+            engagementId={engagementId}
+            extraRowActions={extraRowActions}
+            ffufResults={ffufResults}
+            onAskAbout={onAskAbout}
+            onOpenLauncher={openLauncher}
+            onSelectKey={openSelection}
+            onStartLead={onStartLead}
+            probes={probes}
+            schemes={schemes}
+            selectedKey={effectiveKey}
+            services={sorted.filter((service) => service.address === activeTarget)}
+            setSchemes={setSchemes}
+            target={activeTarget}
+          />
+        )}
       </section>
     );
 
   const body = (
-    <div className="grid gap-4">
-      {statBar}
-      {attackSurface}
+    <div className={inspector === null ? "grid gap-4" : "grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start"}>
+      <div className="grid min-w-0 gap-4">
+        {statBar}
+        {attackSurface}
+      </div>
+      {inspector}
     </div>
   );
 
-  if (servicesQuery.isError) {
-    return (
-      <StaleDataState
-        title="Showing the last successful attack surface"
-        description="The latest refresh failed. Existing services are still available."
-        onRetry={retry}
-      >
-        {body}
-      </StaleDataState>
-    );
-  }
+  const content = servicesQuery.isError ? (
+    <StaleDataState
+      title="Showing the last successful attack surface"
+      description="The latest refresh failed. Existing services are still available."
+      onRetry={retry}
+    >
+      {body}
+    </StaleDataState>
+  ) : (
+    body
+  );
 
-  return body;
+  return (
+    <div>
+      {content}
+      {launcher === null ? null : (
+        <ActionLauncher
+          archived={archived}
+          engagementId={engagementId}
+          onClose={closeLauncher}
+          request={launcher}
+        />
+      )}
+    </div>
+  );
+}
+
+interface TargetSummary {
+  readonly hostname: string | null;
+  readonly pathCount: number;
+  readonly originCount: number;
+  readonly serviceCount: number;
+  readonly target: string;
+}
+
+function collectTargets(
+  services: readonly NmapProjectedService[],
+  probes: readonly HttpProbeProjected[] | undefined,
+  ffufResults: readonly FfufProjected[] | undefined,
+): TargetSummary[] {
+  const byTarget = new Map<string, { hostname: string | null; services: number; origins: Set<string>; paths: number }>();
+  const ensure = (target: string) => {
+    const existing = byTarget.get(target);
+    if (existing !== undefined) return existing;
+    const created = { hostname: null as string | null, services: 0, origins: new Set<string>(), paths: 0 };
+    byTarget.set(target, created);
+    return created;
+  };
+  for (const service of services) {
+    const entry = ensure(service.address);
+    entry.services += 1;
+    if (entry.hostname === null && service.hostname !== null) entry.hostname = service.hostname;
+    if (isWebServiceCandidate(service)) {
+      entry.origins.add(`${service.address}:${String(service.port)}`);
+    }
+  }
+  if (probes !== undefined) {
+    for (const probe of probes) {
+      const parts = splitOriginUrl(probe.url);
+      if (parts === undefined) continue;
+      const entry = ensure(parts.host);
+      entry.origins.add(`${parts.host}:${String(parts.port)}`);
+    }
+  }
+  if (ffufResults !== undefined) {
+    for (const result of ffufResults) {
+      const parts = splitOriginUrl(result.url);
+      if (parts === undefined) continue;
+      const entry = ensure(parts.host);
+      entry.origins.add(`${parts.host}:${String(parts.port)}`);
+      entry.paths += 1;
+    }
+  }
+  return [...byTarget.entries()]
+    .map(([target, entry]) => ({
+      target,
+      hostname: entry.hostname,
+      serviceCount: entry.services,
+      originCount: entry.origins.size,
+      pathCount: entry.paths,
+    }))
+    .sort((left, right) => left.target.localeCompare(right.target, "en", { numeric: true }));
+}
+
+function TargetSelector({
+  activeTarget,
+  onSelectTarget,
+  targets,
+}: {
+  activeTarget: string | undefined;
+  onSelectTarget: (target: string) => void;
+  targets: readonly TargetSummary[];
+}) {
+  if (targets.length === 0) return null;
+  return (
+    <div className="border-b border-border px-3 py-2" role="group" aria-label="Targets">
+      <ul className="m-0 flex list-none flex-wrap gap-1 p-0">
+        {targets.map((entry) => {
+          const active = entry.target === activeTarget;
+          return (
+            <li key={entry.target}>
+              <button
+                type="button"
+                aria-current={active ? "true" : undefined}
+                onClick={() => onSelectTarget(entry.target)}
+                className={`inline-flex min-h-8 items-center gap-2 rounded-md border px-2.5 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                  active
+                    ? "border-foreground/40 bg-accent font-semibold text-foreground"
+                    : "border-border text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                }`}
+              >
+                <span className="font-mono" title={entry.hostname ?? entry.target}>
+                  {entry.target}
+                </span>
+                <span className="text-[11px]">
+                  {entry.serviceCount} svc · {entry.originCount} web · {entry.pathCount} paths
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function TargetGroup({
+  belowOrigin,
+  engagementId,
+  extraRowActions,
+  ffufResults,
+  onAskAbout,
+  onOpenLauncher,
+  onSelectKey,
+  onStartLead,
+  probes,
+  schemes,
+  selectedKey,
+  services,
+  setSchemes,
+  target,
+}: {
+  belowOrigin: BelowOrigin | undefined;
+  engagementId: string;
+  extraRowActions: ExtraRowActions | undefined;
+  ffufResults: readonly FfufProjected[] | undefined;
+  onAskAbout: ((target: string) => void) | undefined;
+  onOpenLauncher: (request: LauncherRequest, sourceKey: string | undefined) => void;
+  onSelectKey: ((key: string) => void) | undefined;
+  onStartLead: ((target: string) => void) | undefined;
+  probes: readonly HttpProbeProjected[] | undefined;
+  schemes: Readonly<Record<string, OriginScheme>>;
+  selectedKey: string | undefined;
+  services: readonly NmapProjectedService[];
+  setSchemes: (next: Readonly<Record<string, OriginScheme>>) => void;
+  target: string;
+}) {
+  const hostname = services.find((service) => service.hostname !== null)?.hostname ?? null;
+  return (
+    <div>
+      <div className="flex min-h-10 flex-wrap items-baseline justify-between gap-x-3 px-3 pt-2">
+        <h3 className="m-0 truncate font-mono text-[13px] font-semibold" title={hostname ?? target}>
+          {target}
+        </h3>
+        <span className="text-[11px] text-muted-foreground">
+          {hostname ?? "no hostname"} · {services.length} service{services.length === 1 ? "" : "s"}
+        </span>
+      </div>
+      <div className="hidden grid-cols-[minmax(0,1.4fr)_96px_minmax(0,1.2fr)_130px] gap-3 bg-muted/40 px-3 py-2 text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase md:grid">
+        <span>Address</span>
+        <span>Port</span>
+        <span>Service</span>
+        <span>Observed</span>
+      </div>
+      <div className="divide-y divide-border">
+        {services.map((service) => (
+          <div key={`${service.address}:${String(service.port)}:${service.artifactId}`}>
+            <ServiceRow
+              engagementId={engagementId}
+              extraRowActions={extraRowActions}
+              onSelect={onSelectKey}
+              selected={selectedKey === serviceSelectionKey(service.address, service.port)}
+              service={service}
+            />
+            {isWebServiceCandidate(service) ? (
+              <OriginBlock
+                belowOrigin={belowOrigin}
+                engagementId={engagementId}
+                extraRowActions={extraRowActions}
+                host={service.address}
+                onAskAbout={onAskAbout}
+                onOpenLauncher={onOpenLauncher}
+                onSelectKey={onSelectKey}
+                onStartLead={onStartLead}
+                paths={(ffufResults ?? []).filter((result) => {
+                  const parts = splitOriginUrl(result.url);
+                  return (
+                    parts !== undefined &&
+                    parts.port === service.port &&
+                    (parts.host === service.address.toLowerCase() ||
+                      (service.hostname !== null && parts.host === service.hostname.toLowerCase()))
+                  );
+                })}
+                port={service.port}
+                probes={(probes ?? []).filter((probe) => probeMatchesService(probe, service))}
+                scheme={
+                  schemes[`${service.address}:${String(service.port)}`] ??
+                  defaultSchemeForService(service, probes)
+                }
+                selectedKey={selectedKey}
+                setScheme={(scheme) =>
+                  setSchemes({
+                    ...schemes,
+                    [`${service.address}:${String(service.port)}`]: scheme,
+                  })
+                }
+                target={target}
+              />
+            ) : null}
+          </div>
+        ))}
+      </div>
+      <UnmatchedOrigins
+        belowOrigin={belowOrigin}
+        engagementId={engagementId}
+        extraRowActions={extraRowActions}
+        ffufResults={ffufResults}
+        onAskAbout={onAskAbout}
+        onOpenLauncher={onOpenLauncher}
+        onSelectKey={onSelectKey}
+        onStartLead={onStartLead}
+        probes={probes}
+        schemes={schemes}
+        selectedKey={selectedKey}
+        services={services}
+        setSchemes={setSchemes}
+        target={target}
+      />
+    </div>
+  );
+}
+
+function probeMatchesService(probe: HttpProbeProjected, service: NmapProjectedService): boolean {
+  const parts = splitOriginUrl(probe.url);
+  if (parts === undefined || parts.port !== service.port) return false;
+  if (parts.host === service.address.toLowerCase()) return true;
+  return service.hostname !== null && parts.host === service.hostname.toLowerCase();
+}
+
+function defaultSchemeForService(
+  service: NmapProjectedService,
+  probes: readonly HttpProbeProjected[] | undefined,
+): OriginScheme {
+  const matched = (probes ?? []).filter((probe) => probeMatchesService(probe, service));
+  if (matched.length === 1) {
+    const scheme = splitOriginUrl(matched[0]?.url ?? "")?.scheme;
+    if (scheme !== undefined) return scheme;
+  }
+  return defaultSchemeForPort(service.port);
+}
+
+function UnmatchedOrigins({
+  belowOrigin,
+  engagementId,
+  extraRowActions,
+  ffufResults,
+  onAskAbout,
+  onOpenLauncher,
+  onSelectKey,
+  onStartLead,
+  probes,
+  schemes,
+  selectedKey,
+  services,
+  setSchemes,
+  target,
+}: {
+  belowOrigin: BelowOrigin | undefined;
+  engagementId: string;
+  extraRowActions: ExtraRowActions | undefined;
+  ffufResults: readonly FfufProjected[] | undefined;
+  onAskAbout: ((target: string) => void) | undefined;
+  onOpenLauncher: (request: LauncherRequest, sourceKey: string | undefined) => void;
+  onSelectKey: ((key: string) => void) | undefined;
+  onStartLead: ((target: string) => void) | undefined;
+  probes: readonly HttpProbeProjected[] | undefined;
+  schemes: Readonly<Record<string, OriginScheme>>;
+  selectedKey: string | undefined;
+  services: readonly NmapProjectedService[];
+  setSchemes: (next: Readonly<Record<string, OriginScheme>>) => void;
+  target: string;
+}) {
+  const knownPorts = new Set(services.map((service) => service.port));
+  const groups = new Map<string, { host: string; port: number; probes: HttpProbeProjected[]; paths: FfufProjected[] }>();
+  for (const probe of probes ?? []) {
+    const parts = splitOriginUrl(probe.url);
+    if (parts === undefined) continue;
+    if (parts.host !== target.toLowerCase()) continue;
+    if (services.some((service) => probeMatchesService(probe, service))) continue;
+    const key = `${parts.host}:${String(parts.port)}`;
+    const existing = groups.get(key);
+    if (existing === undefined) {
+      groups.set(key, { host: parts.host, port: parts.port, probes: [probe], paths: [] });
+    } else {
+      existing.probes.push(probe);
+    }
+  }
+  for (const result of ffufResults ?? []) {
+    const parts = splitOriginUrl(result.url);
+    if (parts === undefined) continue;
+    if (parts.host !== target.toLowerCase()) continue;
+    if (knownPorts.has(parts.port)) continue;
+    const key = `${parts.host}:${String(parts.port)}`;
+    const existing = groups.get(key);
+    if (existing === undefined) {
+      groups.set(key, { host: parts.host, port: parts.port, probes: [], paths: [result] });
+    } else {
+      existing.paths.push(result);
+    }
+  }
+  const entries = [...groups.values()].sort((left, right) => left.port - right.port);
+  if (entries.length === 0) return null;
+  return (
+    <div className="border-t border-border px-3 py-2">
+      <p className="m-0 mb-2 text-[11px] text-muted-foreground">
+        Observed web origins without a projected service
+      </p>
+      <div className="grid gap-2">
+        {entries.map((entry) => {
+          const key = `${entry.host}:${String(entry.port)}`;
+          const scheme = schemes[key] ?? entry.probes.map((probe) => splitOriginUrl(probe.url)?.scheme).find((scheme) => scheme !== undefined) ?? defaultSchemeForPort(entry.port);
+          return (
+            <OriginBlock
+              key={key}
+              belowOrigin={belowOrigin}
+              engagementId={engagementId}
+              extraRowActions={extraRowActions}
+              host={entry.host}
+              onAskAbout={onAskAbout}
+              onOpenLauncher={onOpenLauncher}
+              onSelectKey={onSelectKey}
+              onStartLead={onStartLead}
+              paths={entry.paths}
+              port={entry.port}
+              probes={entry.probes}
+              scheme={scheme}
+              selectedKey={selectedKey}
+              setScheme={(next) => setSchemes({ ...schemes, [key]: next })}
+              target={target}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ObservedOriginsWithoutServices({
+  belowOrigin,
+  engagementId,
+  extraRowActions,
+  ffufResults,
+  onAskAbout,
+  onOpenLauncher,
+  onSelectKey,
+  onStartLead,
+  probes,
+  selectedKey,
+}: {
+  belowOrigin: BelowOrigin | undefined;
+  engagementId: string;
+  extraRowActions: ExtraRowActions | undefined;
+  ffufResults: readonly FfufProjected[] | undefined;
+  onAskAbout: ((target: string) => void) | undefined;
+  onOpenLauncher: (request: LauncherRequest, sourceKey: string | undefined) => void;
+  onSelectKey: ((key: string) => void) | undefined;
+  onStartLead: ((target: string) => void) | undefined;
+  probes: readonly HttpProbeProjected[] | undefined;
+  selectedKey: string | undefined;
+}) {
+  const [schemes, setSchemes] = useState<Readonly<Record<string, OriginScheme>>>({});
+  const groups = new Map<string, { host: string; port: number; probes: HttpProbeProjected[]; paths: FfufProjected[] }>();
+  for (const probe of probes ?? []) {
+    const parts = splitOriginUrl(probe.url);
+    if (parts === undefined) continue;
+    const key = `${parts.host}:${String(parts.port)}`;
+    const existing = groups.get(key);
+    if (existing === undefined) {
+      groups.set(key, { host: parts.host, port: parts.port, probes: [probe], paths: [] });
+    } else {
+      existing.probes.push(probe);
+    }
+  }
+  for (const result of ffufResults ?? []) {
+    const parts = splitOriginUrl(result.url);
+    if (parts === undefined) continue;
+    const key = `${parts.host}:${String(parts.port)}`;
+    const existing = groups.get(key);
+    if (existing === undefined) {
+      groups.set(key, { host: parts.host, port: parts.port, probes: [], paths: [result] });
+    } else {
+      existing.paths.push(result);
+    }
+  }
+  const entries = [...groups.values()].sort((left, right) => {
+    const host = left.host.localeCompare(right.host);
+    return host !== 0 ? host : left.port - right.port;
+  });
+  if (entries.length === 0) return null;
+  return (
+    <div className="border-t border-border px-3 py-3">
+      <h3 className="m-0 text-[13px] font-semibold">Observed origins</h3>
+      <p className="mt-1 mb-2 text-[12px] leading-5 text-muted-foreground">
+        Probes and discoveries without a projected service yet.
+      </p>
+      <div className="grid gap-2">
+        {entries.map((entry) => {
+          const key = `${entry.host}:${String(entry.port)}`;
+          const scheme =
+            schemes[key] ??
+            entry.probes.map((probe) => splitOriginUrl(probe.url)?.scheme).find((scheme) => scheme !== undefined) ??
+            defaultSchemeForPort(entry.port);
+          return (
+            <OriginBlock
+              key={key}
+              belowOrigin={belowOrigin}
+              engagementId={engagementId}
+              extraRowActions={extraRowActions}
+              host={entry.host}
+              onAskAbout={onAskAbout}
+              onOpenLauncher={onOpenLauncher}
+              onSelectKey={onSelectKey}
+              onStartLead={onStartLead}
+              paths={entry.paths}
+              port={entry.port}
+              probes={entry.probes}
+              scheme={scheme}
+              selectedKey={selectedKey}
+              setScheme={(next) => setSchemes({ ...schemes, [key]: next })}
+              target={entry.host}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function OriginBlock({
+  belowOrigin,
+  engagementId,
+  extraRowActions,
+  host,
+  onAskAbout,
+  onOpenLauncher,
+  onSelectKey,
+  onStartLead,
+  paths,
+  port,
+  probes,
+  scheme,
+  selectedKey,
+  setScheme,
+  target,
+}: {
+  belowOrigin: BelowOrigin | undefined;
+  engagementId: string;
+  extraRowActions: ExtraRowActions | undefined;
+  host: string;
+  onAskAbout: ((target: string) => void) | undefined;
+  onOpenLauncher: (request: LauncherRequest, sourceKey: string | undefined) => void;
+  onSelectKey: ((key: string) => void) | undefined;
+  onStartLead: ((target: string) => void) | undefined;
+  paths: readonly FfufProjected[];
+  port: number;
+  probes: readonly HttpProbeProjected[];
+  scheme: OriginScheme;
+  selectedKey: string | undefined;
+  setScheme: (scheme: OriginScheme) => void;
+  target: string;
+}) {
+  const origin = withOriginScheme(`${host}:${String(port)}`, scheme);
+  const sortedPaths = [...paths].sort((left, right) => left.url.localeCompare(right.url));
+  return (
+    <div className="mx-3 mb-3 rounded-md border border-border" data-surface-origin={origin}>
+      <div className="flex flex-wrap items-center gap-2 px-2.5 py-2">
+        <label className="sr-only" htmlFor={`scheme-${host}-${String(port)}`}>
+          Scheme for {host}:{String(port)}
+        </label>
+        <select
+          id={`scheme-${host}-${String(port)}`}
+          value={scheme}
+          onChange={(event) => setScheme(event.target.value === "https" ? "https" : "http")}
+          className="h-8 rounded-md border border-input bg-transparent px-1.5 font-mono text-[12px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <option value="http">http</option>
+          <option value="https">https</option>
+        </select>
+        <span className="min-w-0 flex-1 truncate font-mono text-[12px] font-semibold" title={origin}>
+          {origin}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-1 border-t border-border px-2.5 py-1.5">
+        <OriginActionButton
+          label="Probe web"
+          onClick={(sourceKey) =>
+            onOpenLauncher({ kind: "probe", origin, sourceLabel: origin }, sourceKey)
+          }
+        />
+        <a
+          className="inline-flex min-h-8 items-center rounded-md px-2 text-[12px] font-semibold text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+          href={origin}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Open in browser
+        </a>
+        <OriginActionButton
+          label="Discover paths"
+          onClick={(sourceKey) =>
+            onOpenLauncher({ kind: "ffuf", origin, sourceLabel: origin }, sourceKey)
+          }
+        />
+        <button
+          type="button"
+          disabled={onStartLead === undefined}
+          title={onStartLead === undefined ? "Leads arrive in a later slice." : undefined}
+          onClick={() => onStartLead?.(origin)}
+          className="inline-flex min-h-8 items-center rounded-md px-2 text-[12px] font-medium text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+        >
+          Start a lead
+        </button>
+        <button
+          type="button"
+          disabled={onAskAbout === undefined}
+          title={onAskAbout === undefined ? "Advisor follow-ups arrive in a later slice." : undefined}
+          onClick={() => onAskAbout?.(origin)}
+          className="inline-flex min-h-8 items-center rounded-md px-2 text-[12px] font-medium text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+        >
+          Ask about this
+        </button>
+      </div>
+      {probes.length > 0 ? (
+        <ul className="m-0 grid list-none gap-1 border-t border-border p-2.5">
+          {probes.map((probe) => (
+            <ProbeEnrichmentRow
+              key={`${probe.url}:${probe.artifactId}`}
+              extraRowActions={extraRowActions}
+              onSelectKey={onSelectKey}
+              probe={probe}
+              selected={selectedKey === probeSelectionKey(probe.url)}
+            />
+          ))}
+        </ul>
+      ) : (
+        <p className="m-0 border-t border-border px-2.5 py-1.5 text-[11px] text-muted-foreground">
+          Not probed yet. Probe web records status, title, and headers here.
+        </p>
+      )}
+      {sortedPaths.length > 0 ? (
+        <ul className="m-0 grid list-none gap-1 border-t border-border p-2.5">
+          {sortedPaths.map((result) => (
+            <PathRow
+              key={`${result.url}:${result.artifactId}`}
+              engagementId={engagementId}
+              extraRowActions={extraRowActions}
+              onDiscover={(sourceKey) =>
+                onOpenLauncher(
+                  { kind: "ffuf", origin, scopeHint: result.url, sourceLabel: result.url },
+                  sourceKey,
+                )
+              }
+              onSelectKey={onSelectKey}
+              result={result}
+              selected={selectedKey === pathSelectionKey(result.url)}
+            />
+          ))}
+        </ul>
+      ) : null}
+      {belowOrigin === undefined ? null : (
+        <div className="border-t border-border px-2.5 py-1.5">
+          {belowOrigin({ origin, target, scheme })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OriginActionButton({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: (sourceKey: string | undefined) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        const row = event.currentTarget.closest("[data-surface-row]");
+        onClick(
+          row instanceof HTMLElement ? (row.getAttribute("data-surface-row") ?? undefined) : undefined,
+        );
+      }}
+      className="inline-flex min-h-8 items-center rounded-md px-2 text-[12px] font-semibold text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {label}
+    </button>
+  );
+}
+
+function ProbeEnrichmentRow({
+  extraRowActions,
+  onSelectKey,
+  probe,
+  selected,
+}: {
+  extraRowActions: ExtraRowActions | undefined;
+  onSelectKey: ((key: string) => void) | undefined;
+  probe: HttpProbeProjected;
+  selected: boolean;
+}) {
+  const key = probeSelectionKey(probe.url);
+  const status = probe.status === null ? (probe.error ?? "no status") : String(probe.status);
+  const label = `${status} · ${probe.title ?? "no title"}`;
+  return (
+    <li data-surface-row={key} className="min-w-0 rounded-md border border-border px-2 py-1.5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        {onSelectKey === undefined ? (
+          <span className="min-w-0 flex-1 truncate font-mono text-[12px]" title={label}>
+            {label}
+          </span>
+        ) : (
+          <button
+            type="button"
+            aria-current={selected ? "true" : undefined}
+            onClick={() => onSelectKey(key)}
+            className={`min-w-0 flex-1 truncate text-left font-mono text-[12px] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring ${
+              selected ? "font-semibold text-foreground" : "text-foreground"
+            }`}
+            title={label}
+          >
+            {label}
+          </button>
+        )}
+        <span className="font-mono text-[11px] text-muted-foreground" title={probe.observedAt}>
+          {formatEngagementTimestamp(probe.observedAt)}
+        </span>
+        {onSelectKey === undefined ? null : (
+          <button
+            type="button"
+            onClick={() => onSelectKey(key)}
+            className="inline-flex min-h-8 items-center text-[11px] font-semibold text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Inspect
+          </button>
+        )}
+      </div>
+      {extraRowActions === undefined ? null : (
+        <div>{extraRowActions({ kind: "probe", key, title: probe.url, target: probe.url })}</div>
+      )}
+    </li>
+  );
+}
+
+function PathRow({
+  engagementId,
+  extraRowActions,
+  onDiscover,
+  onSelectKey,
+  result,
+  selected,
+}: {
+  engagementId: string;
+  extraRowActions: ExtraRowActions | undefined;
+  onDiscover: (sourceKey: string | undefined) => void;
+  onSelectKey: ((key: string) => void) | undefined;
+  result: FfufProjected;
+  selected: boolean;
+}) {
+  const [copied, setCopied] = useState<string | undefined>(undefined);
+  const key = pathSelectionKey(result.url);
+  const meta = `${String(result.status)} · ${String(result.length)} bytes`;
+  const copyValue = (label: string, value: string) => {
+    void copyTextToClipboard(value).then((ok) => {
+      if (ok) setCopied(label);
+    });
+  };
+  return (
+    <li data-surface-row={key} className="min-w-0 rounded-md border border-border px-2 py-1.5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        {onSelectKey === undefined ? (
+          <span className="min-w-0 flex-1 truncate font-mono text-[12px] font-semibold" title={result.url}>
+            {result.url}
+          </span>
+        ) : (
+          <button
+            type="button"
+            aria-current={selected ? "true" : undefined}
+            onClick={() => onSelectKey(key)}
+            className={`min-w-0 flex-1 truncate text-left font-mono text-[12px] font-semibold outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring ${
+              selected ? "text-foreground" : "text-foreground"
+            }`}
+            title={result.url}
+          >
+            {result.url}
+          </button>
+        )}
+        <span className="font-mono text-[11px] text-muted-foreground" title={meta}>
+          {meta}
+        </span>
+      </div>
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+        {onSelectKey === undefined ? null : (
+          <button
+            type="button"
+            onClick={() => onSelectKey(key)}
+            className="inline-flex min-h-8 items-center text-[11px] font-semibold text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Inspect
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => copyValue("copy", result.url)}
+          className="inline-flex min-h-8 items-center text-[11px] font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {copied === "copy" ? "Copied" : "Copy"}
+        </button>
+        <button
+          type="button"
+          onClick={() => copyValue("note", pathInspectorRecord(result, engagementId).noteReference)}
+          className="inline-flex min-h-8 items-center text-[11px] font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {copied === "note" ? "Copied" : "Copy note reference"}
+        </button>
+        <button
+          type="button"
+          onClick={(event) => {
+            const row = event.currentTarget.closest("[data-surface-row]");
+            onDiscover(
+              row instanceof HTMLElement
+                ? (row.getAttribute("data-surface-row") ?? undefined)
+                : undefined,
+            );
+          }}
+          className="inline-flex min-h-8 items-center text-[11px] font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Discover paths
+        </button>
+        <a
+          className="inline-flex min-h-8 items-center text-[11px] font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+          href={artifactContentUrl(engagementId, result.artifactId)}
+          download
+        >
+          Raw evidence
+        </a>
+      </div>
+      {extraRowActions === undefined ? null : (
+        <div>{extraRowActions({ kind: "path", key, title: result.url, target: result.url })}</div>
+      )}
+    </li>
+  );
+}
+
+function SurfaceInspectorLoader({
+  engagementId,
+  ffufQuery,
+  onAskAbout,
+  onClose,
+  onDiscoverOrigin,
+  onOpenNotes,
+  onProbeOrigin,
+  onStartLead,
+  probesQuery,
+  selectionKey,
+  services,
+}: {
+  engagementId: string;
+  ffufQuery: { data: readonly FfufProjected[] | undefined; isFetching: boolean };
+  onAskAbout: ((target: string) => void) | undefined;
+  onClose: () => void;
+  onDiscoverOrigin: (origin: string, scopeHint: string | undefined) => void;
+  onOpenNotes: (() => void) | undefined;
+  onProbeOrigin: (origin: string) => void;
+  onStartLead: ((target: string) => void) | undefined;
+  probesQuery: { data: readonly HttpProbeProjected[] | undefined; isFetching: boolean };
+  selectionKey: string;
+  services: readonly NmapProjectedService[];
+}) {
+  const selection = decodeSurfaceSelection(selectionKey);
+  let record: InspectorRecord | undefined;
+  let loading = false;
+  if (selection?.kind === "service") {
+    const service = services.find(
+      (entry) => serviceSelectionKey(entry.address, entry.port) === selection.key,
+    );
+    record = service === undefined ? undefined : serviceInspectorRecord(service, engagementId);
+  } else if (selection?.kind === "probe") {
+    if (probesQuery.data === undefined) {
+      loading = probesQuery.isFetching;
+    } else {
+      const probe = probesQuery.data.find((entry) => probeSelectionKey(entry.url) === selection.key);
+      record = probe === undefined ? undefined : probeInspectorRecord(probe, engagementId);
+    }
+  } else if (selection?.kind === "path") {
+    if (ffufQuery.data === undefined) {
+      loading = ffufQuery.isFetching;
+    } else {
+      const result = ffufQuery.data.find((entry) => pathSelectionKey(entry.url) === selection.key);
+      record = result === undefined ? undefined : pathInspectorRecord(result, engagementId);
+    }
+  }
+  return (
+    <SurfaceInspector
+      engagementId={engagementId}
+      loading={loading}
+      onAskAbout={onAskAbout}
+      onClose={onClose}
+      onDiscoverOrigin={onDiscoverOrigin}
+      onOpenNotes={onOpenNotes}
+      onProbeOrigin={onProbeOrigin}
+      onStartLead={onStartLead}
+      record={record}
+      selectionKey={selectionKey}
+    />
+  );
 }
 
 function ServicesLoadingState() {
@@ -173,24 +1165,59 @@ function ServicesLoadingState() {
   );
 }
 
-function ServiceRow({ engagementId, service }: { engagementId: string; service: NmapProjectedService }) {
+function ServiceRow({
+  engagementId,
+  extraRowActions,
+  onSelect,
+  selected,
+  service,
+}: {
+  engagementId: string;
+  extraRowActions: ExtraRowActions | undefined;
+  onSelect: ((key: string) => void) | undefined;
+  selected: boolean;
+  service: NmapProjectedService;
+}) {
   const observedLabel = formatEngagementTimestamp(service.observedAt);
   const primary = formatPrimaryIdentity(service);
   const secondary =
     service.serviceName !== null && service.serviceName !== primary ? service.serviceName : null;
   const evidenceUrl = artifactContentUrl(engagementId, service.artifactId);
+  const key = serviceSelectionKey(service.address, service.port);
+
+  const identity =
+    onSelect === undefined ? (
+      <div className="min-w-0">
+        <div className="truncate font-mono text-[13px] font-semibold tracking-[-0.02em]" title={service.address}>
+          {service.address}
+        </div>
+        <div className="truncate font-mono text-[11px] text-muted-foreground" title={service.hostname ?? undefined}>
+          {service.hostname ?? "-"}
+        </div>
+      </div>
+    ) : (
+      <div className="min-w-0">
+        <button
+          type="button"
+          aria-current={selected ? "true" : undefined}
+          onClick={() => onSelect(key)}
+          className={`block w-full truncate text-left font-mono text-[13px] font-semibold tracking-[-0.02em] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring ${
+            selected ? "text-foreground" : "text-foreground"
+          }`}
+          title={service.address}
+        >
+          {service.address}
+        </button>
+        <div className="truncate font-mono text-[11px] text-muted-foreground" title={service.hostname ?? undefined}>
+          {service.hostname ?? "-"}
+        </div>
+      </div>
+    );
 
   return (
-    <div className="border-b border-border last:border-b-0">
+    <div className="border-b border-border last:border-b-0" data-surface-row={key}>
       <div className="grid gap-2 px-3 py-3 md:grid-cols-[minmax(0,1.4fr)_96px_minmax(0,1.2fr)_130px] md:items-start md:gap-3">
-        <div className="min-w-0">
-          <div className="truncate font-mono text-[13px] font-semibold tracking-[-0.02em]" title={service.address}>
-            {service.address}
-          </div>
-          <div className="truncate font-mono text-[11px] text-muted-foreground" title={service.hostname ?? undefined}>
-            {service.hostname ?? "-"}
-          </div>
-        </div>
+        {identity}
         <div className="font-mono text-[13px] font-medium">{`${service.port}/${service.protocol}`}</div>
         <div className="min-w-0">
           <div className="truncate text-[13px]" title={primary}>
@@ -213,6 +1240,28 @@ function ServiceRow({ engagementId, service }: { engagementId: string; service: 
           >
             XML
           </a>
+          {onSelect === undefined ? null : (
+            <span>
+              {" "}
+              <button
+                type="button"
+                onClick={() => onSelect(key)}
+                className="mt-1 inline-block max-w-full truncate text-[11px] font-semibold text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Inspect
+              </button>
+            </span>
+          )}
+          {extraRowActions === undefined ? null : (
+            <span className="mt-1 block">
+              {extraRowActions({
+                kind: "service",
+                key,
+                title: `${service.address}:${String(service.port)}`,
+                target: service.address,
+              })}
+            </span>
+          )}
         </div>
       </div>
       <details className="group mx-3 mb-3 rounded-md border border-border">

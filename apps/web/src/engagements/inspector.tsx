@@ -1,0 +1,1424 @@
+import type {
+  FfufProjected,
+  HttpProbeProjected,
+  NmapProjectedService,
+  PersistedAction,
+  SavedScopeRule,
+} from "@blackglass/contracts";
+import {
+  FFUF_DEFAULT_MATCH_CODES,
+  FFUF_MAX_TIME_SECONDS_DEFAULT,
+  FFUF_RATE_DEFAULT,
+  FFUF_THREADS_DEFAULT,
+  FFUF_TIMEOUT_SECONDS_DEFAULT,
+} from "@blackglass/contracts";
+import { Button, LoadingRegion, Skeleton } from "@blackglass/ui";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
+
+import { useRunnerSettingsQuery } from "../settings/runner-settings.js";
+import { useCancelActionMutation, useCreateActionMutation } from "./action-mutations.js";
+import { WarningCard } from "./action-planner.js";
+import {
+  actionLifecycleStatusCopy,
+  isTerminalActionState,
+  persistedActionQueryOptions,
+} from "./action-query.js";
+import { engagementMutationMessage } from "./errors.js";
+import { useLaunchFfufDiscoveryMutation } from "./ffuf-mutations.js";
+import { useFindingsQuery } from "./findings-query.js";
+import { formatEngagementTimestamp } from "./format.js";
+import {
+  engagementFfufResultsQueryKey,
+  engagementHttpProbesQueryKey,
+  engagementServicesQueryKey,
+  useEngagementDetailQuery,
+} from "./query.js";
+import { copyTextToClipboard, reportQueryKey } from "./report-query.js";
+
+// Shared surface selection, inspector, and action launcher for STONE-2.
+//
+// Selection identity is a plain string key so it survives in the engagement
+// route search (?sel=) and browser Back steps through investigation context
+// instead of leaving the engagement. Row containers carry
+// data-surface-row={key} so closing an overlay can return focus to the exact
+// row that opened it.
+
+// ---------------------------------------------------------------------------
+// Selection keys
+// ---------------------------------------------------------------------------
+
+export type SurfaceSelectionKind = "service" | "probe" | "path";
+
+export interface SurfaceSelection {
+  readonly kind: SurfaceSelectionKind;
+  readonly key: string;
+}
+
+export function serviceSelectionKey(address: string, port: number): string {
+  return `service:${address}:${String(port)}`;
+}
+
+export function probeSelectionKey(url: string): string {
+  return `probe:${url}`;
+}
+
+export function pathSelectionKey(url: string): string {
+  return `path:${url}`;
+}
+
+function isHttpUrl(value: string): boolean {
+  return value.startsWith("http://") || value.startsWith("https://");
+}
+
+export function decodeSurfaceSelection(raw: string | undefined): SurfaceSelection | undefined {
+  if (raw === undefined || raw.length === 0) return undefined;
+  const separator = raw.indexOf(":");
+  if (separator < 0) return undefined;
+  const kind = raw.slice(0, separator);
+  const rest = raw.slice(separator + 1);
+  if (kind === "probe" || kind === "path") {
+    if (!isHttpUrl(rest)) return undefined;
+    return { kind, key: raw };
+  }
+  if (kind === "service") {
+    const portSeparator = rest.lastIndexOf(":");
+    if (portSeparator < 0) return undefined;
+    const address = rest.slice(0, portSeparator);
+    const portRaw = rest.slice(portSeparator + 1);
+    if (address.length === 0 || !/^\d+$/.test(portRaw)) return undefined;
+    const port = Number.parseInt(portRaw, 10);
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65535) return undefined;
+    return { kind, key: raw };
+  }
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Origin helpers (presentation only; STONE-6 owns shared grouping helpers)
+// ---------------------------------------------------------------------------
+
+export type OriginScheme = "http" | "https";
+
+export interface OriginParts {
+  readonly origin: string;
+  readonly host: string;
+  readonly port: number;
+  readonly scheme: OriginScheme;
+}
+
+export function splitOriginUrl(url: string): OriginParts | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+  const scheme: OriginScheme = parsed.protocol === "https:" ? "https" : "http";
+  const defaultPort = scheme === "https" ? 443 : 80;
+  const port = parsed.port === "" ? defaultPort : Number.parseInt(parsed.port, 10);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) return undefined;
+  const host = parsed.hostname.toLowerCase();
+  if (host.length === 0) return undefined;
+  const origin = port === defaultPort ? `${scheme}://${host}` : `${scheme}://${host}:${String(port)}`;
+  return { origin, host, port, scheme };
+}
+
+export function parseOriginScheme(origin: string): OriginScheme {
+  return origin.startsWith("https://") ? "https" : "http";
+}
+
+export function withOriginScheme(origin: string, scheme: OriginScheme): string {
+  const marker = origin.indexOf("://");
+  if (marker >= 0) return `${scheme}://${origin.slice(marker + 3)}`;
+  return `${scheme}://${origin}`;
+}
+
+// Web-origin candidacy is a presentation-only heuristic that decides which
+// projected services get an origin block with probe/discover actions. It is
+// intentionally local: STONE-6 owns shared grouping helpers later.
+const WEB_SERVICE_PORTS: readonly number[] = [80, 443, 3000, 5000, 8000, 8008, 8080, 8443, 8888, 9000];
+
+export function isWebServiceCandidate(service: NmapProjectedService): boolean {
+  if (service.serviceName !== null && /https?/i.test(service.serviceName)) return true;
+  if (service.product !== null && /https?/i.test(service.product)) return true;
+  return WEB_SERVICE_PORTS.includes(service.port);
+}
+
+export function defaultSchemeForPort(port: number): OriginScheme {
+  return port === 443 || port === 8443 ? "https" : "http";
+}
+
+// ---------------------------------------------------------------------------
+// Stable extension slots for later slices.
+//
+// STONE-6 (leads) and STONE-7 (search) wire into these after STONE-2 merges.
+// The signatures are frozen: surfaces call extraRowActions for every
+// selectable row and belowOrigin beneath every web origin block. Both default
+// to rendering nothing. Do not build leads or search UI here.
+// ---------------------------------------------------------------------------
+
+export interface SurfaceRowContext {
+  readonly kind: SurfaceSelectionKind;
+  readonly key: string;
+  readonly title: string;
+  readonly target: string;
+}
+
+export interface SurfaceOriginContext {
+  readonly origin: string;
+  readonly target: string;
+  readonly scheme: OriginScheme;
+}
+
+export type ExtraRowActions = (context: SurfaceRowContext) => ReactNode;
+
+export type BelowOrigin = (context: SurfaceOriginContext) => ReactNode;
+
+// ---------------------------------------------------------------------------
+// Focus and scroll restoration
+// ---------------------------------------------------------------------------
+
+export function focusSurfaceRow(key: string): boolean {
+  const nodes = document.querySelectorAll("[data-surface-row]");
+  for (const node of nodes) {
+    if (!(node instanceof HTMLElement)) continue;
+    if (node.getAttribute("data-surface-row") !== key) continue;
+    const target =
+      node instanceof HTMLButtonElement ? node : node.querySelector<HTMLElement>("button");
+    (target ?? node).focus({ preventScroll: true });
+    return true;
+  }
+  return false;
+}
+
+export function restoreSurfacePosition(scrollY: number, key: string | undefined): void {
+  window.scrollTo(0, scrollY);
+  if (key !== undefined) focusSurfaceRow(key);
+}
+
+// ---------------------------------------------------------------------------
+// Inspector records
+// ---------------------------------------------------------------------------
+
+export interface InspectorObservation {
+  readonly label: string;
+  readonly value: string;
+}
+
+export interface InspectorRecord {
+  readonly kind: SurfaceSelectionKind;
+  readonly key: string;
+  readonly title: string;
+  readonly subtitle: string;
+  readonly target: string;
+  readonly observedAt: string;
+  readonly artifactId: string;
+  readonly runId: string;
+  readonly artifactDigest: string;
+  readonly parserVersion: string;
+  readonly observation: readonly InspectorObservation[];
+  readonly evidenceDownloadUrl: string;
+  readonly evidenceDownloadName: string;
+  readonly openUrl?: string | undefined;
+  readonly origin?: string | undefined;
+  readonly noteReference: string;
+}
+
+function artifactUrl(engagementId: string, artifactId: string): string {
+  return `/api/v1/engagements/${encodeURIComponent(engagementId)}/artifacts/${encodeURIComponent(artifactId)}/content`;
+}
+
+function serviceIdentity(service: NmapProjectedService): string {
+  if (service.product !== null) {
+    return service.version !== null ? `${service.product} ${service.version}` : service.product;
+  }
+  if (service.serviceName !== null) return service.serviceName;
+  return "unknown";
+}
+
+export function serviceInspectorRecord(
+  service: NmapProjectedService,
+  engagementId: string,
+): InspectorRecord {
+  const identity = serviceIdentity(service);
+  return {
+    kind: "service",
+    key: serviceSelectionKey(service.address, service.port),
+    title: `${service.address}:${String(service.port)}`,
+    subtitle: identity,
+    target: service.address,
+    observedAt: service.observedAt,
+    artifactId: service.artifactId,
+    runId: service.runId,
+    artifactDigest: service.artifactDigest,
+    parserVersion: service.parserVersion,
+    observation: [
+      { label: "Address", value: service.address },
+      { label: "Hostname", value: service.hostname ?? "-" },
+      { label: "Port", value: `${String(service.port)}/${service.protocol}` },
+      { label: "Service", value: identity },
+      ...(service.serviceName !== null && service.serviceName !== identity
+        ? [{ label: "Service name", value: service.serviceName }]
+        : []),
+      { label: "Observed", value: formatEngagementTimestamp(service.observedAt) },
+    ],
+    evidenceDownloadUrl: artifactUrl(engagementId, service.artifactId),
+    evidenceDownloadName: `nmap-${service.artifactId}.xml`,
+    noteReference: `- ${service.address}:${String(service.port)} (${identity}) · evidence ${service.artifactId}`,
+  };
+}
+
+function probeStatus(probe: HttpProbeProjected): string {
+  if (probe.status === null) return probe.error ?? "no status";
+  return String(probe.status);
+}
+
+export function probeInspectorRecord(
+  probe: HttpProbeProjected,
+  engagementId: string,
+): InspectorRecord {
+  const parts = splitOriginUrl(probe.url);
+  return {
+    kind: "probe",
+    key: probeSelectionKey(probe.url),
+    title: probe.url,
+    subtitle: `${probeStatus(probe)} · ${probe.title ?? "no title"}`,
+    target: probe.url,
+    observedAt: probe.observedAt,
+    artifactId: probe.artifactId,
+    runId: probe.runId,
+    artifactDigest: probe.artifactDigest,
+    parserVersion: probe.parserVersion,
+    observation: [
+      { label: "URL", value: probe.url },
+      { label: "Final URL", value: probe.finalUrl },
+      { label: "Status", value: probeStatus(probe) },
+      { label: "Title", value: probe.title ?? "-" },
+      { label: "Server", value: probe.selectedHeaders.server ?? "-" },
+      { label: "Content type", value: probe.selectedHeaders.contentType ?? "-" },
+      { label: "Redirect hops", value: String(probe.hops.length) },
+      { label: "Observed", value: formatEngagementTimestamp(probe.observedAt) },
+    ],
+    evidenceDownloadUrl: artifactUrl(engagementId, probe.artifactId),
+    evidenceDownloadName: `http-probe-${probe.artifactId}.json`,
+    openUrl: probe.url,
+    ...(parts === undefined ? {} : { origin: parts.origin }),
+    noteReference: `- ${probe.url} (${probeStatus(probe)}) · evidence ${probe.artifactId}`,
+  };
+}
+
+export function pathInspectorRecord(
+  result: FfufProjected,
+  engagementId: string,
+): InspectorRecord {
+  const parts = splitOriginUrl(result.url);
+  return {
+    kind: "path",
+    key: pathSelectionKey(result.url),
+    title: result.url,
+    subtitle: `${String(result.status)} · ${String(result.length)} bytes`,
+    target: result.url,
+    observedAt: result.observedAt,
+    artifactId: result.artifactId,
+    runId: result.runId,
+    artifactDigest: result.artifactDigest,
+    parserVersion: result.parserVersion,
+    observation: [
+      { label: "URL", value: result.url },
+      { label: "Status", value: String(result.status) },
+      { label: "Size", value: `${String(result.length)} bytes` },
+      { label: "Words", value: String(result.words) },
+      { label: "Lines", value: String(result.lines) },
+      { label: "Fuzz", value: result.fuzz },
+      ...(result.redirectlocation !== null
+        ? [{ label: "Redirect", value: result.redirectlocation }]
+        : []),
+      { label: "Observed", value: formatEngagementTimestamp(result.observedAt) },
+    ],
+    evidenceDownloadUrl: artifactUrl(engagementId, result.artifactId),
+    evidenceDownloadName: `ffuf-${result.artifactId}.json`,
+    openUrl: result.url,
+    ...(parts === undefined ? {} : { origin: parts.origin }),
+    noteReference: `- ${result.url} (${String(result.status)}) · evidence ${result.artifactId}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Shared inspector
+// ---------------------------------------------------------------------------
+
+export interface SurfaceInspectorProps {
+  readonly engagementId: string;
+  readonly loading: boolean;
+  readonly onAskAbout?: ((target: string) => void) | undefined;
+  readonly onClose: () => void;
+  readonly onDiscoverOrigin?: ((origin: string, scopeHint: string | undefined) => void) | undefined;
+  readonly onOpenNotes?: (() => void) | undefined;
+  readonly onProbeOrigin?: ((origin: string) => void) | undefined;
+  readonly onStartLead?: ((target: string) => void) | undefined;
+  readonly record: InspectorRecord | undefined;
+  readonly selectionKey: string;
+}
+
+function InspectorSection({ children, title }: { children: ReactNode; title: string }) {
+  return (
+    <section aria-label={title} className="border-t border-border px-3 py-3 first:border-t-0">
+      <h3 className="m-0 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
+        {title}
+      </h3>
+      <div className="mt-2">{children}</div>
+    </section>
+  );
+}
+
+export function SurfaceInspector({
+  engagementId,
+  loading,
+  onAskAbout,
+  onClose,
+  onDiscoverOrigin,
+  onOpenNotes,
+  onProbeOrigin,
+  onStartLead,
+  record,
+  selectionKey,
+}: SurfaceInspectorProps) {
+  const asideRef = useRef<HTMLElement>(null);
+  const [copied, setCopied] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    setCopied(undefined);
+    asideRef.current?.focus({ preventScroll: true });
+  }, [selectionKey]);
+
+  const onAsideKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    onClose();
+  };
+
+  const copyValue = (label: string, value: string) => {
+    void copyTextToClipboard(value).then((ok) => {
+      if (ok) setCopied(label);
+    });
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label="Close inspector"
+        className="fixed inset-0 z-40 bg-black/62 lg:hidden"
+        onClick={onClose}
+      />
+      <aside
+        ref={asideRef}
+        aria-label="Selection inspector"
+        tabIndex={-1}
+        onKeyDown={onAsideKeyDown}
+        className="fixed inset-y-0 right-0 z-50 w-full max-w-md overflow-y-auto border-l border-border bg-background outline-none lg:static lg:z-auto lg:w-80 lg:max-w-none lg:shrink-0 lg:overflow-visible lg:border-l-0"
+      >
+      <div className="lg:sticky lg:top-4 lg:overflow-hidden lg:rounded-[10px] lg:border lg:border-border lg:bg-card">
+        <div className="flex min-h-10 items-center justify-between gap-2 border-b border-border px-3">
+          <h2 className="m-0 truncate text-[13px] font-semibold">Inspector</h2>
+          <Button type="button" variant="quiet" className="h-7 px-2 text-[12px]" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+        {loading || record === undefined ? (
+          <div className="px-3 py-3">
+            {loading ? (
+              <LoadingRegion label="Loading selection" className="space-y-2">
+                <Skeleton className="h-3 w-40" />
+                <Skeleton className="h-16 w-full" />
+              </LoadingRegion>
+            ) : (
+              <div>
+                <p className="m-0 text-[13px] font-semibold">Selection unavailable</p>
+                <p className="mt-1 mb-0 text-[12px] leading-5 text-muted-foreground">
+                  That row is no longer in the loaded surface. Refresh the surface or clear the
+                  selection.
+                </p>
+                <div className="mt-3">
+                  <Button type="button" variant="secondary" onClick={onClose}>
+                    Clear selection
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <InspectorRecordBody
+            copied={copied}
+            engagementId={engagementId}
+            onAskAbout={onAskAbout}
+            onCopy={copyValue}
+            onDiscoverOrigin={onDiscoverOrigin}
+            onOpenNotes={onOpenNotes}
+            onProbeOrigin={onProbeOrigin}
+            onStartLead={onStartLead}
+            record={record}
+          />
+        )}
+      </div>
+    </aside>
+    </>
+  );
+}
+
+function InspectorRecordBody({
+  copied,
+  engagementId,
+  onAskAbout,
+  onCopy,
+  onDiscoverOrigin,
+  onOpenNotes,
+  onProbeOrigin,
+  onStartLead,
+  record,
+}: {
+  copied: string | undefined;
+  engagementId: string;
+  onAskAbout: ((target: string) => void) | undefined;
+  onCopy: (label: string, value: string) => void;
+  onDiscoverOrigin: ((origin: string, scopeHint: string | undefined) => void) | undefined;
+  onOpenNotes: (() => void) | undefined;
+  onProbeOrigin: ((origin: string) => void) | undefined;
+  onStartLead: ((target: string) => void) | undefined;
+  record: InspectorRecord;
+}) {
+  const findings = useFindingsQuery(engagementId);
+  const linkedFindings =
+    findings.data === undefined
+      ? undefined
+      : findings.data.filter((finding) => finding.evidenceArtifactIds.includes(record.artifactId));
+  const copiedNote = copied === "note";
+
+  return (
+    <div>
+      <div className="px-3 py-3">
+        <p className="m-0 truncate font-mono text-[13px] font-semibold" title={record.title}>
+          {record.title}
+        </p>
+        <p className="m-0 mt-0.5 truncate text-[12px] text-muted-foreground" title={record.subtitle}>
+          {record.subtitle}
+        </p>
+      </div>
+
+      <InspectorSection title="Observation">
+        <dl className="m-0 grid gap-2">
+          {record.observation.map((entry) => (
+            <div key={entry.label} className="min-w-0">
+              <dt className="text-[11px] tracking-[0.04em] text-muted-foreground uppercase">
+                {entry.label}
+              </dt>
+              <dd
+                className="mt-0.5 mb-0 truncate font-mono text-[12px] text-foreground"
+                title={entry.value}
+              >
+                {entry.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </InspectorSection>
+
+      <InspectorSection title="Follow-up actions">
+        <div className="flex flex-col items-stretch gap-2">
+          {record.origin !== undefined && onProbeOrigin !== undefined ? (
+            <Button type="button" variant="secondary" onClick={() => onProbeOrigin(record.origin ?? "")}>
+              Probe web
+            </Button>
+          ) : null}
+          {record.openUrl !== undefined ? (
+            <a
+              className="inline-flex min-h-8 items-center justify-center rounded-md border border-input px-3 text-[13px] font-semibold text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+              href={record.openUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open in browser
+            </a>
+          ) : null}
+          {record.origin !== undefined && onDiscoverOrigin !== undefined ? (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() =>
+                onDiscoverOrigin(
+                  record.origin ?? "",
+                  record.kind === "path" ? record.target : undefined,
+                )
+              }
+            >
+              Discover paths
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="quiet"
+            disabled={onStartLead === undefined}
+            title={onStartLead === undefined ? "Leads arrive in a later slice." : undefined}
+            onClick={() => onStartLead?.(record.target)}
+          >
+            Start a lead
+          </Button>
+          <Button
+            type="button"
+            variant="quiet"
+            disabled={onAskAbout === undefined}
+            title={onAskAbout === undefined ? "Advisor follow-ups arrive in a later slice." : undefined}
+            onClick={() => onAskAbout?.(record.target)}
+          >
+            Ask about this
+          </Button>
+        </div>
+      </InspectorSection>
+
+      <InspectorSection title="Linked evidence">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <a
+            className="inline-flex min-h-8 items-center text-[12px] font-semibold text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+            href={record.evidenceDownloadUrl}
+            download={record.evidenceDownloadName}
+          >
+            Raw evidence
+          </a>
+          <Button
+            type="button"
+            variant="quiet"
+            className="h-7 px-2 text-[12px]"
+            onClick={() => onCopy("title", record.title)}
+          >
+            {copied === "title" ? "Copied" : "Copy"}
+          </Button>
+        </div>
+        {linkedFindings !== undefined ? (
+          <p className="mt-2 mb-0 text-[12px] text-muted-foreground">
+            {linkedFindings.length === 0
+              ? "No findings reference this evidence yet."
+              : `${String(linkedFindings.length)} linked finding${linkedFindings.length === 1 ? "" : "s"}: ${linkedFindings.map((finding) => finding.title).join(", ")}`}
+          </p>
+        ) : null}
+        <details className="group mt-2 rounded-md border border-border">
+          <summary className="flex min-h-8 cursor-pointer list-none items-center justify-between px-2.5 text-[11px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <span>Evidence details</span>
+            <span className="text-muted-foreground group-open:hidden">Show</span>
+            <span className="hidden text-muted-foreground group-open:inline">Hide</span>
+          </summary>
+          <div className="border-t border-border px-2.5 py-2">
+            <dl className="m-0 grid gap-2">
+              <InspectorProvenanceField term="runId" value={record.runId} />
+              <InspectorProvenanceField term="artifactId" value={record.artifactId} />
+              <InspectorProvenanceField term="artifactDigest" value={record.artifactDigest} breakAll />
+              <InspectorProvenanceField term="parserVersion" value={record.parserVersion} />
+            </dl>
+          </div>
+        </details>
+      </InspectorSection>
+
+      <InspectorSection title="Notes">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            className="h-8 px-3 text-[12px]"
+            onClick={() => onCopy("note", record.noteReference)}
+          >
+            {copiedNote ? "Copied" : "Copy note reference"}
+          </Button>
+          {onOpenNotes !== undefined ? (
+            <Button
+              type="button"
+              variant="quiet"
+              className="h-8 px-3 text-[12px]"
+              onClick={onOpenNotes}
+            >
+              Open Notes
+            </Button>
+          ) : null}
+        </div>
+        <p className="mt-2 mb-0 text-[12px] leading-5 text-muted-foreground">
+          Paste the reference into the engagement notes to link this row.
+        </p>
+      </InspectorSection>
+    </div>
+  );
+}
+
+function InspectorProvenanceField({
+  breakAll = false,
+  term,
+  value,
+}: {
+  breakAll?: boolean;
+  term: string;
+  value: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[11px] tracking-[0.04em] text-muted-foreground uppercase">{term}</dt>
+      <dd
+        className={`mt-1 text-[11px] ${breakAll ? "break-all font-mono" : "truncate font-mono"}`}
+        title={value}
+      >
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Action launcher: probe or ffuf discovery from an exact selected target.
+// ---------------------------------------------------------------------------
+
+export type LauncherRequest =
+  | {
+      readonly kind: "probe";
+      readonly origin: string;
+      readonly sourceLabel: string;
+    }
+  | {
+      readonly kind: "ffuf";
+      readonly origin: string;
+      readonly scopeHint?: string | undefined;
+      readonly sourceLabel: string;
+    };
+
+export interface ActionLauncherProps {
+  readonly archived: boolean;
+  readonly engagementId: string;
+  readonly onClose: () => void;
+  readonly request: LauncherRequest;
+}
+
+interface LauncherDetail {
+  readonly expectedActiveScopeRevisionId: string | null;
+  readonly expectedEngagementRevision: number;
+  readonly scopeRules: readonly SavedScopeRule[];
+}
+
+export function ActionLauncher({ archived, engagementId, onClose, request }: ActionLauncherProps) {
+  const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [pending, setPending] = useState(false);
+  const detail = useEngagementDetailQuery(engagementId);
+  const hasDetail = detail.data !== undefined;
+
+  const attemptClose = () => {
+    if (pending) return;
+    if (dirty && !confirmDiscard) {
+      setConfirmDiscard(true);
+      return;
+    }
+    onClose();
+  };
+
+  const onDialogKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      attemptClose();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const root = dialogRef.current;
+    if (!root) return;
+    const focusable = Array.from(
+      root.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((node) => !node.hasAttribute("disabled"));
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (first === undefined || last === undefined) return;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  const title = request.kind === "probe" ? "Probe web" : "Discover paths";
+
+  return createPortal(
+    <div className="fixed inset-0 z-[70] grid place-items-center p-6">
+      <button
+        type="button"
+        aria-label="Dismiss launcher"
+        className="absolute inset-0 bg-black/62"
+        onClick={attemptClose}
+      />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="relative max-h-full w-full max-w-[520px] overflow-y-auto rounded-[10px] border border-border bg-popover p-5 text-popover-foreground shadow-[0_24px_64px_rgba(0,0,0,0.6)]"
+        data-keybinding-capture=""
+        onKeyDown={onDialogKeyDown}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <h2 id={titleId} className="m-0 text-[15px] font-semibold tracking-[-0.02em]">
+              {title}
+            </h2>
+            <p className="mt-1 mb-0 truncate font-mono text-[12px] text-muted-foreground" title={request.origin}>
+              From {request.sourceLabel}
+            </p>
+          </div>
+          <Button type="button" variant="quiet" className="h-7 px-2 text-[12px]" onClick={attemptClose}>
+            Close
+          </Button>
+        </div>
+        {confirmDiscard ? (
+          <div className="mt-3 rounded-md border border-border px-3 py-2" role="alert">
+            <p className="m-0 text-[12px] text-foreground">Discard unsaved launcher input?</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button type="button" variant="secondary" onClick={onClose}>
+                Discard
+              </Button>
+              <Button type="button" variant="quiet" onClick={() => setConfirmDiscard(false)}>
+                Keep editing
+              </Button>
+            </div>
+          </div>
+        ) : null}
+        <div className="mt-4">
+          {!hasDetail && detail.isFetching ? (
+            <LoadingRegion label="Loading launcher" className="space-y-2">
+              <Skeleton className="h-9 w-full" />
+              <Skeleton className="h-9 w-full" />
+            </LoadingRegion>
+          ) : null}
+          {!hasDetail && detail.isError ? (
+            <p className="m-0 text-[12px] leading-5 text-muted-foreground">
+              The launcher is unavailable until engagement detail loads.
+            </p>
+          ) : null}
+          {hasDetail ? (
+            request.kind === "probe" ? (
+              <ProbeLauncherForm
+                archived={archived}
+                detail={{
+                  expectedActiveScopeRevisionId: detail.data.activeScopeRevision?.id ?? null,
+                  expectedEngagementRevision: detail.data.engagement.revision,
+                  scopeRules: detail.data.activeScopeRevision?.rules ?? [],
+                }}
+                engagementId={engagementId}
+                origin={request.origin}
+                sourceLabel={request.sourceLabel}
+                onClose={onClose}
+                onDirtyChange={setDirty}
+                onPendingChange={setPending}
+              />
+            ) : (
+              <FfufLauncherForm
+                archived={archived}
+                detail={{
+                  expectedActiveScopeRevisionId: detail.data.activeScopeRevision?.id ?? null,
+                  expectedEngagementRevision: detail.data.engagement.revision,
+                  scopeRules: detail.data.activeScopeRevision?.rules ?? [],
+                }}
+                engagementId={engagementId}
+                origin={request.origin}
+                scopeHint={request.scopeHint}
+                sourceLabel={request.sourceLabel}
+                onClose={onClose}
+                onDirtyChange={setDirty}
+                onPendingChange={setPending}
+              />
+            )
+          ) : null}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+interface LaunchedActionState {
+  readonly displayAction: PersistedAction | undefined;
+  readonly mutationError: string | undefined;
+  readonly plannedTargets: readonly string[];
+  readonly result: PersistedAction | undefined;
+  readonly showPollError: boolean;
+  readonly stoppable: boolean;
+  readonly stopping: boolean;
+  readonly terminal: boolean;
+  readonly trackedActionId: string | undefined;
+  readonly onRefresh: () => void;
+  readonly onStop: () => void;
+  readonly trackLaunched: (action: PersistedAction) => void;
+}
+
+function useLauncherActionState(
+  engagementId: string,
+  launchError: string | undefined,
+  cancelError: string | undefined,
+  cancelAction: ReturnType<typeof useCancelActionMutation>,
+): LaunchedActionState & { setPlannedTargets: (targets: string[]) => void; setResultNone: () => void } {
+  const queryClient = useQueryClient();
+  const [plannedTargets, setPlannedTargets] = useState<string[]>([]);
+  const [result, setResult] = useState<PersistedAction | undefined>(undefined);
+  const [trackedActionId, setTrackedActionId] = useState<string | undefined>(undefined);
+  const hasInvalidatedRef = useRef<string | null>(null);
+
+  const polledActionQuery = useQuery({
+    ...persistedActionQueryOptions(engagementId, trackedActionId),
+    refetchInterval: (query) => {
+      const data = query.state.data as PersistedAction | undefined;
+      if (data !== undefined && isTerminalActionState(data.action.state)) return false;
+      if (query.state.error) return false;
+      return 1500;
+    },
+    retry: false,
+  });
+
+  const displayAction = trackedActionId !== undefined ? (polledActionQuery.data ?? result) : result;
+
+  useEffect(() => {
+    hasInvalidatedRef.current = null;
+  }, [trackedActionId]);
+
+  useEffect(() => {
+    const action = polledActionQuery.data;
+    if (action === undefined || trackedActionId === undefined) return;
+    if (action.action.actionId !== trackedActionId) return;
+    if (!isTerminalActionState(action.action.state)) return;
+    if (hasInvalidatedRef.current === trackedActionId) return;
+    hasInvalidatedRef.current = trackedActionId;
+    void queryClient.invalidateQueries({ queryKey: engagementServicesQueryKey(engagementId) });
+    void queryClient.invalidateQueries({ queryKey: engagementHttpProbesQueryKey(engagementId) });
+    void queryClient.invalidateQueries({ queryKey: engagementFfufResultsQueryKey(engagementId) });
+    void queryClient.invalidateQueries({ queryKey: reportQueryKey(engagementId) });
+  }, [engagementId, polledActionQuery.data, queryClient, trackedActionId]);
+
+  const trackLaunched = (action: PersistedAction) => {
+    setResult(action);
+    setTrackedActionId(action.action.state === "queued" ? action.action.actionId : undefined);
+  };
+
+  const terminal = displayAction !== undefined && isTerminalActionState(displayAction.action.state);
+  const stoppable =
+    displayAction !== undefined &&
+    !terminal &&
+    (displayAction.action.state === "queued" || displayAction.action.state === "active");
+
+  return {
+    displayAction,
+    mutationError: launchError ?? cancelError,
+    plannedTargets,
+    result,
+    showPollError:
+      trackedActionId !== undefined && polledActionQuery.isError && !polledActionQuery.isFetching,
+    stoppable,
+    stopping: cancelAction.isPending,
+    terminal,
+    trackedActionId,
+    onRefresh: () => void polledActionQuery.refetch(),
+    onStop: () => {
+      if (displayAction === undefined || cancelAction.isPending) return;
+      cancelAction.mutate(
+        {
+          engagementId,
+          actionId: displayAction.action.actionId,
+          expectedRevision: displayAction.revision,
+        },
+        { onSuccess: trackLaunched },
+      );
+    },
+    trackLaunched,
+    setPlannedTargets,
+    setResultNone: () => {
+      setResult(undefined);
+      setTrackedActionId(undefined);
+    },
+  };
+}
+
+function ProbeLauncherForm({
+  archived,
+  detail,
+  engagementId,
+  onClose,
+  onDirtyChange,
+  onPendingChange,
+  origin,
+  sourceLabel,
+}: {
+  archived: boolean;
+  detail: LauncherDetail;
+  engagementId: string;
+  onClose: () => void;
+  onDirtyChange: (dirty: boolean) => void;
+  onPendingChange: (pending: boolean) => void;
+  origin: string;
+  sourceLabel: string;
+}) {
+  const initialScheme = parseOriginScheme(origin);
+  const [scheme, setScheme] = useState<OriginScheme>(initialScheme);
+  const [originText, setOriginText] = useState(origin);
+  const [fieldError, setFieldError] = useState<string | undefined>(undefined);
+  const createAction = useCreateActionMutation();
+  const cancelAction = useCancelActionMutation();
+  const launcher = useLauncherActionState(
+    engagementId,
+    createAction.isError ? engagementMutationMessage(createAction.error) : undefined,
+    cancelAction.isError ? engagementMutationMessage(cancelAction.error) : undefined,
+    cancelAction,
+  );
+
+  const dirty = withOriginScheme(originText.trim(), scheme) !== origin;
+  useEffect(() => {
+    onDirtyChange(dirty && launcher.result === undefined);
+  }, [dirty, launcher.result, onDirtyChange]);
+  useEffect(() => {
+    onPendingChange(createAction.isPending);
+  }, [createAction.isPending, onPendingChange]);
+
+  const canLaunch = !archived && !createAction.isPending;
+  const changeScheme = (next: OriginScheme) => {
+    setScheme(next);
+    setOriginText((current) =>
+      current.trim() === "" ? current : withOriginScheme(current, next),
+    );
+  };
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canLaunch) return;
+    createAction.reset();
+    cancelAction.reset();
+    launcher.setResultNone();
+    const nextOrigin = withOriginScheme(originText.trim(), scheme);
+    if (!isHttpUrl(nextOrigin) || splitOriginUrl(nextOrigin) === undefined) {
+      setFieldError("Origin must be an http or https URL.");
+      return;
+    }
+    setFieldError(undefined);
+    launcher.setPlannedTargets([nextOrigin]);
+    createAction.mutate(
+      {
+        engagementId,
+        expectedEngagementRevision: detail.expectedEngagementRevision,
+        expectedActiveScopeRevisionId: detail.expectedActiveScopeRevisionId,
+        targets: [nextOrigin],
+        declaredPorts: null,
+      },
+      { onSuccess: launcher.trackLaunched },
+    );
+  };
+
+  return (
+    <div>
+      {archived ? (
+        <p className="mb-3 text-[12px] leading-5 text-muted-foreground">
+          This engagement is archived. Probes cannot be launched.
+        </p>
+      ) : null}
+      <form className="grid gap-3" onSubmit={submit}>
+        <div className="grid gap-3 sm:grid-cols-[120px_minmax(0,1fr)]">
+          <label className="grid gap-1 text-[11px] text-muted-foreground" htmlFor="launcher-scheme">
+            <span>Scheme</span>
+            <select
+              id="launcher-scheme"
+              value={scheme}
+              autoFocus
+              disabled={archived || createAction.isPending}
+              className="h-9 w-full rounded-md border border-input bg-transparent px-2.5 font-mono text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onChange={(event) => changeScheme(event.target.value === "https" ? "https" : "http")}
+            >
+              <option value="http">http</option>
+              <option value="https">https</option>
+            </select>
+          </label>
+          <label className="grid gap-1 text-[11px] text-muted-foreground" htmlFor="launcher-origin">
+            <span>Origin</span>
+            <input
+              id="launcher-origin"
+              value={originText}
+              autoComplete="off"
+              spellCheck={false}
+              disabled={archived || createAction.isPending}
+              className="h-9 w-full rounded-md border border-input bg-transparent px-2.5 font-mono text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onChange={(event) => setOriginText(event.target.value)}
+            />
+          </label>
+        </div>
+        {fieldError !== undefined ? (
+          <p className="m-0 text-[13px] text-destructive" role="alert">
+            {fieldError}
+          </p>
+        ) : null}
+        {launcher.mutationError !== undefined ? (
+          <p className="m-0 text-[13px] text-destructive" role="alert">
+            {launcher.mutationError}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={!canLaunch}>
+            {createAction.isPending ? "Probing" : "Probe web"}
+          </Button>
+          {launcher.stoppable ? (
+            <Button
+              type="button"
+              variant="quiet"
+              disabled={launcher.stopping}
+              onClick={launcher.onStop}
+            >
+              {launcher.stopping ? "Stopping" : "Stop"}
+            </Button>
+          ) : null}
+        </div>
+      </form>
+      <LauncherResult
+        engagementId={engagementId}
+        expectedEngagementRevision={detail.expectedEngagementRevision}
+        launcher={launcher}
+        onClose={onClose}
+        scopeRules={detail.scopeRules}
+        sourceLabel={sourceLabel}
+      />
+    </div>
+  );
+}
+
+function parseLauncherPositiveInt(
+  raw: string,
+  field: string,
+): { ok: true; value: number } | { ok: false; message: string } {
+  const value = Number.parseInt(raw.trim(), 10);
+  if (!/^\d+$/.test(raw.trim()) || !Number.isSafeInteger(value) || value < 1) {
+    return { ok: false, message: `${field} must be a positive integer.` };
+  }
+  return { ok: true, value };
+}
+
+function parseLauncherMatchCodes(raw: string): { ok: true; value: number[] } | { ok: false; message: string } {
+  const values: number[] = [];
+  for (const part of raw.split(",")) {
+    const trimmed = part.trim();
+    if (trimmed.length === 0) continue;
+    const code = Number.parseInt(trimmed, 10);
+    if (!/^\d+$/.test(trimmed) || code < 100 || code > 599) {
+      return { ok: false, message: `Match code "${trimmed}" must be an integer in 100-599.` };
+    }
+    values.push(code);
+  }
+  if (values.length === 0) return { ok: false, message: "Match codes need at least one status code." };
+  return { ok: true, value: values };
+}
+
+function FfufLauncherForm({
+  archived,
+  detail,
+  engagementId,
+  onClose,
+  onDirtyChange,
+  onPendingChange,
+  origin,
+  scopeHint,
+  sourceLabel,
+}: {
+  archived: boolean;
+  detail: LauncherDetail;
+  engagementId: string;
+  onClose: () => void;
+  onDirtyChange: (dirty: boolean) => void;
+  onPendingChange: (pending: boolean) => void;
+  origin: string;
+  scopeHint: string | undefined;
+  sourceLabel: string;
+}) {
+  const formId = useId();
+  const storedDefaults = useRunnerSettingsQuery().data;
+  const [originText, setOriginText] = useState(origin);
+  const [wordlistPath, setWordlistPath] = useState("");
+  const [rate, setRate] = useState(String(FFUF_RATE_DEFAULT));
+  const [threads, setThreads] = useState(String(FFUF_THREADS_DEFAULT));
+  const [timeoutSeconds, setTimeoutSeconds] = useState(String(FFUF_TIMEOUT_SECONDS_DEFAULT));
+  const [maxTimeSeconds, setMaxTimeSeconds] = useState(String(FFUF_MAX_TIME_SECONDS_DEFAULT));
+  const [matchCodes, setMatchCodes] = useState(FFUF_DEFAULT_MATCH_CODES.join(", "));
+  const editedFields = useRef(new Set<string>());
+  const launch = useLaunchFfufDiscoveryMutation();
+  const cancelAction = useCancelActionMutation();
+  const launcher = useLauncherActionState(
+    engagementId,
+    launch.isError ? engagementMutationMessage(launch.error) : undefined,
+    cancelAction.isError ? engagementMutationMessage(cancelAction.error) : undefined,
+    cancelAction,
+  );
+
+  useEffect(() => {
+    if (storedDefaults === undefined) return;
+    if (!editedFields.current.has("wordlistPath")) setWordlistPath(storedDefaults.ffufWordlistPath);
+    if (!editedFields.current.has("rate")) setRate(String(storedDefaults.ffufRate));
+    if (!editedFields.current.has("threads")) setThreads(String(storedDefaults.ffufThreads));
+    if (!editedFields.current.has("timeoutSeconds"))
+      setTimeoutSeconds(String(storedDefaults.ffufTimeoutSeconds));
+    if (!editedFields.current.has("maxTimeSeconds"))
+      setMaxTimeSeconds(String(storedDefaults.ffufMaxTimeSeconds));
+  }, [storedDefaults]);
+
+  const [fieldError, setFieldError] = useState<string | undefined>(undefined);
+  const dirty =
+    originText !== origin ||
+    editedFields.current.size > 0 ||
+    matchCodes !== FFUF_DEFAULT_MATCH_CODES.join(", ");
+  useEffect(() => {
+    onDirtyChange(dirty && launcher.result === undefined);
+  }, [dirty, launcher.result, onDirtyChange]);
+  useEffect(() => {
+    onPendingChange(launch.isPending);
+  }, [launch.isPending, onPendingChange]);
+
+  const markEdited = (field: string) => {
+    editedFields.current.add(field);
+  };
+  const canLaunch = !archived && !launch.isPending;
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canLaunch) return;
+    launch.reset();
+    cancelAction.reset();
+    launcher.setResultNone();
+    if (!isHttpUrl(originText.trim()) || splitOriginUrl(originText.trim()) === undefined) {
+      setFieldError("Origin must be an http or https URL.");
+      return;
+    }
+    if (wordlistPath.trim().length === 0) {
+      setFieldError("Wordlist path must be an absolute managed path.");
+      return;
+    }
+    const parsed = {
+      rate: parseLauncherPositiveInt(rate, "Rate"),
+      threads: parseLauncherPositiveInt(threads, "Threads"),
+      timeout: parseLauncherPositiveInt(timeoutSeconds, "Timeout"),
+      maxTime: parseLauncherPositiveInt(maxTimeSeconds, "Duration"),
+      codes: parseLauncherMatchCodes(matchCodes),
+    };
+    const failure = [parsed.rate, parsed.threads, parsed.timeout, parsed.maxTime, parsed.codes].find(
+      (entry) => !entry.ok,
+    );
+    if (failure !== undefined && !failure.ok) {
+      setFieldError(failure.message);
+      return;
+    }
+    if (!parsed.rate.ok || !parsed.threads.ok || !parsed.timeout.ok || !parsed.maxTime.ok || !parsed.codes.ok) {
+      return;
+    }
+    setFieldError(undefined);
+    const target = originText.trim();
+    launcher.setPlannedTargets([target]);
+    launch.mutate(
+      {
+        engagementId,
+        expectedEngagementRevision: detail.expectedEngagementRevision,
+        expectedActiveScopeRevisionId: detail.expectedActiveScopeRevisionId,
+        origin: target,
+        wordlistPath: wordlistPath.trim(),
+        rate: parsed.rate.value,
+        threads: parsed.threads.value,
+        timeoutSeconds: parsed.timeout.value,
+        maxTimeSeconds: parsed.maxTime.value,
+        matchStatusCodes: parsed.codes.value,
+      },
+      { onSuccess: launcher.trackLaunched },
+    );
+  };
+
+  const numericFields = [
+    { id: `${formId}-rate`, label: "Rate", value: rate, onChange: setRate, field: "rate" },
+    { id: `${formId}-threads`, label: "Threads", value: threads, onChange: setThreads, field: "threads" },
+    { id: `${formId}-timeout`, label: "Timeout s", value: timeoutSeconds, onChange: setTimeoutSeconds, field: "timeoutSeconds" },
+    { id: `${formId}-maxtime`, label: "Duration s", value: maxTimeSeconds, onChange: setMaxTimeSeconds, field: "maxTimeSeconds" },
+  ];
+
+  return (
+    <div>
+      {archived ? (
+        <p className="mb-3 text-[12px] leading-5 text-muted-foreground">
+          This engagement is archived. Discoveries cannot be launched.
+        </p>
+      ) : null}
+      {scopeHint !== undefined ? (
+        <p className="mt-0 mb-3 truncate font-mono text-[11px] text-muted-foreground" title={scopeHint}>
+          Scoped from {scopeHint}
+        </p>
+      ) : null}
+      <form className="grid gap-3" onSubmit={submit}>
+        <label className="grid gap-1 text-[11px] text-muted-foreground" htmlFor={`${formId}-origin`}>
+          <span>Origin</span>
+          <input
+            id={`${formId}-origin`}
+            value={originText}
+            autoComplete="off"
+            autoFocus
+            spellCheck={false}
+            disabled={archived || launch.isPending}
+            className="h-9 w-full rounded-md border border-input bg-transparent px-2.5 font-mono text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onChange={(event) => setOriginText(event.target.value)}
+          />
+        </label>
+        <label className="grid gap-1 text-[11px] text-muted-foreground" htmlFor={`${formId}-wordlist`}>
+          <span>Wordlist path</span>
+          <input
+            id={`${formId}-wordlist`}
+            value={wordlistPath}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="/wordlists/smoke.txt"
+            disabled={archived || launch.isPending}
+            className="h-9 w-full rounded-md border border-input bg-transparent px-2.5 font-mono text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onChange={(event) => {
+              markEdited("wordlistPath");
+              setWordlistPath(event.target.value);
+            }}
+          />
+        </label>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {numericFields.map((field) => (
+            <label key={field.id} className="grid gap-1 text-[11px] text-muted-foreground" htmlFor={field.id}>
+              <span>{field.label}</span>
+              <input
+                id={field.id}
+                value={field.value}
+                inputMode="numeric"
+                autoComplete="off"
+                spellCheck={false}
+                disabled={archived || launch.isPending}
+                className="h-9 w-full rounded-md border border-input bg-transparent px-2.5 font-mono text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onChange={(event) => {
+                  markEdited(field.field);
+                  field.onChange(event.target.value);
+                }}
+              />
+            </label>
+          ))}
+        </div>
+        <label className="grid gap-1 text-[11px] text-muted-foreground" htmlFor={`${formId}-codes`}>
+          <span>Match status codes</span>
+          <input
+            id={`${formId}-codes`}
+            value={matchCodes}
+            autoComplete="off"
+            spellCheck={false}
+            disabled={archived || launch.isPending}
+            className="h-9 w-full rounded-md border border-input bg-transparent px-2.5 font-mono text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onChange={(event) => setMatchCodes(event.target.value)}
+          />
+        </label>
+        {fieldError !== undefined ? (
+          <p className="m-0 text-[13px] text-destructive" role="alert">
+            {fieldError}
+          </p>
+        ) : null}
+        {launcher.mutationError !== undefined ? (
+          <p className="m-0 text-[13px] text-destructive" role="alert">
+            {launcher.mutationError}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={!canLaunch}>
+            {launch.isPending ? "Launching" : "Launch discovery"}
+          </Button>
+          {launcher.stoppable ? (
+            <Button
+              type="button"
+              variant="quiet"
+              disabled={launcher.stopping}
+              onClick={launcher.onStop}
+            >
+              {launcher.stopping ? "Stopping" : "Stop"}
+            </Button>
+          ) : null}
+        </div>
+      </form>
+      <LauncherResult
+        engagementId={engagementId}
+        expectedEngagementRevision={detail.expectedEngagementRevision}
+        launcher={launcher}
+        onClose={onClose}
+        scopeRules={detail.scopeRules}
+        sourceLabel={sourceLabel}
+      />
+    </div>
+  );
+}
+
+function LauncherResult({
+  engagementId,
+  expectedEngagementRevision,
+  launcher,
+  onClose,
+  scopeRules,
+  sourceLabel,
+}: {
+  engagementId: string;
+  expectedEngagementRevision: number;
+  launcher: LaunchedActionState;
+  onClose: () => void;
+  scopeRules: readonly SavedScopeRule[];
+  sourceLabel: string;
+}) {
+  if (launcher.result?.action.state === "paused_for_warning") {
+    return (
+      <WarningCard
+        action={launcher.result}
+        engagementId={engagementId}
+        expectedEngagementRevision={expectedEngagementRevision}
+        plannedTargets={launcher.plannedTargets}
+        scopeRules={scopeRules}
+        onAddScopeAndRun={launcher.trackLaunched}
+        onCancel={launcher.trackLaunched}
+        onContinue={launcher.trackLaunched}
+      />
+    );
+  }
+  if (launcher.displayAction === undefined) return null;
+  return (
+    <div className="mt-4">
+      <p className="mb-0 text-[13px] text-foreground" role="status">
+        {actionLifecycleStatusCopy(launcher.displayAction.action)}{" "}
+        <span className="font-mono text-[12px] text-muted-foreground">
+          {launcher.displayAction.action.actionId}
+        </span>
+      </p>
+      {launcher.showPollError ? (
+        <p className="mt-2 mb-0 flex items-center gap-2 text-[12px] text-muted-foreground" role="status">
+          <span>Status update failed.</span>
+          <Button
+            type="button"
+            variant="quiet"
+            className="h-7 px-2 text-[12px]"
+            onClick={launcher.onRefresh}
+          >
+            Refresh
+          </Button>
+        </p>
+      ) : null}
+      <div className="mt-3">
+        <Button type="button" variant="secondary" onClick={onClose}>
+          Back to {sourceLabel}
+        </Button>
+      </div>
+    </div>
+  );
+}
