@@ -409,7 +409,7 @@ export function registerExcerptRoutes(
               points.slice(hit.charOffset, hit.charOffset + hit.charLength).join(""),
               "utf8",
             ),
-            snippet: masked.snippet,
+            snippet: masked.text,
             redactions: masked.redactions,
           });
         }

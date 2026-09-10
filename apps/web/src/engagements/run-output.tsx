@@ -341,7 +341,7 @@ function RunOutputSearch({
         byteLength: match.byteLength,
       },
       {
-        onSuccess: (excerpt) => announce("Excerpt kept. Open the Findings tab to create a linked finding."),
+        onSuccess: () => announce("Excerpt kept. Open the Findings tab to create a linked finding."),
         onError: () => undefined,
       },
     );

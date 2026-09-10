@@ -3568,11 +3568,11 @@
         },
         "evidence_excerpt_artifact_id": {
           "name": "evidence_excerpt_artifact_id",
-          "value": "length(\"evidence_excerpts\".\"artifact_id\") between 1 and 127"
+          "value": "length(\"evidence_excerpts\".\"artifact_id\") between 1 and 127 and substr(\"evidence_excerpts\".\"artifact_id\", 1, 1) glob '[a-z0-9]' and \"evidence_excerpts\".\"artifact_id\" not glob '*[^a-z0-9-]*'"
         },
         "evidence_excerpt_artifact_digest": {
           "name": "evidence_excerpt_artifact_digest",
-          "value": "length(\"evidence_excerpts\".\"artifact_digest\") = 71"
+          "value": "length(\"evidence_excerpts\".\"artifact_digest\") = 71 and \"evidence_excerpts\".\"artifact_digest\" glob 'sha256:[0-9a-f]*' and \"evidence_excerpts\".\"artifact_digest\" not glob 'sha256:*[^0-9a-f]*'"
         },
         "evidence_excerpt_stream": {
           "name": "evidence_excerpt_stream",
@@ -3580,7 +3580,7 @@
         },
         "evidence_excerpt_range": {
           "name": "evidence_excerpt_range",
-          "value": "\"evidence_excerpts\".\"byte_offset\" >= 0"
+          "value": "\"evidence_excerpts\".\"byte_offset\" >= 0 and \"evidence_excerpts\".\"byte_length\" between 1 and 8192 and \"evidence_excerpts\".\"byte_offset\" + \"evidence_excerpts\".\"byte_length\" <= 1073741824"
         },
         "evidence_excerpt_content_bytes": {
           "name": "evidence_excerpt_content_bytes",
@@ -3592,7 +3592,7 @@
         },
         "evidence_excerpt_target_note": {
           "name": "evidence_excerpt_target_note",
-          "value": "\"evidence_excerpts\".\"target_note\" is null"
+          "value": "\"evidence_excerpts\".\"target_note\" is null or length(\"evidence_excerpts\".\"target_note\") between 1 and 120"
         },
         "evidence_excerpt_created_at": {
           "name": "evidence_excerpt_created_at",
@@ -3743,7 +3743,7 @@
         },
         "evidence_attachment_filename": {
           "name": "evidence_attachment_filename",
-          "value": "length(\"evidence_attachments\".\"filename\") between 1 and 128"
+          "value": "length(\"evidence_attachments\".\"filename\") between 1 and 128 and \"evidence_attachments\".\"filename\" not glob '*[^a-z0-9-]*'"
         },
         "evidence_attachment_mime": {
           "name": "evidence_attachment_mime",
@@ -3755,7 +3755,7 @@
         },
         "evidence_attachment_digest": {
           "name": "evidence_attachment_digest",
-          "value": "length(\"evidence_attachments\".\"digest\") = 71"
+          "value": "length(\"evidence_attachments\".\"digest\") = 71 and \"evidence_attachments\".\"digest\" glob 'sha256:[0-9a-f]*' and \"evidence_attachments\".\"digest\" not glob 'sha256:*[^0-9a-f]*'"
         },
         "evidence_attachment_caption": {
           "name": "evidence_attachment_caption",
@@ -3763,11 +3763,11 @@
         },
         "evidence_attachment_target_label": {
           "name": "evidence_attachment_target_label",
-          "value": "\"evidence_attachments\".\"target_label\" is null"
+          "value": "\"evidence_attachments\".\"target_label\" is null or length(\"evidence_attachments\".\"target_label\") between 1 and 120"
         },
         "evidence_attachment_crop_json": {
           "name": "evidence_attachment_crop_json",
-          "value": "\"evidence_attachments\".\"crop_rect_json\" is null"
+          "value": "\"evidence_attachments\".\"crop_rect_json\" is null or (json_valid(\"evidence_attachments\".\"crop_rect_json\") and length(cast(\"evidence_attachments\".\"crop_rect_json\" as blob)) <= 1024)"
         },
         "evidence_attachment_content_bytes": {
           "name": "evidence_attachment_content_bytes",

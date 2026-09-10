@@ -377,14 +377,21 @@ describe("excerpt routes", () => {
     expect(body.matches.length).toBeGreaterThan(0);
     expect(body.matches[0]?.snippet).toContain("login");
     expect(body.scanCapped).toBe(false);
+    // Snippet content survives masking: every match carries a real string.
+    for (const match of body.matches) {
+      expect(typeof match.snippet).toBe("string");
+      expect(match.snippet.length).toBeGreaterThan(0);
+    }
 
     const secretSearch = await harness.inject({
       method: "GET",
       url: `/api/v1/engagements/${ENGAGEMENT_ID}/runs/${RUN_ID}/output/search?q=flag`,
     });
     const secretBody = secretSearch.json() as { matches: { snippet: string }[] };
+    expect(secretBody.matches.length).toBeGreaterThan(0);
     for (const match of secretBody.matches) {
       expect(match.snippet).not.toContain("flag{excerpt-secret-value}");
+      expect(match.snippet).toContain("[redacted]");
     }
 
     const empty = await harness.inject({
