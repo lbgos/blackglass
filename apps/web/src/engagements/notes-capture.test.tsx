@@ -110,7 +110,20 @@ afterEach(() => {
 
 const PNG_BYTES = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 
-function stubNotes(upload: (body: Record<string, unknown>) => Promise<Response>) {
+function stubNotes(
+  upload: (body: Record<string, unknown>) => Promise<Response>,
+  patch: (attachmentId: string, body: Record<string, unknown>) => Promise<Response> = (attachmentId, body) =>
+    Promise.resolve(
+      response(
+        {
+          ...savedAttachment(),
+          id: attachmentId,
+          caption: typeof body["caption"] === "string" ? body["caption"] : "",
+        },
+        200,
+      ),
+    ),
+) {
   const posts: { url: string; body: unknown }[] = [];
   vi.stubGlobal(
     "fetch",
@@ -138,6 +151,11 @@ function stubNotes(upload: (body: Record<string, unknown>) => Promise<Response>)
         const body = JSON.parse(String(init.body)) as Record<string, unknown>;
         posts.push({ url, body });
         return upload(body);
+      }
+      const patchMatch = /\/attachments\/([^/]+)$/.exec(url);
+      if (patchMatch?.[1] !== undefined && init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        return patch(patchMatch[1], body);
       }
       if (url.endsWith("/attachments")) return Promise.resolve(response([]));
       return Promise.resolve(response([]));
@@ -196,5 +214,34 @@ describe("notes image capture", () => {
     // The failed upload keeps the image and offers retry instead of losing it.
     expect(await screen.findByRole("button", { name: "Retry upload" })).toBeTruthy();
     expect(screen.getByLabelText("Proves (names the file)")).toBeTruthy();
+  });
+
+  it("rejects a malformed caption response instead of trusting it", async () => {
+    stubNotes(
+      async (body) => response({ ...savedAttachment(), caption: body["caption"] }, 201),
+      async () => response({ bogus: true }, 200),
+    );
+
+    await renderWorkspace(`/engagements/${ENGAGEMENT_ID}?tab=notes`);
+    await screen.findByLabelText("Markdown");
+
+    const picker = screen.getByLabelText("Attach image file") as HTMLInputElement;
+    fireEvent.change(picker, {
+      target: { files: [new File([PNG_BYTES], "login.png", { type: "image/png" })] },
+    });
+    await screen.findByLabelText("Proves (names the file)");
+    fireEvent.click(screen.getByRole("button", { name: "Save image" }));
+    await screen.findByText("admin-login-as-sa");
+
+    fireEvent.change(screen.getByLabelText("Caption for admin-login-as-sa"), {
+      target: { value: "edited caption" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save caption" }));
+
+    // Untrusted payload rejected: local caption kept, truthful error shown.
+    expect(await screen.findByText("Caption could not be saved. Retry.")).toBeTruthy();
+    expect(
+      (screen.getByLabelText("Caption for admin-login-as-sa") as HTMLInputElement).value,
+    ).toBe("edited caption");
   });
 });

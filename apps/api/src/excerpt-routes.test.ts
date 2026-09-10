@@ -33,6 +33,7 @@ interface Harness {
     payload?: unknown;
   }) => Promise<{ statusCode: number; json(): unknown }>;
   artifacts: Map<string, Buffer>;
+  extraArtifacts: { artifactId: string; kind: string }[];
   archived: { current: boolean };
 }
 
@@ -56,6 +57,7 @@ async function createHarness(): Promise<Harness> {
   });
   if (!createdEngagement.ok) throw new Error("fixture engagement missing");
   const artifacts = new Map<string, Buffer>([[ARTIFACT_ID, STDOUT_BYTES]]);
+  const extraArtifacts: { artifactId: string; kind: string }[] = [];
   const archived = { current: false };
   const app = Fastify({ logger: false });
   registerExcerptRoutes(app, {
@@ -91,18 +93,38 @@ async function createHarness(): Promise<Harness> {
       },
       artifactsForRun: (runId: string) => {
         if (runId !== RUN_ID) return { ok: true as const, artifacts: [] };
+        const rows: {
+          artifactId: string;
+          runId: string;
+          kind: string;
+          sizeBytes: number;
+          digest: string;
+          completeness: string;
+        }[] = [
+          {
+            artifactId: ARTIFACT_ID,
+            runId: RUN_ID,
+            kind: "stdout",
+            sizeBytes: STDOUT_BYTES.length,
+            digest: sha256(STDOUT_BYTES),
+            completeness: "complete",
+          },
+        ];
+        for (const extra of extraArtifacts) {
+          const bytes = artifacts.get(extra.artifactId);
+          if (bytes === undefined) throw new Error(`fixture bytes missing: ${extra.artifactId}`);
+          rows.push({
+            artifactId: extra.artifactId,
+            runId: RUN_ID,
+            kind: extra.kind,
+            sizeBytes: bytes.length,
+            digest: sha256(bytes),
+            completeness: "complete",
+          });
+        }
         return {
           ok: true as const,
-          artifacts: [
-            {
-              artifactId: ARTIFACT_ID,
-              runId: RUN_ID,
-              kind: "stdout",
-              sizeBytes: STDOUT_BYTES.length,
-              digest: sha256(STDOUT_BYTES),
-              completeness: "complete",
-            },
-          ],
+          artifacts: rows,
         } as unknown as ReturnType<
           import("@blackglass/db").RunOutputRepository["artifactsForRun"]
         >;
@@ -169,6 +191,7 @@ async function createHarness(): Promise<Harness> {
     database,
     excerpts,
     artifacts,
+    extraArtifacts,
     archived,
     inject: async (options) => {
       const response = await app.inject({
@@ -369,6 +392,31 @@ describe("excerpt routes", () => {
       url: `/api/v1/engagements/${ENGAGEMENT_ID}/runs/${RUN_ID}/output/search?q=`,
     });
     expect(empty.statusCode).toBe(400);
+  });
+
+  it("reports scanCapped when more than 8 artifacts are eligible", async () => {
+    const harness = await createHarness();
+    for (let index = 0; index < 9; index += 1) {
+      const artifactId = `artifact-extra-${index}`;
+      harness.artifacts.set(artifactId, Buffer.from(`extra output ${index}\n`, "utf8"));
+      harness.extraArtifacts.push({ artifactId, kind: "stdout" });
+    }
+    const found = await harness.inject({
+      method: "GET",
+      url: `/api/v1/engagements/${ENGAGEMENT_ID}/runs/${RUN_ID}/output/search?q=extra`,
+    });
+    expect(found.statusCode).toBe(200);
+    const body = found.json() as {
+      matches: { artifactId: string }[];
+      scanCapped: boolean;
+      unavailableArtifactIds: string[];
+    };
+    // Ten eligible artifacts, eight scanned: coverage must not be claimed.
+    expect(body.scanCapped).toBe(true);
+    expect(body.unavailableArtifactIds).toEqual([]);
+    for (const match of body.matches) {
+      expect(match.artifactId.startsWith("artifact-extra-")).toBe(true);
+    }
   });
 
   it("rejects excerpt writes on archived engagements", async () => {

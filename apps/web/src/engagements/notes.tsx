@@ -319,6 +319,89 @@ function isAttachmentMime(value: string): value is AttachmentMime {
   return (ATTACHMENT_MIME_ALLOWLIST as readonly string[]).includes(value);
 }
 
+// Structural validation for attachment payloads over the network. The web
+// layer carries no zod dependency by convention (see report-mask.ts), so
+// this guard mirrors the contract bounds instead: untrusted content is
+// never cast blindly into the render path. The server remains the schema
+// authority via AttachmentSchema.
+function parseAttachmentPayload(value: unknown): Attachment {
+  if (typeof value !== "object" || value === null) throw new Error("invalid attachment");
+  const record = value as Record<string, unknown>;
+  const text = (field: string, min: number, max: number): string => {
+    const candidate = record[field];
+    if (typeof candidate !== "string" || candidate.length < min || candidate.length > max) {
+      throw new Error(`invalid attachment field ${field}`);
+    }
+    return candidate;
+  };
+  const nullableText = (field: string, min: number, max: number): string | null => {
+    const candidate = record[field];
+    if (candidate === null) return null;
+    if (typeof candidate !== "string" || candidate.length < min || candidate.length > max) {
+      throw new Error(`invalid attachment field ${field}`);
+    }
+    return candidate;
+  };
+  if (record["contractVersion"] !== 1) throw new Error("invalid attachment version");
+  const mime = record["mime"];
+  if (typeof mime !== "string" || !isAttachmentMime(mime)) {
+    throw new Error("invalid attachment mime");
+  }
+  const sizeBytes = record["sizeBytes"];
+  if (
+    typeof sizeBytes !== "number" ||
+    !Number.isSafeInteger(sizeBytes) ||
+    sizeBytes < 1
+  ) {
+    throw new Error("invalid attachment size");
+  }
+  const digest = record["digest"];
+  if (typeof digest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(digest)) {
+    throw new Error("invalid attachment digest");
+  }
+  const crop = record["crop"];
+  let parsedCrop: Attachment["crop"] = null;
+  if (crop !== null) {
+    if (typeof crop !== "object" || crop === null) throw new Error("invalid attachment crop");
+    const rect = crop as Record<string, unknown>;
+    const edges: { x: number; y: number; width: number; height: number } = {
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+    };
+    for (const field of ["x", "y"] as const) {
+      const candidate = rect[field];
+      if (typeof candidate !== "number" || !Number.isSafeInteger(candidate) || candidate < 0) {
+        throw new Error("invalid attachment crop");
+      }
+      edges[field] = candidate;
+    }
+    for (const field of ["width", "height"] as const) {
+      const candidate = rect[field];
+      if (typeof candidate !== "number" || !Number.isSafeInteger(candidate) || candidate < 1) {
+        throw new Error("invalid attachment crop");
+      }
+      edges[field] = candidate;
+    }
+    parsedCrop = edges;
+  }
+  return {
+    contractVersion: 1,
+    id: text("id", 1, 255),
+    engagementId: text("engagementId", 1, 255),
+    filename: text("filename", 1, 128),
+    mime,
+    sizeBytes,
+    digest,
+    caption: text("caption", 0, 280),
+    targetLabel: nullableText("targetLabel", 1, 120),
+    parentAttachmentId: nullableText("parentAttachmentId", 1, 255),
+    crop: parsedCrop,
+    createdAt: text("createdAt", 1, 255),
+  };
+}
+
 function attachmentContentUrl(engagementId: string, attachmentId: string): string {
   return `/api/v1/engagements/${encodeURIComponent(engagementId)}/attachments/${encodeURIComponent(attachmentId)}/content`;
 }
@@ -350,10 +433,10 @@ async function patchAttachmentCaption(
     },
   );
   const payload: unknown = await response.json().catch(() => undefined);
-  if (response.status !== 200 || typeof payload !== "object" || payload === null) {
+  if (response.status !== 200) {
     throw new Error("caption save failed");
   }
-  return payload as Attachment;
+  return parseAttachmentPayload(payload);
 }
 
 async function deriveAttachment(
@@ -370,10 +453,10 @@ async function deriveAttachment(
     },
   );
   const payload: unknown = await response.json().catch(() => undefined);
-  if (response.status !== 201 || typeof payload !== "object" || payload === null) {
+  if (response.status !== 201) {
     throw new Error("derived copy failed");
   }
-  return payload as Attachment;
+  return parseAttachmentPayload(payload);
 }
 
 function NoteAttachmentsSection({

@@ -1423,6 +1423,9 @@ export const evidenceExcerpts = sqliteTable(
 // optional operator target label, and derivation lineage. Derived crops and
 // annotations reference the kept original through parentAttachmentId;
 // originals are never mutated by derivation.
+// Bound note: content_base64 is capped at 2000000 chars while size_bytes
+// allows 2000000 raw bytes, so base64 inflation makes the content CHECK bite
+// first: the effective raw cap through the API is about 1.5M bytes.
 export const evidenceAttachments = sqliteTable(
   "evidence_attachments",
   {

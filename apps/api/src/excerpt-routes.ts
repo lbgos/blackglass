@@ -327,14 +327,17 @@ export function registerExcerptRoutes(
           artifacts.code,
         );
       }
-      const candidates = artifacts.artifacts
+      const eligible = artifacts.artifacts
         .filter((artifact) => artifact.runId === run.run?.id)
         .filter((artifact) => artifact.kind === "stdout" || artifact.kind === "stderr")
         .filter((artifact) =>
           query.data.stream === undefined ? true : artifact.kind === query.data.stream,
         )
-        .sort((left, right) => (left.artifactId < right.artifactId ? -1 : 1))
-        .slice(0, 8);
+        .sort((left, right) => (left.artifactId < right.artifactId ? -1 : 1));
+      // The scan covers at most 8 artifacts per request. Overflow is reported
+      // through scanCapped so absence of a match is never misread as proof
+      // of absence.
+      const candidates = eligible.slice(0, 8);
       const matches: {
         artifactId: string;
         stream: "stdout" | "stderr";
@@ -345,7 +348,7 @@ export function registerExcerptRoutes(
       }[] = [];
       const unavailableArtifactIds: string[] = [];
       let searchedBytes = 0;
-      let scanCapped = false;
+      let scanCapped = eligible.length > candidates.length;
       for (const candidate of candidates) {
         if (matches.length >= query.data.limit) break;
         let download: Awaited<ReturnType<EvidenceStore["verifiedDownload"]>>;
