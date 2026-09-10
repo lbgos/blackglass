@@ -313,8 +313,8 @@ describe("engagement findings", () => {
       if (url.endsWith(`/findings/${stored[0]?.id}`) && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>;
         putBodies.push(body);
-        stored = [{ ...stored[0], ...body, revision: 2 } as Record<string, unknown>];
-        delete (stored[0] as Record<string, unknown>).expectedRevision;
+        const { expectedRevision: _dropped, ...update } = body;
+        stored = [findingRecord({ ...stored[0], ...update, revision: 2 })];
         return Promise.resolve(response(stored[0]));
       }
       if (url.endsWith(`/engagements/${activeEngagement.id}/report`)) {
@@ -434,8 +434,8 @@ describe("engagement findings", () => {
             ),
           );
         }
-        stored = [{ ...stored[0], ...body, revision: 3 } as Record<string, unknown>];
-        delete (stored[0] as Record<string, unknown>).expectedRevision;
+        const { expectedRevision: _dropped, ...update } = body;
+        stored = [findingRecord({ ...stored[0], ...update, revision: 3 })];
         return Promise.resolve(response(stored[0]));
       }
       return undefined;
@@ -481,8 +481,8 @@ describe("engagement findings", () => {
       if (init?.method === "PUT") {
         putCalls += 1;
         const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-        stored = [{ ...stored[0], ...body, revision: 2 } as Record<string, unknown>];
-        delete (stored[0] as Record<string, unknown>).expectedRevision;
+        const { expectedRevision: _dropped, ...update } = body;
+        stored = [findingRecord({ ...stored[0], ...update, revision: 2 })];
         return new Promise<Response>((resolve) => {
           releasePut = resolve;
         });
