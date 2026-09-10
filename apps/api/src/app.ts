@@ -15,11 +15,14 @@ import type {
   EvidenceGrantRepository,
   FfufRepository,
   HttpProbeRepository,
+  LeadRepository,
   NmapServiceRepository,
+  ObjectiveRepository,
   OperatorCommandRepository,
   RunOutputRepository,
   RunRepository,
   RunnerRepository,
+  SecretRepository,
   SettingsRepository,
 } from "@blackglass/db";
 
@@ -43,7 +46,10 @@ import { registerRunHistoryRoutes } from "./run-history-routes.js";
 import { registerRunnerEvidenceGrantRoutes } from "./runner-evidence-grant-routes.js";
 import { registerRunnerEvidenceUploadRoutes } from "./runner-evidence-upload-routes.js";
 import { registerHttpProbeRoutes } from "./http-probe-routes.js";
+import { registerLeadRoutes } from "./lead-routes.js";
+import { registerObjectiveRoutes } from "./objective-routes.js";
 import { registerReportRoutes } from "./report-routes.js";
+import { registerSecretRoutes } from "./secret-routes.js";
 import { registerSettingsRoutes } from "./settings-routes.js";
 import {
   registerAdvisorTurnRoutes,
@@ -136,6 +142,35 @@ interface BuildAppOptions {
     | "listArtifactsForEngagement"
     | "listRunsForEngagement"
   >;
+  leadRepository?: Pick<
+    LeadRepository,
+    | "createLead"
+    | "listLeads"
+    | "getLead"
+    | "parkLead"
+    | "reopenLead"
+    | "closeLead"
+    | "suggestRevisit"
+    | "dismissRevisit"
+    | "recordAttempt"
+    | "getAttempt"
+    | "listAttempts"
+    | "attachAttempt"
+    | "leadOutline"
+  >;
+  objectiveRepository?: Pick<
+    ObjectiveRepository,
+    | "createObjective"
+    | "listObjectives"
+    | "getObjective"
+    | "captureObjective"
+    | "submitObjective"
+    | "reopenObjective"
+  >;
+  secretRepository?: Pick<
+    SecretRepository,
+    "createSecret" | "listSecrets" | "getSecret" | "recordVerification"
+  >;
   logger?: FastifyServerOptions["logger"];
   now?: () => Date;
 }
@@ -158,6 +193,9 @@ export function buildApp({
   httpProbeRepository,
   ffufRepository,
   runOutputRepository,
+  leadRepository,
+  objectiveRepository,
+  secretRepository,
   logger = false,
   now,
 }: BuildAppOptions): FastifyInstance {
@@ -304,6 +342,15 @@ export function buildApp({
       results: ffufRepository,
       ...(operatorCommandRepository === undefined ? {} : { commands: operatorCommandRepository }),
     });
+  }
+  if (leadRepository !== undefined) {
+    registerLeadRoutes(app, leadRepository);
+  }
+  if (objectiveRepository !== undefined) {
+    registerObjectiveRoutes(app, objectiveRepository);
+  }
+  if (secretRepository !== undefined) {
+    registerSecretRoutes(app, secretRepository);
   }
   if (runOutputRepository !== undefined) {
     registerRunHistoryRoutes(app, {
