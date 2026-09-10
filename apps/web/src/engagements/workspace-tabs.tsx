@@ -83,7 +83,8 @@ export function ExecutionTray({ engagementId, onOpenRun }: ExecutionTrayProps) {
   if (history.data === undefined || history.isError) return null;
   if (active.length === 0 && finished.length === 0) return null;
 
-  const latestFinished = finished[finished.length - 1];
+  // Runs arrive newest-first, so the first finished entry is the most recent.
+  const latestFinished = finished[0];
 
   return (
     <section

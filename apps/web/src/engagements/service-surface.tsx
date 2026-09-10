@@ -799,8 +799,16 @@ function OriginBlock({
 }) {
   const origin = withOriginScheme(`${host}:${String(port)}`, scheme);
   const sortedPaths = [...paths].sort((left, right) => left.url.localeCompare(right.url));
+  // Origin-level row identifier so launcher actions carry a defined sourceKey
+  // for focus restoration. The container is not a selectable inspector row,
+  // so the key uses an origin namespace that never collides with selection keys.
+  const rowKey = `origin:${host}:${String(port)}`;
   return (
-    <div className="mx-3 mb-3 rounded-md border border-border" data-surface-origin={origin}>
+    <div
+      className="mx-3 mb-3 rounded-md border border-border"
+      data-surface-origin={origin}
+      data-surface-row={rowKey}
+    >
       <div className="flex flex-wrap items-center gap-2 px-2.5 py-2">
         <label className="sr-only" htmlFor={`scheme-${host}-${String(port)}`}>
           Scheme for {host}:{String(port)}
@@ -821,6 +829,7 @@ function OriginBlock({
       <div className="flex flex-wrap items-center gap-x-1 gap-y-1 border-t border-border px-2.5 py-1.5">
         <OriginActionButton
           label="Probe web"
+          sourceKey={rowKey}
           onClick={(sourceKey) =>
             onOpenLauncher({ kind: "probe", origin, sourceLabel: origin }, sourceKey)
           }
@@ -835,6 +844,7 @@ function OriginBlock({
         </a>
         <OriginActionButton
           label="Discover paths"
+          sourceKey={rowKey}
           onClick={(sourceKey) =>
             onOpenLauncher({ kind: "ffuf", origin, sourceLabel: origin }, sourceKey)
           }
@@ -907,14 +917,20 @@ function OriginBlock({
 function OriginActionButton({
   label,
   onClick,
+  sourceKey,
 }: {
   label: string;
   onClick: (sourceKey: string | undefined) => void;
+  sourceKey?: string | undefined;
 }) {
   return (
     <button
       type="button"
       onClick={(event) => {
+        if (sourceKey !== undefined) {
+          onClick(sourceKey);
+          return;
+        }
         const row = event.currentTarget.closest("[data-surface-row]");
         onClick(
           row instanceof HTMLElement ? (row.getAttribute("data-surface-row") ?? undefined) : undefined,

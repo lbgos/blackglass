@@ -317,4 +317,29 @@ describe("surface target organization", () => {
     });
     expect(writes).toEqual([]);
   });
+
+  it("returns focus to the origin row when the invoking context is gone", async () => {
+    stubSurface();
+    renderSection();
+
+    expect(await screen.findByText("http://192.0.2.10/admin")).toBeTruthy();
+    const probeButton = screen.getByRole("button", { name: "Probe web" });
+    expect(
+      probeButton.closest("[data-surface-row]")?.getAttribute("data-surface-row"),
+    ).toBe("origin:192.0.2.10:80");
+
+    // Focus holder outside the surface; jsdom clicks do not move focus, so
+    // the launcher captures this element. Removing it before close forces
+    // the sourceKey fallback path instead of the live-element path.
+    const holder = document.createElement("button");
+    holder.textContent = "holder";
+    document.body.appendChild(holder);
+    holder.focus();
+    fireEvent.click(probeButton);
+    const dialog = await screen.findByRole("dialog", { name: "Probe web" });
+    holder.remove();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Probe web" })).toBeNull();
+    expect(document.activeElement).toBe(probeButton);
+  });
 });

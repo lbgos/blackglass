@@ -172,6 +172,44 @@ describe("execution tray", () => {
       vi.useRealTimers();
     }
   });
+
+  it("shows the newest finished run when several complete", async () => {
+    vi.useFakeTimers();
+    try {
+      let historyCalls = 0;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/runs?")) {
+          historyCalls += 1;
+          if (historyCalls === 1) {
+            return response({
+              runs: [runSummary("run-1", "2026-08-10T12:00:00.000Z", "running")],
+              nextCursor: null,
+            });
+          }
+          return response({
+            runs: [
+              runSummary("run-new", "2026-08-10T12:01:00.000Z"),
+              runSummary("run-old", "2026-08-10T12:00:00.000Z"),
+            ],
+            nextCursor: null,
+          });
+        }
+        return response({ code: "invalid_request" }, 400);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderTray();
+      await advancePanelTimers(0);
+      expect(screen.getByText(/1 active/)).toBeTruthy();
+
+      await advancePanelTimers(3_000);
+      expect(screen.getByText(/2 finished/)).toBeTruthy();
+      expect(screen.getByTitle("run-new")).toBeTruthy();
+      expect(screen.queryByTitle("run-old")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("run history stable order", () => {
