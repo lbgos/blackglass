@@ -21,6 +21,7 @@ import type {
   RunRepository,
   RunnerRepository,
   SettingsRepository,
+  TechniqueRepository,
 } from "@blackglass/db";
 
 import { registerActionMutationRoutes } from "./action-mutation-routes.js";
@@ -44,6 +45,7 @@ import { registerRunnerEvidenceGrantRoutes } from "./runner-evidence-grant-route
 import { registerRunnerEvidenceUploadRoutes } from "./runner-evidence-upload-routes.js";
 import { registerHttpProbeRoutes } from "./http-probe-routes.js";
 import { registerReportRoutes } from "./report-routes.js";
+import { registerTechniqueRoutes } from "./technique-routes.js";
 import { registerSettingsRoutes } from "./settings-routes.js";
 import {
   registerAdvisorTurnRoutes,
@@ -136,6 +138,12 @@ interface BuildAppOptions {
     | "listArtifactsForEngagement"
     | "listRunsForEngagement"
   >;
+  // Saved advisor techniques (STONE-7). Registered only when the technique
+  // repository is wired; without it the routes do not exist.
+  techniqueRepository?: Pick<
+    TechniqueRepository,
+    "createTechnique" | "listTechniques" | "getTechniqueForEngagement"
+  >;
   logger?: FastifyServerOptions["logger"];
   now?: () => Date;
 }
@@ -158,6 +166,7 @@ export function buildApp({
   httpProbeRepository,
   ffufRepository,
   runOutputRepository,
+  techniqueRepository,
   logger = false,
   now,
 }: BuildAppOptions): FastifyInstance {
@@ -343,6 +352,9 @@ export function buildApp({
       },
       ...(now === undefined ? {} : { now }),
     });
+  }
+  if (techniqueRepository !== undefined) {
+    registerTechniqueRoutes(app, techniqueRepository);
   }
 
   app.get("/health", async (_request, reply) => {
