@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAppQueryClient } from "../query-client.js";
 import { CreateEngagementDialog } from "./create-dialog.js";
-import { EngagementWorkspaceProvider } from "./workspace-context.js";
+import { EngagementWorkspaceProvider, useEngagementWorkspace } from "./workspace-context.js";
 
 const ENGAGEMENT_ID = "10000000-0000-4000-8000-000000000001";
 const ACTION_ID = "40000000-0000-4000-8000-000000000001";
@@ -98,10 +98,16 @@ function response(payload: unknown, status = 200): Response {
   } as Response;
 }
 
+function NoticeProbe() {
+  const { notice } = useEngagementWorkspace();
+  return <p data-testid="notice-probe">{notice ?? ""}</p>;
+}
+
 function DialogHarness() {
   const [open, setOpen] = useState(true);
   return (
     <EngagementWorkspaceProvider openCreate={() => {}}>
+      <NoticeProbe />
       <CreateEngagementDialog open={open} onOpenChange={setOpen} />
       <button type="button" onClick={() => setOpen(false)}>
         close-for-test
@@ -305,6 +311,29 @@ describe("CreateEngagementDialog start", () => {
     );
     expect(notesCall).toBeTruthy();
     expect(String(notesCall?.[1]?.body)).toContain("find the flag");
+  });
+
+  it("announces when challenge notes cannot be saved", async () => {
+    const fallback = engagementHandler("Lab brief");
+    stubFetch((url, init) => {
+      if (String(url).endsWith("/notes") && init?.method === "PUT") {
+        return response({ code: "storage_busy" }, 503);
+      }
+      return fallback(url, init);
+    });
+    const { router } = await renderDialog();
+
+    const file = new File(["find the flag"], "brief.txt", { type: "text/plain" });
+    fireEvent.change(screen.getByLabelText(/Challenge file/), { target: { files: [file] } });
+    expect(await screen.findByText("brief.txt")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/Name/), { target: { value: "Lab brief" } });
+    submitStart();
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(`/engagements/${ENGAGEMENT_ID}`),
+    );
+    expect(router.state.location.search).toMatchObject({ tab: "notes" });
+    expect(screen.getByTestId("notice-probe").textContent).toContain("were not saved");
   });
 
   it("rejects an invalid platform URL and an empty start", async () => {

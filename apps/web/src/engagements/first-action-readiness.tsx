@@ -1,4 +1,5 @@
 import type { RunHistorySummary } from "@blackglass/contracts";
+import { Button } from "@blackglass/ui";
 
 import { useAdvisorStatusQuery } from "../advisor-status-query.js";
 import { useSystemStatusQuery } from "../system-status-query.js";
@@ -88,6 +89,16 @@ export function FirstActionReadiness({
   }
   lines.push(advisorLine(advisor));
 
+  // Manual retry only, shown only while something failed, so an unreachable
+  // control plane never strands the summary without recourse.
+  const failed =
+    system.isError || advisor.isError || (engagementId !== undefined && history.isError);
+  const retryStatus = () => {
+    void system.refetch();
+    void advisor.refetch();
+    if (engagementId !== undefined) void history.refetch();
+  };
+
   return (
     <section aria-label="First action readiness">
       <ul className="m-0 list-none space-y-1 p-0">
@@ -97,6 +108,16 @@ export function FirstActionReadiness({
           </li>
         ))}
       </ul>
+      {failed ? (
+        <Button
+          type="button"
+          variant="quiet"
+          className="mt-1 h-7 px-2 text-[12px]"
+          onClick={retryStatus}
+        >
+          Retry status
+        </Button>
+      ) : null}
     </section>
   );
 }

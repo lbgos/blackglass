@@ -753,6 +753,21 @@ describe("action planner", () => {
       expect((await screen.findByLabelText("Targets") as HTMLTextAreaElement).value).toBe("");
     });
 
+    it("preserves a custom fuller ports value across profile switches", async () => {
+      stubWithHistory([]);
+      await renderPlanner();
+
+      fireEvent.click(await screen.findByRole("radio", { name: /Fuller port pass/ }));
+      const portsField = (await screen.findByLabelText(/TCP ports/i)) as HTMLInputElement;
+      fireEvent.change(portsField, { target: { value: "8080" } });
+      expect(portsField.value).toBe("8080");
+      fireEvent.click(await screen.findByRole("radio", { name: /Quick port pass/ }));
+      expect((await screen.findByLabelText(/TCP ports/i) as HTMLInputElement).value).toBe("");
+      fireEvent.click(await screen.findByRole("radio", { name: /Fuller port pass/ }));
+      expect((await screen.findByLabelText(/TCP ports/i) as HTMLInputElement).value).toBe("8080");
+      expect((await screen.findByLabelText("Targets") as HTMLTextAreaElement).value).toBe("");
+    });
+
     it("shows a specific readiness summary next to the first action", async () => {
       stubWithHistory([]);
       await renderPlanner();
@@ -781,6 +796,34 @@ describe("action planner", () => {
         await screen.findByText(/No new services means the target did not answer/),
       ).toBeTruthy();
       expect(screen.queryByText(/Runner disconnected/)).toBeNull();
+    });
+
+    it("names a missing Nmap binary from the last run", async () => {
+      stubWithHistory([
+        historyRow({ state: "failed", terminalKind: "failed", terminalReason: "nmap_unavailable" }),
+      ]);
+      await renderPlanner();
+      expect(await screen.findByText(/Nmap is not available to the runner/)).toBeTruthy();
+    });
+
+    it("offers a retry while readiness queries fail", async () => {
+      const fetchMock = stubFetch((url) => {
+        if (url.includes("/api/v1/system/status")) return Promise.reject(new Error("offline"));
+        if (url.includes("/api/v1/advisor/status")) return response(unconfiguredAdvisor);
+        if (url.includes("/runs")) return response({ runs: [], nextCursor: null });
+        return (
+          readResponse(url, activeEngagement, emptyRevision) ??
+          response({ code: "invalid_request" }, 400)
+        );
+      });
+      await renderPlanner();
+
+      expect(await screen.findByText(/Control plane: unreachable/)).toBeTruthy();
+      const systemCalls = () =>
+        fetchMock.mock.calls.filter(([url]) => String(url).includes("/system/status")).length;
+      const before = systemCalls();
+      fireEvent.click(await screen.findByRole("button", { name: "Retry status" }));
+      await waitFor(() => expect(systemCalls()).toBeGreaterThan(before));
     });
 
     it("explains Nmap unavailability next to the action", async () => {

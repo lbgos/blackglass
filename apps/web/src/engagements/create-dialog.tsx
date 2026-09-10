@@ -350,8 +350,9 @@ export function CreateEngagementDialog({ onOpenChange, open }: CreateEngagementD
             expectedRevision: notes.revision,
           });
         } catch {
-          // The description already records the file name, so the operator
-          // can re-attach the file from the notes tab.
+          announce(
+            `Engagement ${engagement.name} created. Challenge notes were not saved; re-attach ${challenge.name} from the notes tab.`,
+          );
         }
       }
       onOpenChange(false);

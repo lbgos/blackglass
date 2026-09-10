@@ -112,13 +112,14 @@ function PlannerBody({
   const targetsRef = useRef<HTMLTextAreaElement>(null);
   // Targets always start empty and are never restored from storage. A reload
   // or a revisit must never silently reuse a previous target, credential, or
-  // machine exception. Only the scan profile and the ports text are personal
-  // defaults and may be remembered.
+  // machine exception. Only the scan profile and the fuller ports text are
+  // personal defaults and may be remembered. The fuller text is preserved
+  // across profile switches so leaving fuller never discards it.
   const [rawTargets, setRawTargets] = useState("");
   const [profile, setProfile] = useState<FirstActionProfile>(
     () => readFirstActionDefaults(window.localStorage).profile,
   );
-  const [rawDeclaredPorts, setRawDeclaredPorts] = useState(
+  const [fullerPorts, setFullerPorts] = useState(
     () => readFirstActionDefaults(window.localStorage).declaredPorts,
   );
   const [fieldError, setFieldError] = useState<string | undefined>(undefined);
@@ -192,7 +193,7 @@ function PlannerBody({
     // web-origin inspection always run with declaredPorts null so the
     // labels above stay truthful about what runs.
     const parsedPorts =
-      profile === "fuller" ? parseDeclaredPorts(rawDeclaredPorts) : { ok: true as const, declaredPorts: null };
+      profile === "fuller" ? parseDeclaredPorts(fullerPorts) : { ok: true as const, declaredPorts: null };
     if (!parsed.ok) setFieldError(parsed.message);
     else setFieldError(undefined);
     if (!parsedPorts.ok) setPortsFieldError(parsedPorts.message);
@@ -212,7 +213,7 @@ function PlannerBody({
           setResult(action);
           storeFirstActionDefaults(window.localStorage, {
             profile,
-            declaredPorts: profile === "fuller" ? rawDeclaredPorts : "",
+            declaredPorts: fullerPorts,
           });
           if (action.action.state === "queued") {
             setOutcome("queued");
@@ -227,9 +228,7 @@ function PlannerBody({
   const selectProfile = (next: FirstActionProfile) => {
     setProfile(next);
     if (next === "fuller") {
-      setRawDeclaredPorts((current) => (current.trim() === "" ? FULLER_PORTS_PRESET : current));
-    } else {
-      setRawDeclaredPorts("");
+      setFullerPorts((current) => (current.trim() === "" ? FULLER_PORTS_PRESET : current));
     }
     setPortsFieldError(undefined);
   };
@@ -345,7 +344,7 @@ function PlannerBody({
           <input
             id={`${formId}-ports`}
             name="declaredPorts"
-            value={rawDeclaredPorts}
+            value={profile === "fuller" ? fullerPorts : ""}
             placeholder="22,80,443"
             autoComplete="off"
             spellCheck={false}
@@ -355,7 +354,7 @@ function PlannerBody({
               "h-9 w-full rounded-md border bg-transparent px-2.5 font-mono text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring",
               portsFieldError !== undefined ? "border-destructive" : "border-input",
             )}
-            onChange={(event) => setRawDeclaredPorts(event.target.value)}
+            onChange={(event) => setFullerPorts(event.target.value)}
           />
           {portsFieldError && (
             <span className="text-destructive" role="alert">
