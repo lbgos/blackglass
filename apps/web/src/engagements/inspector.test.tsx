@@ -47,7 +47,7 @@ const sshService = {
 
 const probe = {
   source: "http-probe" as const,
-  parserVersion: "http-probe-raw-v1",
+  parserVersion: "http-probe-raw-v1" as const,
   url: "http://192.0.2.10/",
   fetchedAt: "2026-09-03T00:00:00.000Z",
   finalUrl: "http://192.0.2.10/",
@@ -64,7 +64,7 @@ const probe = {
 
 const pathResult = {
   source: "ffuf" as const,
-  parserVersion: "ffuf-json-v1",
+  parserVersion: "ffuf-json-v1" as const,
   url: "http://192.0.2.10/admin",
   status: 200,
   length: 128,
