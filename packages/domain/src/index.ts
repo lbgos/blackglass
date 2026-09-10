@@ -32,6 +32,15 @@ export {
 } from "./saved-scope.js";
 export { buildNmapArgv } from "./nmap-argv.js";
 export { buildFfufArgv } from "./ffuf-argv.js";
+export { groupFfufResults, hideFfufGroups, undoHideFfufGroups, restoreAllFfufGroups, visibleFfufGroups, ffufGroupBasis, labelUnusualFfufResponse } from "./ffuf-group.js";
+export type { FfufGroupableResult, FfufResultGroup, FfufHideState } from "./ffuf-group.js";
+export { resolveWordlistByName, missingWordlistRecovery, loadLastWordlistChoice, saveLastWordlistChoice, listWordlistOptions } from "./ffuf-wordlist.js";
+export type { WordlistChoiceStore, ResolveWordlistResult } from "./ffuf-wordlist.js";
+export { diffRuns, checkRunDiffComparable, contextDifferences } from "./run-diff.js";
+export type { RunDiff, RunDiffContext, RunDiffInput, RunDiffService, RunDiffResponse, RunDiffPath } from "./run-diff.js";
+export { buildResumeChanges, changesSinceLastVisit, applyStarredFocus, describePriorAttempt } from "./engagement-resume.js";
+export { searchCorpus, redactSecretsForSnippet, buildSnippet, SEARCH_SECRET_REDACTION } from "./engagement-search.js";
+export type { SearchCorpusEntry, SearchCorpusOptions } from "./engagement-search.js";
 export { isFfufSnapshot, ffufOptionsForSnapshot, hasFfufMarker } from "./ffuf-action.js";
 export { parseFfufArtifactJson, type ParseFfufArtifactResult } from "./ffuf-json.js";
 export { parseNmapXml, type ParsedNmapService, type ParseNmapXmlResult } from "./nmap-xml.js";

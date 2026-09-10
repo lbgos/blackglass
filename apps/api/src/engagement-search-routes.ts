@@ -1,0 +1,229 @@
+import {
+  EngagementIdParamsSchema,
+  EngagementSearchErrorSchema,
+  EngagementSearchResponseSchema,
+  parseEngagementSearchQuery,
+  type EngagementSearchResultKind,
+  type SavedScopeRule,
+} from "@blackglass/contracts";
+import type {
+  EngagementRepository,
+  FfufRepository,
+  HttpProbeRepository,
+  NmapServiceRepository,
+  RunOutputRepository,
+} from "@blackglass/db";
+import { searchCorpus, type SearchCorpusEntry } from "@blackglass/domain";
+import type { FastifyInstance, FastifyReply } from "fastify";
+
+export interface EngagementSearchRouteDeps {
+  readonly engagements: Pick<EngagementRepository, "getEngagement" | "getEngagementNotes" | "listScopeRevisions"> &
+    Partial<Pick<EngagementRepository, "listFindings">>;
+  readonly services?: Pick<NmapServiceRepository, "listForEngagement">;
+  readonly ffuf?: Pick<FfufRepository, "listForEngagement">;
+  readonly probes?: Pick<HttpProbeRepository, "listForEngagement">;
+  readonly artifacts?: Pick<RunOutputRepository, "listArtifactsForEngagement">;
+}
+
+function sendSearchError(reply: FastifyReply, status: number, code: string) {
+  const body = EngagementSearchErrorSchema.parse({ code });
+  return reply.code(status).type("application/json").send(body);
+}
+
+function scopeRuleLabel(rule: SavedScopeRule): string {
+  switch (rule.kind) {
+    case "ip":
+    case "cidr":
+    case "domain":
+      return rule.target;
+    case "url-origin":
+      return `${rule.origin.scheme}://${rule.origin.host}:${rule.origin.effectivePort}`;
+  }
+}
+
+const SEARCH_KINDS: readonly EngagementSearchResultKind[] = [
+  "target",
+  "hostname",
+  "note",
+  "lead",
+  "finding",
+  "artifact",
+  "excerpt",
+];
+
+/**
+ * STONE-6 engagement search. Assembles a read-only corpus from existing
+ * stores. Leads have no store in this slice (STONE-4 owns leads/secrets
+ * tables) and excerpts have no bounded index here, so both report as
+ * unindexed kinds rather than pretending to be covered. Secrets are
+ * excluded by the domain search: secret-shaped values never match.
+ */
+export function registerEngagementSearchRoutes(
+  app: FastifyInstance,
+  deps: EngagementSearchRouteDeps,
+): void {
+  app.get("/api/v1/engagements/:engagementId/search", async (request, reply) => {
+    const params = EngagementIdParamsSchema.safeParse(request.params);
+    if (!params.success) return sendSearchError(reply, 400, "invalid_request");
+    const parsedQuery = parseEngagementSearchQuery(request.query);
+    if (!parsedQuery.ok) return sendSearchError(reply, 400, "invalid_request");
+    const { engagementId } = params.data;
+
+    const corpus: SearchCorpusEntry[] = [];
+    try {
+      const engagement = deps.engagements.getEngagement(engagementId);
+      if (!engagement.ok) {
+        if (engagement.error.code === "engagement_not_found") {
+          return sendSearchError(reply, 404, "engagement_not_found");
+        }
+        if (engagement.error.code === "storage_busy") {
+          return sendSearchError(reply, 503, "storage_busy");
+        }
+        return sendSearchError(reply, 500, "invalid_persisted_data");
+      }
+      const scopes = deps.engagements.listScopeRevisions(engagementId);
+      if (!scopes.ok) {
+        if (scopes.error.code === "storage_busy") return sendSearchError(reply, 503, "storage_busy");
+        return sendSearchError(reply, 500, "invalid_persisted_data");
+      }
+      for (const revision of scopes.value) {
+        for (const rule of revision.rules) {
+          const label = scopeRuleLabel(rule);
+          corpus.push({
+            kind: "target",
+            id: `scope:${revision.id}:${rule.id}`,
+            title: label,
+            text: label,
+            anchor: `scope:${revision.id}`,
+          });
+        }
+      }
+      if (deps.services !== undefined) {
+        const services = deps.services.listForEngagement(engagementId);
+        if (!services.ok) {
+          if (services.code === "engagement_not_found") return sendSearchError(reply, 404, "engagement_not_found");
+          if (services.code === "storage_busy") return sendSearchError(reply, 503, "storage_busy");
+          return sendSearchError(reply, 500, "invalid_persisted_data");
+        }
+        for (const service of services.value.slice(0, 200)) {
+          corpus.push({
+            kind: "target",
+            id: `service:${service.address}:${service.port}`,
+            title: `${service.address}:${service.port}`,
+            text: `${service.address} ${service.serviceName ?? ""}`,
+            anchor: `service:${service.address}:${service.port}`,
+          });
+          if (service.hostname !== null && service.hostname.length > 0) {
+            corpus.push({
+              kind: "hostname",
+              id: `hostname:${service.hostname}`,
+              title: service.hostname,
+              text: service.hostname,
+              anchor: `service:${service.address}:${service.port}`,
+            });
+          }
+        }
+      }
+      const notes = deps.engagements.getEngagementNotes(engagementId);
+      if (!notes.ok) {
+        if (notes.error.code === "storage_busy") return sendSearchError(reply, 503, "storage_busy");
+        return sendSearchError(reply, 500, "invalid_persisted_data");
+      }
+      if (notes.value.markdown.length > 0) {
+        corpus.push({
+          kind: "note",
+          id: "notes",
+          title: "Engagement notes",
+          text: notes.value.markdown,
+          anchor: "note:notes@0",
+        });
+      }
+      if (deps.engagements.listFindings !== undefined) {
+        const findings = deps.engagements.listFindings(engagementId);
+        if (!findings.ok) {
+          if (findings.error.code === "storage_busy") return sendSearchError(reply, 503, "storage_busy");
+          return sendSearchError(reply, 500, "invalid_persisted_data");
+        }
+        for (const finding of findings.value.slice(0, 200)) {
+          corpus.push({
+            kind: "finding",
+            id: finding.id,
+            title: finding.title,
+            text: finding.body,
+            anchor: `finding:${finding.id}`,
+          });
+        }
+      }
+      if (deps.ffuf !== undefined) {
+        const ffuf = deps.ffuf.listForEngagement(engagementId);
+        if (!ffuf.ok) {
+          if (ffuf.code === "engagement_not_found") return sendSearchError(reply, 404, "engagement_not_found");
+          if (ffuf.code === "storage_busy") return sendSearchError(reply, 503, "storage_busy");
+          return sendSearchError(reply, 500, "invalid_persisted_data");
+        }
+        for (const row of ffuf.value.slice(0, 200)) {
+          corpus.push({
+            kind: "artifact",
+            id: `ffuf:${row.url}`,
+            title: row.url,
+            text: `${row.fuzz} ${row.status}`,
+            anchor: `run:${row.runId}`,
+          });
+        }
+      }
+      if (deps.probes !== undefined) {
+        const probes = deps.probes.listForEngagement(engagementId);
+        if (!probes.ok) {
+          if (probes.code === "engagement_not_found") return sendSearchError(reply, 404, "engagement_not_found");
+          if (probes.code === "storage_busy") return sendSearchError(reply, 503, "storage_busy");
+          return sendSearchError(reply, 500, "invalid_persisted_data");
+        }
+        for (const probe of probes.value.slice(0, 200)) {
+          corpus.push({
+            kind: "hostname",
+            id: `probe:${probe.url}`,
+            title: probe.url,
+            text: `${probe.url} ${probe.title ?? ""}`,
+            anchor: `probe:${probe.url}`,
+          });
+        }
+      }
+      if (deps.artifacts !== undefined) {
+        const artifacts = deps.artifacts.listArtifactsForEngagement(engagementId);
+        if (!artifacts.ok) {
+          if (artifacts.code === "engagement_not_found") return sendSearchError(reply, 404, "engagement_not_found");
+          if (artifacts.code === "storage_busy") return sendSearchError(reply, 503, "storage_busy");
+          return sendSearchError(reply, 500, "invalid_persisted_data");
+        }
+        for (const artifact of artifacts.artifacts.slice(0, 200)) {
+          corpus.push({
+            kind: "artifact",
+            id: artifact.artifactId,
+            title: artifact.artifactId,
+            text: `${artifact.artifactId} ${artifact.artifactSlot}`,
+            anchor: `artifact:${artifact.artifactId}`,
+          });
+        }
+      }
+    } catch {
+      return sendSearchError(reply, 500, "invalid_persisted_data");
+    }
+
+    const { results, unindexedKinds } = searchCorpus(corpus, parsedQuery.value.q);
+    const reportedUnindexed = new Set<EngagementSearchResultKind>(unindexedKinds);
+    // Leads and excerpts have no index in this slice: always labeled.
+    reportedUnindexed.add("lead");
+    reportedUnindexed.add("excerpt");
+    const groups = Object.fromEntries(
+      SEARCH_KINDS.map((kind) => [kind, results.filter((result) => result.kind === kind)]),
+    );
+    const validated = EngagementSearchResponseSchema.safeParse({
+      engagementId,
+      query: parsedQuery.value.q,
+      groups,
+      unindexedKinds: [...reportedUnindexed],
+    });
+    if (!validated.success) return sendSearchError(reply, 500, "invalid_persisted_data");
+    return reply.code(200).type("application/json").send(validated.data);
+  });
+}

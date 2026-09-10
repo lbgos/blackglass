@@ -12,6 +12,7 @@ import Fastify, {
 import type {
   AdvisorTurnsRepository,
   EngagementRepository,
+  EngagementResumeRepository,
   EvidenceGrantRepository,
   FfufRepository,
   HttpProbeRepository,
@@ -31,7 +32,9 @@ import type { EvidencePublicationService } from "./evidence/evidence-publication
 import type { EvidenceStore } from "./evidence/evidence-store.js";
 import { registerEngagementMutationRoutes } from "./engagement-mutation-routes.js";
 import { registerEngagementNotesRoutes } from "./engagement-notes-routes.js";
+import { registerEngagementResumeRoutes } from "./engagement-resume-routes.js";
 import { registerEngagementRoutes } from "./engagement-routes.js";
+import { registerEngagementSearchRoutes } from "./engagement-search-routes.js";
 import { registerFindingRoutes } from "./finding-routes.js";
 import { registerRunnerAuthHook, stripAuthorizationHeader } from "./runner-http.js";
 import { registerRunnerEnrollmentRoutes } from "./runner-enrollment-routes.js";
@@ -128,6 +131,7 @@ interface BuildAppOptions {
   >;
   httpProbeRepository?: Pick<HttpProbeRepository, "listForEngagement">;
   ffufRepository?: Pick<FfufRepository, "listForEngagement">;
+  resumeRepository?: Pick<EngagementResumeRepository, "getNextStep" | "putNextStep">;
   runOutputRepository?: Pick<
     RunOutputRepository,
     | "latestTerminalRunForEngagement"
@@ -158,6 +162,7 @@ export function buildApp({
   httpProbeRepository,
   ffufRepository,
   runOutputRepository,
+  resumeRepository,
   logger = false,
   now,
 }: BuildAppOptions): FastifyInstance {
@@ -308,6 +313,23 @@ export function buildApp({
   if (runOutputRepository !== undefined) {
     registerRunHistoryRoutes(app, {
       repository: runOutputRepository,
+    });
+  }
+  // STONE-6 resume + search. Read-only assembly over existing stores plus
+  // the next-step store; the standalone views mount via STONE-2 slots.
+  if (resumeRepository !== undefined) {
+    registerEngagementResumeRoutes(app, {
+      resume: resumeRepository,
+      engagements: engagementRepository,
+      ...(runOutputRepository === undefined ? {} : { runs: runOutputRepository }),
+      ...(nmapServiceRepository === undefined ? {} : { services: nmapServiceRepository }),
+    });
+    registerEngagementSearchRoutes(app, {
+      engagements: engagementRepository,
+      ...(nmapServiceRepository === undefined ? {} : { services: nmapServiceRepository }),
+      ...(ffufRepository === undefined ? {} : { ffuf: ffufRepository }),
+      ...(httpProbeRepository === undefined ? {} : { probes: httpProbeRepository }),
+      ...(runOutputRepository === undefined ? {} : { artifacts: runOutputRepository }),
     });
   }
   if (
