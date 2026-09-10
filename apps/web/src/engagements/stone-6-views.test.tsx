@@ -123,4 +123,26 @@ describe("FfufWordlistView", () => {
     expect(screen.getByText(/synthetic demo/)).toBeDefined();
     expect(screen.getByText(/does not accept -rate/)).toBeDefined();
   });
+
+  it("resolves a configured wordlist so the option affects its run", () => {
+    const onResolve = vi.fn();
+    renderWithTheme(
+      <FfufWordlistView
+        ffufVersion={null}
+        exists={() => true}
+        onResolve={onResolve}
+        configuredPaths={{ common: "/wl/common.txt" }}
+      />,
+    );
+    fireEvent.click(screen.getByText("common"));
+    expect(onResolve).toHaveBeenCalledWith("/wl/common.txt", "common");
+  });
+
+  it("reports recovery instead of resolving when no file is configured", () => {
+    const onResolve = vi.fn();
+    renderWithTheme(<FfufWordlistView ffufVersion={null} exists={() => true} onResolve={onResolve} />);
+    fireEvent.click(screen.getByText("common"));
+    expect(onResolve).not.toHaveBeenCalled();
+    expect(screen.getByText(/no configured file yet/)).toBeDefined();
+  });
 });

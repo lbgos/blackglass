@@ -25,6 +25,7 @@ export interface Stone6SlotContext {
 export type Stone6SlotMount = (context: Stone6SlotContext, host: HTMLElement) => () => void;
 
 const mounts = new Map<Stone6SlotName, Stone6SlotMount>();
+const activeCleanups = new Map<Stone6SlotName, Set<() => void>>();
 
 export function registerStone6Slot(name: Stone6SlotName, mount: Stone6SlotMount): void {
   mounts.set(name, mount);
@@ -34,8 +35,28 @@ export function registerStone6Slot(name: Stone6SlotName, mount: Stone6SlotMount)
 export function mountStone6Slot(name: Stone6SlotName, context: Stone6SlotContext, host: HTMLElement): boolean {
   const mount = mounts.get(name);
   if (mount === undefined) return false;
-  mount(context, host);
+  const cleanup = mount(context, host);
+  let cleanups = activeCleanups.get(name);
+  if (cleanups === undefined) {
+    cleanups = new Set();
+    activeCleanups.set(name, cleanups);
+  }
+  cleanups.add(cleanup);
   return true;
+}
+
+/** Run all cleanups for a slot and forget them; safe to call when idle. */
+export function unmountStone6Slot(name: Stone6SlotName): void {
+  const cleanups = activeCleanups.get(name);
+  if (cleanups === undefined) return;
+  for (const cleanup of cleanups) {
+    try {
+      cleanup();
+    } catch {
+      // One failing cleanup never blocks the rest.
+    }
+  }
+  cleanups.clear();
 }
 
 export function registeredStone6Slots(): readonly Stone6SlotName[] {

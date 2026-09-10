@@ -315,8 +315,9 @@ export function buildApp({
       repository: runOutputRepository,
     });
   }
-  // STONE-6 resume + search. Read-only assembly over existing stores plus
-  // the next-step store; the standalone views mount via STONE-2 slots.
+  // STONE-6 resume + search. The next-step store gates resume only; search
+  // never consumes it and registers independently. Standalone views mount
+  // via STONE-2 slots.
   if (resumeRepository !== undefined) {
     registerEngagementResumeRoutes(app, {
       resume: resumeRepository,
@@ -324,14 +325,14 @@ export function buildApp({
       ...(runOutputRepository === undefined ? {} : { runs: runOutputRepository }),
       ...(nmapServiceRepository === undefined ? {} : { services: nmapServiceRepository }),
     });
-    registerEngagementSearchRoutes(app, {
-      engagements: engagementRepository,
-      ...(nmapServiceRepository === undefined ? {} : { services: nmapServiceRepository }),
-      ...(ffufRepository === undefined ? {} : { ffuf: ffufRepository }),
-      ...(httpProbeRepository === undefined ? {} : { probes: httpProbeRepository }),
-      ...(runOutputRepository === undefined ? {} : { artifacts: runOutputRepository }),
-    });
   }
+  registerEngagementSearchRoutes(app, {
+    engagements: engagementRepository,
+    ...(nmapServiceRepository === undefined ? {} : { services: nmapServiceRepository }),
+    ...(ffufRepository === undefined ? {} : { ffuf: ffufRepository }),
+    ...(httpProbeRepository === undefined ? {} : { probes: httpProbeRepository }),
+    ...(runOutputRepository === undefined ? {} : { artifacts: runOutputRepository }),
+  });
   if (
     evidenceStore !== undefined &&
     runOutputRepository !== undefined

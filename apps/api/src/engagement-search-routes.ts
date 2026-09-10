@@ -13,7 +13,7 @@ import type {
   NmapServiceRepository,
   RunOutputRepository,
 } from "@blackglass/db";
-import { searchCorpus, type SearchCorpusEntry } from "@blackglass/domain";
+import { searchCorpus, findMatchOffset, type SearchCorpusEntry } from "@blackglass/domain";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 export interface EngagementSearchRouteDeps {
@@ -50,6 +50,24 @@ const SEARCH_KINDS: readonly EngagementSearchResultKind[] = [
   "artifact",
   "excerpt",
 ];
+
+/** Character offset of the match inside the notes text for `note:notes@<offset>`. */
+export function noteMatchAnchor(title: string, text: string, query: string): string {
+  const match = findMatchOffset(`${title}\n${text}`, query);
+  if (match === null) return "note:notes@0";
+  const titlePoints = Array.from(title).length;
+  const offset = match.index <= titlePoints ? 0 : match.index - titlePoints - 1;
+  return `note:notes@${offset}`;
+}
+
+/**
+ * Exact ffuf row anchor. The fuzz keyword names the row within its run;
+ * capped so the anchor always fits the 500-char contract bound.
+ */
+export function ffufRowAnchor(runId: string, fuzz: string): string {
+  const key = fuzz.length > 200 ? fuzz.slice(0, 200) : fuzz;
+  return `run:${runId}:fuzz:${key}`;
+}
 
 /**
  * STONE-6 engagement search. Assembles a read-only corpus from existing
@@ -94,7 +112,7 @@ export function registerEngagementSearchRoutes(
             id: `scope:${revision.id}:${rule.id}`,
             title: label,
             text: label,
-            anchor: `scope:${revision.id}`,
+            anchor: `scope:${revision.id}:${rule.id}`,
           });
         }
       }
@@ -135,7 +153,7 @@ export function registerEngagementSearchRoutes(
           id: "notes",
           title: "Engagement notes",
           text: notes.value.markdown,
-          anchor: "note:notes@0",
+          anchor: noteMatchAnchor("Engagement notes", notes.value.markdown, parsedQuery.value.q),
         });
       }
       if (deps.engagements.listFindings !== undefined) {
@@ -167,7 +185,7 @@ export function registerEngagementSearchRoutes(
             id: `ffuf:${row.url}`,
             title: row.url,
             text: `${row.fuzz} ${row.status}`,
-            anchor: `run:${row.runId}`,
+            anchor: ffufRowAnchor(row.runId, row.fuzz),
           });
         }
       }

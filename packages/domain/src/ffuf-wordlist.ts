@@ -21,21 +21,27 @@ export type ResolveWordlistResult =
   | { readonly ok: false; error: { code: "unknown_wordlist" | "wordlist_unconfigured" | "wordlist_missing" } };
 
 /**
- * Resolve by name. `exists` is injected so tests and the UI can report a
+ * Resolve by name. `configuredPaths` overrides catalog paths by name and is
+ * the operator configuration surface (e.g. runner settings): an override
+ * wins over the catalog entry, and an empty override clears it back to
+ * unconfigured. `exists` is injected so tests and the UI can report a
  * missing file without touching the filesystem here. Unconfigured named
  * presets (null path) report `wordlist_unconfigured`, never a guessed path.
  */
 export function resolveWordlistByName(
   name: string,
   exists: (absolutePath: string) => boolean,
+  configuredPaths: Readonly<Record<string, string>> = {},
 ): ResolveWordlistResult {
   const option = FFUF_WORDLIST_CATALOG.options.find((entry) => entry.name === name);
   if (option === undefined) return { ok: false, error: { code: "unknown_wordlist" } };
-  if (option.path === null) {
+  const override = configuredPaths[name];
+  const path = override !== undefined ? (override.trim().length === 0 ? null : override) : option.path;
+  if (path === null) {
     return { ok: false, error: { code: "wordlist_unconfigured" } };
   }
-  if (exists(option.path) === false) return { ok: false, error: { code: "wordlist_missing" } };
-  return { ok: true, value: { name: option.name, path: option.path, isDemo: option.isDemo } };
+  if (exists(path) === false) return { ok: false, error: { code: "wordlist_missing" } };
+  return { ok: true, value: { name: option.name, path, isDemo: option.isDemo } };
 }
 
 export function missingWordlistRecovery(code: "unknown_wordlist" | "wordlist_unconfigured" | "wordlist_missing"): string {

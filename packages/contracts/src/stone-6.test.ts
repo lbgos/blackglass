@@ -17,6 +17,8 @@ describe("engagement-resume contracts", () => {
   it("rejects multiline, blank, and overlong steps", () => {
     expect(EngagementNextStepSchema.safeParse("  padded  ").success).toBe(false);
     expect(EngagementNextStepSchema.safeParse("line one\nline two").success).toBe(false);
+    expect(EngagementNextStepSchema.safeParse("line one\rline two").success).toBe(false);
+    expect(EngagementNextStepSchema.safeParse("lone\rcarriage").success).toBe(false);
     expect(EngagementNextStepSchema.safeParse("").success).toBe(false);
     expect(EngagementNextStepSchema.safeParse("x".repeat(281)).success).toBe(false);
   });

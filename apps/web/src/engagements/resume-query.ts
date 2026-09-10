@@ -29,7 +29,7 @@ export function engagementResumeQueryKey(engagementId: string, since?: string) {
 }
 
 export function engagementResumeUrl(engagementId: string, since?: string): string {
-  const base = `/api/v1/engagements/${engagementId}/resume`;
+  const base = `/api/v1/engagements/${encodeURIComponent(engagementId)}/resume`;
   return since === undefined ? base : `${base}?since=${encodeURIComponent(since)}`;
 }
 
@@ -72,10 +72,12 @@ export async function saveNextStepRequest(
   input: { nextStep: string | null; expectedRevision: number },
   signal?: AbortSignal,
 ): Promise<{ revision: number }> {
-  const body = UpdateEngagementNextStepRequestSchema.parse(input);
+  const parsed = UpdateEngagementNextStepRequestSchema.safeParse(input);
+  if (!parsed.success) throw new EngagementNextStepMutationError();
+  const body = parsed.data;
   let response: Response;
   try {
-    response = await fetch(`/api/v1/engagements/${engagementId}/next-step`, {
+    response = await fetch(`/api/v1/engagements/${encodeURIComponent(engagementId)}/next-step`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),

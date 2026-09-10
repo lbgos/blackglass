@@ -21,7 +21,7 @@ export const EngagementNextStepSchema = z
   .refine((value) => value === value.trim(), {
     message: "must not have leading or trailing whitespace",
   })
-  .refine((value) => !value.includes("\n"), {
+  .refine((value) => value.includes("\n") === false && value.includes("\r") === false, {
     message: "must be a single line",
   })
   .refine((value) => hasCodePointLength(value, 1, ENGAGEMENT_NEXT_STEP_MAX_CHARS), {

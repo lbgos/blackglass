@@ -15,17 +15,24 @@ import { useMemo, useState } from "react";
  * list is labeled synthetic and never poses as a serious preset. Rate
  * truthfulness: capability or an explicit limitation is always shown, and
  * the rate value is never claimed to affect binaries that reject it.
+ *
+ * Configuration surface: `configuredPaths` maps catalog names to
+ * operator-configured absolute files (e.g. from runner settings) and wins
+ * over the shipped catalog, so a visible option resolves to a real run.
  */
 
 export function FfufWordlistView({
   ffufVersion,
   exists,
   onResolve,
+  configuredPaths = {},
 }: {
   /** Installed binary version when known, else null for an explicit limitation. */
   ffufVersion: string | null;
   exists: (absolutePath: string) => boolean;
   onResolve: (wordlistPath: string, wordlistName: string) => void;
+  /** Operator-configured absolute paths by catalog name; overrides the catalog. */
+  configuredPaths?: Readonly<Record<string, string>>;
 }) {
   const store = useMemo(
     () => ({
@@ -58,12 +65,16 @@ export function FfufWordlistView({
       </div>
       <div className="grid gap-2 p-3">
         <ul className="m-0 list-none space-y-1 p-0">
-          {FFUF_WORDLIST_CATALOG.options.map((option) => (
-            <li key={option.name}>
+          {FFUF_WORDLIST_CATALOG.options.map((option) => {
+            const override = configuredPaths[option.name];
+            const effectivePath =
+              override !== undefined && override.trim().length > 0 ? override : option.path;
+            return (
+              <li key={option.name}>
               <button
                 type="button"
                 onClick={() => {
-                  const resolved = resolveWordlistByName(option.name, exists);
+                  const resolved = resolveWordlistByName(option.name, exists, configuredPaths);
                   if (resolved.ok === false) {
                     setNotice(missingWordlistRecovery(resolved.error.code));
                     return;
@@ -82,11 +93,12 @@ export function FfufWordlistView({
                 </span>
                 <span className="block text-[11px] text-muted-foreground">
                   {option.purpose} (about {option.approxEntries.toLocaleString("en-US")} entries)
-                  {option.path === null ? "; no file configured" : ""}
+                  {effectivePath === null ? "; no file configured" : ""}
                 </span>
               </button>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
         {notice !== null ? <p className="m-0 text-[12px] leading-5 text-muted-foreground">{notice}</p> : null}
         <p className="m-0 text-[11px] leading-5 text-muted-foreground">

@@ -104,7 +104,12 @@ export function EngagementResumeView({
                 <Button
                   type="button"
                   disabled={archived || save.isPending || value.trim().length === 0}
-                  onClick={() => save.mutate({ nextStep: value.trim(), expectedRevision: revision })}
+                  onClick={() =>
+                    save.mutate(
+                      { nextStep: value.trim(), expectedRevision: revision },
+                      { onSuccess: () => setDraft(undefined) },
+                    )
+                  }
                 >
                   Save
                 </Button>
@@ -114,8 +119,10 @@ export function EngagementResumeView({
                     variant="quiet"
                     disabled={archived || save.isPending}
                     onClick={() => {
-                      setDraft("");
-                      save.mutate({ nextStep: null, expectedRevision: revision });
+                      save.mutate(
+                        { nextStep: null, expectedRevision: revision },
+                        { onSuccess: () => setDraft(undefined) },
+                      );
                     }}
                   >
                     Clear

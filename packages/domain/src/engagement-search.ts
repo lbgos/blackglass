@@ -54,6 +54,27 @@ export function buildSnippet(text: string, matchIndex: number, matchLength: numb
   return `${prefix}${points.slice(startPoint, endPoint).join("")}${suffix}`;
 }
 
+/**
+ * Case-insensitive substring offset in code points (not UTF-16 units), so
+ * snippet windows and note anchors stay exact on non-BMP text. Returns the
+ * code-point index of the match start and the match length in code points,
+ * or null when absent. Case expansion under lowercasing (e.g. Turkish dot)
+ * stays approximate; astral-plane text is exact.
+ */
+export function findMatchOffset(
+  haystack: string,
+  needle: string,
+): { index: number; length: number } | null {
+  const trimmed = needle.trim().toLowerCase();
+  if (trimmed.length === 0) return null;
+  const utf16Index = haystack.toLowerCase().indexOf(trimmed);
+  if (utf16Index < 0) return null;
+  return {
+    index: Array.from(haystack.slice(0, utf16Index)).length,
+    length: Array.from(trimmed).length,
+  };
+}
+
 export interface SearchCorpusOptions {
   readonly perGroupLimit?: number;
 }
@@ -78,13 +99,12 @@ export function searchCorpus(
     if (entry.unindexed === true) unindexedKinds.add(entry.kind);
     if (containsSecret(entry.text) || containsSecret(entry.title)) continue;
     const haystack = `${entry.title}\n${entry.text}`;
-    const lower = haystack.toLowerCase();
-    const index = lower.indexOf(needle);
-    if (index < 0) continue;
+    const match = findMatchOffset(haystack, needle);
+    if (match === null) continue;
     const used = counts.get(entry.kind) ?? 0;
     if (used >= limit) continue;
     counts.set(entry.kind, used + 1);
-    const rawSnippet = buildSnippet(haystack, index, needle.length);
+    const rawSnippet = buildSnippet(haystack, match.index, match.length);
     results.push({
       kind: entry.kind,
       id: entry.id,

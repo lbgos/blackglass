@@ -190,6 +190,8 @@ describe("engagement resume routes", () => {
 });
 
 describe("engagement search routes", () => {
+  const SCOPE_REVISION_ID = "20000000-0000-4000-8000-000000000001";
+  const SCOPE_RULE_ID = "rule-admin-portal";
   function searchDeps() {
     return {
       engagements: {
@@ -203,7 +205,26 @@ describe("engagement search routes", () => {
             revision: 1,
           },
         }),
-        listScopeRevisions: (_id: string) => ({ ok: true as const, value: [] as never[] }),
+        listScopeRevisions: (_id: string) => ({
+          ok: true as const,
+          value: [
+            {
+              contractVersion: 1 as const,
+              id: SCOPE_REVISION_ID,
+              engagementId: ENGAGEMENT_ID,
+              version: 1,
+              rules: [
+                {
+                  id: SCOPE_RULE_ID,
+                  kind: "domain" as const,
+                  target: "admin-portal.example",
+                  includeSubdomains: false,
+                },
+              ],
+              createdAt: "2026-09-01T00:00:00.000Z",
+            },
+          ],
+        }),
         listFindings: (_id: string) => ({
           ok: true as const,
           value: [
@@ -223,7 +244,29 @@ describe("engagement search routes", () => {
         }),
       },
       services: { listForEngagement: (_id: string) => ({ ok: true as const, value: [] as never[] }) },
-      ffuf: { listForEngagement: (_id: string) => ({ ok: true as const, value: [] as never[] }) },
+      ffuf: {
+        listForEngagement: (_id: string) => ({
+          ok: true as const,
+          value: [
+            {
+              source: "ffuf" as const,
+              parserVersion: "ffuf-json-v1" as const,
+              url: "http://svc.example/admin",
+              status: 200,
+              length: 512,
+              words: 40,
+              lines: 12,
+              redirectlocation: null,
+              fuzz: "admin",
+              runId: "run-9",
+              artifactId: "artifact-9",
+              artifactDigest:
+                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              observedAt: "2026-09-09T00:00:00.000Z",
+            },
+          ],
+        }),
+      },
       probes: { listForEngagement: (_id: string) => ({ ok: true as const, value: [] as never[] }) },
       artifacts: { listArtifactsForEngagement: (_id: string) => ({ ok: true as const, artifacts: [] as never[] }) },
     };
@@ -241,8 +284,12 @@ describe("engagement search routes", () => {
       groups: Record<string, { id: string; anchor: string }[]>;
       unindexedKinds: string[];
     };
-    expect(body.groups["note"]?.[0]?.anchor).toBe("note:notes@0");
+    // Exact passage: the match offset inside the notes text, not the top.
+    expect(body.groups["note"]?.[0]?.anchor).toBe("note:notes@4");
     expect(body.groups["finding"]?.[0]?.anchor).toBe("finding:f-9");
+    // Exact rule and exact ffuf row, not the revision or run top level.
+    expect(body.groups["target"]?.[0]?.anchor).toBe(`scope:${SCOPE_REVISION_ID}:${SCOPE_RULE_ID}`);
+    expect(body.groups["artifact"]?.[0]?.anchor).toBe("run:run-9:fuzz:admin");
     // Leads and excerpts have no index in this slice: labeled, not hidden.
     expect(body.unindexedKinds).toContain("lead");
     expect(body.unindexedKinds).toContain("excerpt");
@@ -282,6 +329,20 @@ describe("engagement search routes", () => {
     registerEngagementSearchRoutes(app, searchDeps());
     expect((await app.inject({ method: "GET", url: `/api/v1/engagements/${ENGAGEMENT_ID}/search?q=+++` })).statusCode).toBe(400);
     expect((await app.inject({ method: "GET", url: `/api/v1/engagements/${ENGAGEMENT_ID}/search?q=a&limit=5` })).statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("serves search with no resume store wired anywhere", async () => {
+    // Registration-level proof that search never consumes the next-step
+    // store: only the search deps are passed, and search still answers.
+    // app.ts mirrors this by registering search outside the resume gate.
+    const app = Fastify();
+    registerEngagementSearchRoutes(app, searchDeps());
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/engagements/${ENGAGEMENT_ID}/search?q=admin`,
+    });
+    expect(response.statusCode).toBe(200);
     await app.close();
   });
 });

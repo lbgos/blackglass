@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it } from "vitest";
+import { act, renderHook } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+
+import { useWorkspaceState } from "./workspace-state.js";
 
 import {
   emptyWorkspaceState,
@@ -11,7 +14,13 @@ import {
   type WorkspaceStateStore,
 } from "./workspace-state.js";
 import { focusedStarredView, toggleStarred } from "./star-filter.js";
-import { registeredStone6Slots, mountStone6Slot, registerStone6Slot, STONE_6_SLOT_NAMES } from "./extension-slots.js";
+import {
+  registeredStone6Slots,
+  mountStone6Slot,
+  registerStone6Slot,
+  unmountStone6Slot,
+  STONE_6_SLOT_NAMES,
+} from "./extension-slots.js";
 
 function memoryStore(initial: Record<string, string> = {}): WorkspaceStateStore {
   const data = new Map(Object.entries(initial));
@@ -75,14 +84,44 @@ describe("starred focus", () => {
   });
 });
 
+describe("useWorkspaceState engagement switching", () => {
+  it("reloads per engagement without a remount instead of leaking state", () => {
+    const store = memoryStore();
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useWorkspaceState(id, store),
+      { initialProps: { id: "eng-a" } },
+    );
+    act(() => {
+      result.current.update({ selectedTarget: "https://a.example/" });
+    });
+    expect(result.current.state.selectedTarget).toBe("https://a.example/");
+
+    // Host switches engagement on the same mounted component.
+    rerender({ id: "eng-b" });
+    expect(result.current.state.selectedTarget).toBe(null);
+
+    act(() => {
+      result.current.update({ selectedTarget: "https://b.example/" });
+    });
+    rerender({ id: "eng-a" });
+    expect(result.current.state.selectedTarget).toBe("https://a.example/");
+  });
+});
+
 describe("extension slots", () => {
   it("exposes the STONE-2 integration contract and reports absent hosts", () => {
     expect(STONE_6_SLOT_NAMES).toContain("engagement.resume");
     expect(STONE_6_SLOT_NAMES).toContain("engagement.search");
     const host = document.createElement("div");
     expect(mountStone6Slot("engagement.resume", { engagementId: ENGAGEMENT_ID, archived: false }, host)).toBe(false);
-    registerStone6Slot("engagement.resume", () => () => {});
+    const cleanup = vi.fn();
+    registerStone6Slot("engagement.resume", () => cleanup);
     expect(registeredStone6Slots()).toContain("engagement.resume");
     expect(mountStone6Slot("engagement.resume", { engagementId: ENGAGEMENT_ID, archived: false }, host)).toBe(true);
+    unmountStone6Slot("engagement.resume");
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    // Second unmount is a safe no-op.
+    unmountStone6Slot("engagement.resume");
+    expect(cleanup).toHaveBeenCalledTimes(1);
   });
 });

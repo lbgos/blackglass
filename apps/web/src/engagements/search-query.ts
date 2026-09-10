@@ -18,7 +18,7 @@ export function engagementSearchQueryKey(engagementId: string, query: string) {
 }
 
 export function engagementSearchUrl(engagementId: string, query: string): string {
-  return `/api/v1/engagements/${engagementId}/search?q=${encodeURIComponent(query)}`;
+  return `/api/v1/engagements/${encodeURIComponent(engagementId)}/search?q=${encodeURIComponent(query)}`;
 }
 
 export async function fetchEngagementSearch(

@@ -27,9 +27,13 @@ export const EngagementSearchResultKindSchema = z.enum([
 export type EngagementSearchResultKind = z.infer<typeof EngagementSearchResultKindSchema>;
 
 /**
- * `anchor` opens the exact passage, not the top of the document:
- * note character offset, finding id, artifact id with byte range, run id,
- * or service address/port pair encoded as documented per kind.
+ * `anchor` opens the exact passage, not the top of the document.
+ * Conventions per kind: `note:notes@<offset>` carries the character offset
+ * of the match inside the notes text; `scope:<revisionId>:<ruleId>`
+ * names the exact matched rule; `finding:<id>`, `service:<addr>:<port>`,
+ * `probe:<url>`, and `artifact:<id>` name their entity; ffuf rows anchor as
+ * `run:<runId>:fuzz:<keyword>` so one run with many rows still opens the
+ * exact row.
  */
 export const EngagementSearchResultSchema = z.strictObject({
   kind: EngagementSearchResultKindSchema,

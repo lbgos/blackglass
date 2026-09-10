@@ -6,7 +6,7 @@ import {
   changesSinceLastVisit,
   describePriorAttempt,
 } from "./engagement-resume.js";
-import { redactSecretsForSnippet, searchCorpus } from "./engagement-search.js";
+import { redactSecretsForSnippet, searchCorpus, findMatchOffset } from "./engagement-search.js";
 import {
   groupFfufResults,
   hideFfufGroups,
@@ -80,6 +80,15 @@ describe("search excludes secrets", () => {
       "login",
     );
     expect(leaked.results).toHaveLength(0);
+  });
+
+  it("reports match offsets in code points on non-BMP text", () => {
+    // "🛡" is one code point but two UTF-16 units; a UTF-16 offset would
+    // point one past the match and drift the snippet and note anchor.
+    const offset = findMatchOffset("🛡 admin", "admin");
+    expect(offset).toEqual({ index: 2, length: 5 });
+    expect(findMatchOffset("nothing here", "admin")).toBe(null);
+    expect(findMatchOffset("admin", "  ")).toBe(null);
   });
 });
 
@@ -166,6 +175,21 @@ describe("wordlist by name", () => {
     expect(result.ok).toBe(false);
     if (result.ok === false) {
       expect(missingWordlistRecovery(result.error.code)).toContain("no configured file");
+    }
+  });
+
+  it("resolves an operator-configured path and fires the run input", () => {
+    const resolved = resolveWordlistByName("common", () => true, { common: "/wl/common.txt" });
+    expect(resolved).toEqual({
+      ok: true,
+      value: { name: "common", path: "/wl/common.txt", isDemo: false },
+    });
+    // An empty override clears back to unconfigured; a missing file reports.
+    expect(resolveWordlistByName("common", () => true, { common: "  " }).ok).toBe(false);
+    const missing = resolveWordlistByName("common", () => false, { common: "/wl/gone.txt" });
+    expect(missing.ok).toBe(false);
+    if (missing.ok === false) {
+      expect(missingWordlistRecovery(missing.error.code)).toContain("missing");
     }
   });
 

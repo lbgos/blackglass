@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /**
  * STONE-6 reload-safe working state. Per-engagement UI state (selected
@@ -134,10 +134,22 @@ export function saveWorkspaceState(
 
 /** Narrowed-view restore: filters and selection survive reload verbatim. */
 export function useWorkspaceState(engagementId: string, store?: WorkspaceStateStore) {
-  const resolved = store ?? browserWorkspaceStateStore();
+  const resolved = useMemo<WorkspaceStateStore>(
+    () => store ?? browserWorkspaceStateStore(),
+    [store],
+  );
   const [state, setState] = useState<EngagementWorkspaceState>(() =>
     loadWorkspaceState(resolved, engagementId),
   );
+  // Reload when the host switches engagements without remounting; without
+  // this the prior engagement's selection, drafts, and filters leak across.
+  const engagementRef = useRef(engagementId);
+  useEffect(() => {
+    if (engagementRef.current !== engagementId) {
+      engagementRef.current = engagementId;
+      setState(loadWorkspaceState(resolved, engagementId));
+    }
+  }, [engagementId, resolved]);
   const update = useCallback(
     (patch: Partial<Omit<EngagementWorkspaceState, "version" | "updatedAt">>) => {
       setState((current) => {
@@ -147,11 +159,11 @@ export function useWorkspaceState(engagementId: string, store?: WorkspaceStateSt
           version: WORKSPACE_STATE_VERSION,
           updatedAt: new Date().toISOString(),
         };
-        saveWorkspaceState(resolved, engagementId, next);
+        saveWorkspaceState(resolved, engagementRef.current, next);
         return next;
       });
     },
-    [engagementId, resolved],
+    [resolved],
   );
   return { state, update };
 }
