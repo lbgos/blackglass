@@ -387,7 +387,7 @@ describe("engagement workspace", () => {
     expect(screen.queryByRole("button", { name: /Evidence/ })).toBeNull();
 
     fireEvent.click(screen.getByRole("link", { name: "Dashboard" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "Workspace" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "Start" })).toBeTruthy();
     expect(screen.getByTestId("workspace-notice").textContent).toBe("");
   });
 

@@ -33,6 +33,13 @@ import {
   warningReasonCodes,
   warningReasonSummary,
 } from "./action-targets.js";
+import {
+  FULLER_PORTS_PRESET,
+  readFirstActionDefaults,
+  storeFirstActionDefaults,
+  type FirstActionProfile,
+} from "./first-action.js";
+import { FirstActionReadiness } from "./first-action-readiness.js";
 import { engagementMutationMessage, isRevisionConflict } from "./errors.js";
 import { engagementHttpProbesQueryKey, engagementServicesQueryKey, engagementFfufResultsQueryKey, useEngagementDetailQuery } from "./query.js";
 import { reportQueryKey } from "./report-query.js";
@@ -103,8 +110,17 @@ function PlannerBody({
   const formId = useId();
   const { focusRunsToken } = useEngagementWorkspace();
   const targetsRef = useRef<HTMLTextAreaElement>(null);
+  // Targets always start empty and are never restored from storage. A reload
+  // or a revisit must never silently reuse a previous target, credential, or
+  // machine exception. Only the scan profile and the ports text are personal
+  // defaults and may be remembered.
   const [rawTargets, setRawTargets] = useState("");
-  const [rawDeclaredPorts, setRawDeclaredPorts] = useState("");
+  const [profile, setProfile] = useState<FirstActionProfile>(
+    () => readFirstActionDefaults(window.localStorage).profile,
+  );
+  const [rawDeclaredPorts, setRawDeclaredPorts] = useState(
+    () => readFirstActionDefaults(window.localStorage).declaredPorts,
+  );
   const [fieldError, setFieldError] = useState<string | undefined>(undefined);
   const [portsFieldError, setPortsFieldError] = useState<string | undefined>(undefined);
   const [plannedTargets, setPlannedTargets] = useState<string[]>([]);
@@ -172,7 +188,11 @@ function PlannerBody({
     setQueuedBy(undefined);
     setTrackedActionId(undefined);
     const parsed = parsePlannedTargets(rawTargets);
-    const parsedPorts = parseDeclaredPorts(rawDeclaredPorts);
+    // Only the fuller port pass sends explicit ports. The quick pass and
+    // web-origin inspection always run with declaredPorts null so the
+    // labels above stay truthful about what runs.
+    const parsedPorts =
+      profile === "fuller" ? parseDeclaredPorts(rawDeclaredPorts) : { ok: true as const, declaredPorts: null };
     if (!parsed.ok) setFieldError(parsed.message);
     else setFieldError(undefined);
     if (!parsedPorts.ok) setPortsFieldError(parsedPorts.message);
@@ -190,6 +210,10 @@ function PlannerBody({
       {
         onSuccess: (action) => {
           setResult(action);
+          storeFirstActionDefaults(window.localStorage, {
+            profile,
+            declaredPorts: profile === "fuller" ? rawDeclaredPorts : "",
+          });
           if (action.action.state === "queued") {
             setOutcome("queued");
             setQueuedBy("plan");
@@ -198,6 +222,16 @@ function PlannerBody({
         },
       },
     );
+  };
+
+  const selectProfile = (next: FirstActionProfile) => {
+    setProfile(next);
+    if (next === "fuller") {
+      setRawDeclaredPorts((current) => (current.trim() === "" ? FULLER_PORTS_PRESET : current));
+    } else {
+      setRawDeclaredPorts("");
+    }
+    setPortsFieldError(undefined);
   };
 
   const applyResult = (
@@ -222,7 +256,63 @@ function PlannerBody({
           This engagement is archived. Actions cannot be planned.
         </p>
       )}
+      <div className="mb-3">
+        <FirstActionReadiness
+          engagementId={engagementId}
+          nmapUnavailable={result?.action.state === "capability_error"}
+        />
+      </div>
       <form className="grid gap-3" onSubmit={plan}>
+        <fieldset className="m-0 grid gap-1 border-0 p-0">
+          <legend className="px-0 text-[11px] text-muted-foreground">First scan</legend>
+          <label className="flex min-h-8 items-start gap-2 text-[12px] text-foreground">
+            <input
+              type="radio"
+              name={`${formId}-profile`}
+              value="quick"
+              checked={profile === "quick"}
+              disabled={archived || createAction.isPending}
+              className="mt-1 size-4 shrink-0 accent-primary"
+              onChange={() => selectProfile("quick")}
+            />
+            <span>Quick port pass. Default Nmap ports for IP, CIDR, and hostname targets.</span>
+          </label>
+          <label className="flex min-h-8 items-start gap-2 text-[12px] text-foreground">
+            <input
+              type="radio"
+              name={`${formId}-profile`}
+              value="fuller"
+              checked={profile === "fuller"}
+              disabled={archived || createAction.isPending}
+              className="mt-1 size-4 shrink-0 accent-primary"
+              onChange={() => selectProfile("fuller")}
+            />
+            <span>Fuller port pass. Nmap over the TCP ports below.</span>
+          </label>
+          <label className="flex min-h-8 items-start gap-2 text-[12px] text-foreground">
+            <input
+              type="radio"
+              name={`${formId}-profile`}
+              value="web"
+              checked={profile === "web"}
+              disabled={archived || createAction.isPending}
+              className="mt-1 size-4 shrink-0 accent-primary"
+              onChange={() => selectProfile("web")}
+            />
+            <span>Web-origin inspection. Direct HTTP(S) probe of URL targets, no Nmap.</span>
+          </label>
+          <details className="mt-1">
+            <summary className="min-h-8 cursor-pointer text-[12px] font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              What each pass covers
+            </summary>
+            <p className="mt-1 mb-0 text-[12px] leading-5 text-muted-foreground">
+              IP, CIDR, and hostname targets run the Nmap TCP connect pass. URL targets run the
+              HTTP probe and record status, title, headers, and redirect hops. A large target set
+              or a target outside the saved scope pauses for one warning. Continue never changes
+              saved scope.
+            </p>
+          </details>
+        </fieldset>
         <label className="grid gap-1 text-[11px] text-muted-foreground" htmlFor={`${formId}-targets`}>
           <span>Targets</span>
           <textarea
@@ -231,7 +321,9 @@ function PlannerBody({
             name="targets"
             value={rawTargets}
             rows={3}
-            placeholder={"192.0.2.10\n198.51.100.10"}
+            placeholder={
+              profile === "web" ? "https://host.test/\nhttp://192.0.2.10/" : "192.0.2.10\n198.51.100.10"
+            }
             autoComplete="off"
             spellCheck={false}
             disabled={archived || createAction.isPending}
@@ -249,7 +341,7 @@ function PlannerBody({
           )}
         </label>
         <label className="grid gap-1 text-[11px] text-muted-foreground" htmlFor={`${formId}-ports`}>
-          <span>TCP ports <span className="font-normal opacity-70">Optional</span></span>
+          <span>TCP ports <span className="font-normal opacity-70">{profile === "fuller" ? "Fuller pass" : "Quick and web passes use defaults"}</span></span>
           <input
             id={`${formId}-ports`}
             name="declaredPorts"
@@ -257,7 +349,7 @@ function PlannerBody({
             placeholder="22,80,443"
             autoComplete="off"
             spellCheck={false}
-            disabled={archived || createAction.isPending}
+            disabled={archived || createAction.isPending || profile !== "fuller"}
             aria-invalid={portsFieldError !== undefined}
             className={cn(
               "h-9 w-full rounded-md border bg-transparent px-2.5 font-mono text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring",
