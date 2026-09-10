@@ -36,6 +36,7 @@ function bundleFixture(): ReportBundle {
         status: "open",
         body: "detail",
         evidenceArtifactIds: [],
+        revision: 1,
         createdAt: "2026-08-12T12:00:00.000Z",
         updatedAt: "2026-08-12T12:00:00.000Z",
       },

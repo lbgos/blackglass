@@ -177,6 +177,7 @@ function ownedFinding(id: string, body: string): Finding {
     status: "open",
     body,
     evidenceArtifactIds: [],
+    revision: 1,
     createdAt: STAMP,
     updatedAt: STAMP,
   };
