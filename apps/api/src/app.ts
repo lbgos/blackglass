@@ -74,6 +74,7 @@ interface BuildAppOptions {
         | "listFindings"
         | "resolveFinding"
         | "reopenFinding"
+        | "updateFinding"
         | "withWriteTx"
       >
     >;
@@ -206,13 +207,15 @@ export function buildApp({
     engagementRepository.createFinding !== undefined &&
     engagementRepository.listFindings !== undefined &&
     engagementRepository.resolveFinding !== undefined &&
-    engagementRepository.reopenFinding !== undefined
+    engagementRepository.reopenFinding !== undefined &&
+    engagementRepository.updateFinding !== undefined
   ) {
     registerFindingRoutes(app, {
       createFinding: engagementRepository.createFinding.bind(engagementRepository),
       listFindings: engagementRepository.listFindings.bind(engagementRepository),
       resolveFinding: engagementRepository.resolveFinding.bind(engagementRepository),
       reopenFinding: engagementRepository.reopenFinding.bind(engagementRepository),
+      updateFinding: engagementRepository.updateFinding.bind(engagementRepository),
     });
   }
   registerActionRoutes(app, engagementRepository);

@@ -313,6 +313,7 @@ describe("report cache coherence", () => {
       status: "open",
       body: "# impact",
       evidenceArtifactIds: [],
+      revision: 1,
       createdAt: "2026-08-12T14:00:00.000Z",
       updatedAt: "2026-08-12T14:00:00.000Z",
     };
@@ -366,10 +367,11 @@ describe("report cache coherence", () => {
       status: "open",
       body: "# impact",
       evidenceArtifactIds: [],
+      revision: 1,
       createdAt: "2026-08-12T12:00:00.000Z",
       updatedAt: "2026-08-12T12:00:00.000Z",
     };
-    const resolvedFinding = { ...openFinding, status: "resolved", updatedAt: "2026-08-12T14:00:00.000Z" };
+    const resolvedFinding = { ...openFinding, status: "resolved", revision: 2, updatedAt: "2026-08-12T14:00:00.000Z" };
     const v1 = bundleFixture(engagementA, {
       findings: [openFinding as ReportBundle["findings"][number]],
     });
@@ -420,6 +422,7 @@ describe("report cache coherence", () => {
           status: "open",
           body: "detail",
           evidenceArtifactIds: [],
+          revision: 1,
           createdAt: "2026-08-12T12:00:00.000Z",
           updatedAt: "2026-08-12T12:00:00.000Z",
         },
