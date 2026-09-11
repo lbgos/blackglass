@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAppQueryClient } from "../query-client.js";
@@ -97,24 +97,31 @@ describe("EngagementServicesSection", () => {
     expect(screen.queryByText("Runs")).toBeNull();
   });
 
-  it("derives truthful stats and renders deduplicated identity with provenance", async () => {
+  it("organizes services by selected target and renders identity with provenance", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(response([serviceA, serviceB]))));
     renderSurface();
-    const addresses = (await screen.findAllByText(/192\.0\.2\./)).map((element) => element.textContent);
-    expect(addresses[0]).toBe("192.0.2.2");
-    expect(addresses[1]).toBe("192.0.2.10");
+    expect(await screen.findByRole("heading", { name: "Attack surface" })).toBeTruthy();
+    expect((await screen.findAllByRole("button", { name: /192\.0\.2\.2/ })).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /192\.0\.2\.10/ })).toBeTruthy();
     expect(screen.getByText("Services").previousElementSibling?.textContent).toBe("2");
     expect(screen.getByText("Hosts").previousElementSibling?.textContent).toBe("2");
     expect(screen.getByText("Evidence artifacts").previousElementSibling?.textContent).toBe("2");
     expect(screen.getByText("Latest observation").previousElementSibling?.textContent).toMatch(/11:00/);
     expect(screen.getAllByText(/13 Aug 2026/i).length).toBeGreaterThanOrEqual(1);
+
+    // The first target sorts first and shows alone: no reconciling tables.
+    expect(screen.getByText("443/tcp")).toBeTruthy();
+    expect(screen.getAllByText("unknown").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("22/tcp")).toBeNull();
+    expect(screen.getAllByText("Provenance")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /192\.0\.2\.10/ }));
     expect(screen.getByText("host-a.test")).toBeTruthy();
     expect(screen.getByText("22/tcp")).toBeTruthy();
-    expect(screen.getByText("443/tcp")).toBeTruthy();
+    expect(screen.queryByText("443/tcp")).toBeNull();
     expect(screen.getByText("OpenSSH 9.6")).toBeTruthy();
     expect(screen.getAllByText("ssh").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("unknown").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("Provenance").length).toBe(2);
+    expect(screen.getAllByText("Provenance").length).toBe(1);
     expect(screen.getAllByText("run-1").length).toBeGreaterThan(0);
     expect(screen.getAllByText(`sha256:${"a".repeat(64)}`).length).toBeGreaterThan(0);
     expect(screen.getAllByText("artifactDigest").length).toBeGreaterThan(0);
@@ -123,14 +130,19 @@ describe("EngagementServicesSection", () => {
   it("links each service row to its source XML evidence", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(response([serviceA, serviceB]))));
     renderSurface();
-    const links = await screen.findAllByRole("link", { name: "XML" });
-    expect(links).toHaveLength(2);
-    const hrefs = links.map((link) => link.getAttribute("href")).sort();
-    expect(hrefs).toEqual(
-      [
-        `/api/v1/engagements/${engagementId}/artifacts/artifact-1/content`,
-        `/api/v1/engagements/${engagementId}/artifacts/artifact-2/content`,
-      ].sort(),
+    expect(await screen.findByRole("heading", { name: "Attack surface" })).toBeTruthy();
+
+    let links = await screen.findAllByRole("link", { name: "XML" });
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe(
+      `/api/v1/engagements/${engagementId}/artifacts/artifact-2/content`,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /192\.0\.2\.10/ }));
+    links = screen.getAllByRole("link", { name: "XML" });
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe(
+      `/api/v1/engagements/${engagementId}/artifacts/artifact-1/content`,
     );
     for (const link of links) {
       expect(link.hasAttribute("download")).toBe(true);
@@ -152,13 +164,13 @@ describe("EngagementServicesSection", () => {
     const fetchMock = vi.fn(() => Promise.resolve(response([serviceA])));
     vi.stubGlobal("fetch", fetchMock);
     renderSurface();
-    expect(await screen.findByText("192.0.2.10")).toBeTruthy();
+    expect((await screen.findAllByText("192.0.2.10")).length).toBeGreaterThanOrEqual(1);
     fetchMock.mockImplementation(
       () => Promise.resolve({ json: async () => ({ code: "storage_busy" }), ok: false, status: 503 } as Response),
     );
     await queryClient.refetchQueries();
     await waitFor(() => expect(screen.getByText("Showing the last successful attack surface")).toBeTruthy());
-    expect(screen.getByText("192.0.2.10")).toBeTruthy();
+    expect(screen.getAllByText("192.0.2.10").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole("button", { name: "Refresh" })).toBeTruthy();
   });
 
