@@ -62,17 +62,37 @@ export type SurfaceSelectionKind = "service" | "probe" | "path";
 export interface SurfaceSelection {
   readonly kind: SurfaceSelectionKind;
   readonly key: string;
+  readonly address?: string;
+  readonly port?: number;
+  readonly protocol?: string;
+  readonly url?: string;
+  readonly artifactId?: string;
 }
 
-export function serviceSelectionKey(address: string, port: number): string {
-  return `service:${address}:${String(port)}`;
+export function serviceSelectionKey(
+  address: string,
+  port: number,
+  protocol?: string,
+  artifactId?: string,
+): string {
+  const formattedAddress = address.includes(":") && !address.startsWith("[") ? `[${address}]` : address;
+  if (protocol !== undefined && artifactId !== undefined) {
+    return `service:${formattedAddress}:${String(port)}:${protocol}:${artifactId}`;
+  }
+  return `service:${formattedAddress}:${String(port)}`;
 }
 
-export function probeSelectionKey(url: string): string {
+export function probeSelectionKey(url: string, artifactId?: string): string {
+  if (artifactId !== undefined) {
+    return `probe:${artifactId}:${url}`;
+  }
   return `probe:${url}`;
 }
 
-export function pathSelectionKey(url: string): string {
+export function pathSelectionKey(url: string, artifactId?: string): string {
+  if (artifactId !== undefined) {
+    return `path:${artifactId}:${url}`;
+  }
   return `path:${url}`;
 }
 
@@ -87,18 +107,72 @@ export function decodeSurfaceSelection(raw: string | undefined): SurfaceSelectio
   const kind = raw.slice(0, separator);
   const rest = raw.slice(separator + 1);
   if (kind === "probe" || kind === "path") {
-    if (!isHttpUrl(rest)) return undefined;
-    return { kind, key: raw };
+    if (isHttpUrl(rest)) {
+      return { kind, key: raw, url: rest };
+    }
+    const colon = rest.indexOf(":");
+    if (colon <= 0) return undefined;
+    const artifactId = rest.slice(0, colon);
+    const url = rest.slice(colon + 1);
+    if (!/^[a-z0-9][a-z0-9-]{0,126}$/.test(artifactId) || !isHttpUrl(url)) {
+      return undefined;
+    }
+    return { kind, key: raw, artifactId, url };
   }
   if (kind === "service") {
-    const portSeparator = rest.lastIndexOf(":");
-    if (portSeparator < 0) return undefined;
-    const address = rest.slice(0, portSeparator);
-    const portRaw = rest.slice(portSeparator + 1);
-    if (address.length === 0 || !/^\d+$/.test(portRaw)) return undefined;
+    let address: string;
+    let afterAddress: string;
+    if (rest.startsWith("[")) {
+      const closingBracket = rest.indexOf("]");
+      if (closingBracket < 0) return undefined;
+      address = rest.slice(1, closingBracket);
+      const remainder = rest.slice(closingBracket + 1);
+      if (!remainder.startsWith(":")) return undefined;
+      afterAddress = remainder.slice(1);
+    } else {
+      const tokens = rest.split(":");
+      if (tokens.length === 2) {
+        address = tokens[0]!;
+        afterAddress = tokens[1]!;
+      } else if (tokens.length > 2) {
+        const last = tokens[tokens.length - 1]!;
+        const secondLast = tokens[tokens.length - 2]!;
+        const thirdLast = tokens[tokens.length - 3]!;
+        if (
+          /^[a-z0-9][a-z0-9-]{0,126}$/.test(last) &&
+          (secondLast === "tcp" || secondLast === "udp") &&
+          /^\d+$/.test(thirdLast)
+        ) {
+          address = tokens.slice(0, tokens.length - 3).join(":");
+          afterAddress = `${thirdLast}:${secondLast}:${last}`;
+        } else {
+          const portCandidate = tokens[tokens.length - 1]!;
+          if (!/^\d+$/.test(portCandidate)) return undefined;
+          address = tokens.slice(0, -1).join(":");
+          afterAddress = portCandidate;
+        }
+      } else {
+        return undefined;
+      }
+    }
+    if (address.length === 0) return undefined;
+    const parts = afterAddress.split(":");
+    const portRaw = parts[0]!;
+    if (!/^\d+$/.test(portRaw)) return undefined;
     const port = Number.parseInt(portRaw, 10);
     if (!Number.isSafeInteger(port) || port < 1 || port > 65535) return undefined;
-    return { kind, key: raw };
+    if (parts.length === 1) {
+      return { kind, key: raw, address, port };
+    }
+    if (parts.length === 3) {
+      const protocol = parts[1]!;
+      const artifactId = parts[2]!;
+      if (protocol.length === 0 || !/^[a-z0-9][a-z0-9-]{0,126}$/.test(artifactId)) {
+        return undefined;
+      }
+      return { kind, key: raw, address, port, protocol, artifactId };
+    }
+    return undefined;
   }
   return undefined;
 }
@@ -141,17 +215,49 @@ export function parseOriginScheme(origin: string): OriginScheme {
 export function withOriginScheme(origin: string, scheme: OriginScheme): string {
   const marker = origin.indexOf("://");
   const withoutScheme = marker >= 0 ? origin.slice(marker + 3) : origin;
-  const colon = withoutScheme.lastIndexOf(":");
-  if (colon >= 0) {
-    const host = withoutScheme.slice(0, colon);
-    const port = Number.parseInt(withoutScheme.slice(colon + 1), 10);
-    const defaultPort = scheme === "https" ? 443 : 80;
-    if (Number.isSafeInteger(port) && port === defaultPort) {
-      return `${scheme}://${host}`;
-    }
-    return `${scheme}://${withoutScheme}`;
+  let authority: string;
+  let pathAndQuery = "";
+  const firstSlash = withoutScheme.search(/[/?#]/);
+  if (firstSlash >= 0) {
+    authority = withoutScheme.slice(0, firstSlash);
+    pathAndQuery = withoutScheme.slice(firstSlash);
+  } else {
+    authority = withoutScheme;
   }
-  return `${scheme}://${withoutScheme}`;
+  let host: string;
+  let port: number | undefined;
+  if (authority.startsWith("[")) {
+    const closingBracket = authority.indexOf("]");
+    if (closingBracket >= 0) {
+      host = authority.slice(0, closingBracket + 1);
+      const after = authority.slice(closingBracket + 1);
+      if (after.startsWith(":")) {
+        const parsedPort = Number.parseInt(after.slice(1), 10);
+        if (Number.isSafeInteger(parsedPort)) {
+          port = parsedPort;
+        }
+      }
+    } else {
+      host = authority;
+    }
+  } else {
+    const colonCount = (authority.match(/:/g) ?? []).length;
+    if (colonCount > 1) {
+      host = `[${authority}]`;
+    } else if (colonCount === 1) {
+      const colon = authority.indexOf(":");
+      host = authority.slice(0, colon);
+      const parsedPort = Number.parseInt(authority.slice(colon + 1), 10);
+      if (Number.isSafeInteger(parsedPort)) {
+        port = parsedPort;
+      }
+    } else {
+      host = authority;
+    }
+  }
+  const defaultPort = scheme === "https" ? 443 : 80;
+  const portString = port !== undefined && port !== defaultPort ? `:${String(port)}` : "";
+  return `${scheme}://${host}${portString}${pathAndQuery}`;
 }
 
 // Web-origin candidacy is a presentation-only heuristic that decides which
@@ -194,6 +300,80 @@ export interface SurfaceOriginContext {
 export type ExtraRowActions = (context: SurfaceRowContext) => ReactNode;
 
 export type BelowOrigin = (context: SurfaceOriginContext) => ReactNode;
+
+// ---------------------------------------------------------------------------
+// Provenance-aware row selection helpers
+// ---------------------------------------------------------------------------
+
+export function isServiceRowSelected(
+  service: NmapProjectedService,
+  selectedKey: string | undefined,
+  allServices?: readonly NmapProjectedService[],
+): boolean {
+  if (selectedKey === undefined) return false;
+  const canonicalKey = serviceSelectionKey(
+    service.address,
+    service.port,
+    service.protocol,
+    service.artifactId,
+  );
+  if (selectedKey === canonicalKey) return true;
+  const decoded = decodeSurfaceSelection(selectedKey);
+  if (decoded?.kind === "service" && decoded.artifactId === undefined) {
+    if (allServices !== undefined) {
+      const decodedAddr = decoded.address?.replace(/^\[|\]$/g, "").toLowerCase();
+      const matches = allServices.filter(
+        (s) =>
+          s.address.replace(/^\[|\]$/g, "").toLowerCase() === decodedAddr &&
+          s.port === decoded.port,
+      );
+      if (matches.length === 1 && matches[0]?.artifactId === service.artifactId) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function isProbeRowSelected(
+  probe: HttpProbeProjected,
+  selectedKey: string | undefined,
+  allProbes?: readonly HttpProbeProjected[],
+): boolean {
+  if (selectedKey === undefined) return false;
+  const canonicalKey = probeSelectionKey(probe.url, probe.artifactId);
+  if (selectedKey === canonicalKey) return true;
+  const decoded = decodeSurfaceSelection(selectedKey);
+  if (decoded?.kind === "probe" && decoded.artifactId === undefined) {
+    if (allProbes !== undefined) {
+      const matches = allProbes.filter((p) => p.url === decoded.url);
+      if (matches.length === 1 && matches[0]?.artifactId === probe.artifactId) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function isPathRowSelected(
+  result: FfufProjected,
+  selectedKey: string | undefined,
+  allResults?: readonly FfufProjected[],
+): boolean {
+  if (selectedKey === undefined) return false;
+  const canonicalKey = pathSelectionKey(result.url, result.artifactId);
+  if (selectedKey === canonicalKey) return true;
+  const decoded = decodeSurfaceSelection(selectedKey);
+  if (decoded?.kind === "path" && decoded.artifactId === undefined) {
+    if (allResults !== undefined) {
+      const matches = allResults.filter((r) => r.url === decoded.url);
+      if (matches.length === 1 && matches[0]?.artifactId === result.artifactId) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 // ---------------------------------------------------------------------------
 // Focus and scroll restoration
@@ -264,7 +444,7 @@ export function serviceInspectorRecord(
   const identity = serviceIdentity(service);
   return {
     kind: "service",
-    key: serviceSelectionKey(service.address, service.port),
+    key: serviceSelectionKey(service.address, service.port, service.protocol, service.artifactId),
     title: `${service.address}:${String(service.port)}`,
     subtitle: identity,
     target: service.address,
@@ -301,7 +481,7 @@ export function probeInspectorRecord(
   const parts = splitOriginUrl(probe.url);
   return {
     kind: "probe",
-    key: probeSelectionKey(probe.url),
+    key: probeSelectionKey(probe.url, probe.artifactId),
     title: probe.url,
     subtitle: `${probeStatus(probe)} · ${probe.title ?? "no title"}`,
     target: probe.url,
@@ -335,7 +515,7 @@ export function pathInspectorRecord(
   const parts = splitOriginUrl(result.url);
   return {
     kind: "path",
-    key: pathSelectionKey(result.url),
+    key: pathSelectionKey(result.url, result.artifactId),
     title: result.url,
     subtitle: `${String(result.status)} · ${String(result.length)} bytes`,
     target: result.url,
@@ -371,6 +551,8 @@ export function pathInspectorRecord(
 export interface SurfaceInspectorProps {
   readonly engagementId: string;
   readonly loading: boolean;
+  readonly error?: string | undefined;
+  readonly onRetry?: (() => void) | undefined;
   readonly onAskAbout?: ((target: string) => void) | undefined;
   readonly onClose: () => void;
   readonly onDiscoverOrigin?: ((origin: string, scopeHint: string | undefined) => void) | undefined;
@@ -395,6 +577,8 @@ function InspectorSection({ children, title }: { children: ReactNode; title: str
 export function SurfaceInspector({
   engagementId,
   loading,
+  error,
+  onRetry,
   onAskAbout,
   onClose,
   onDiscoverOrigin,
@@ -447,7 +631,19 @@ export function SurfaceInspector({
             Close
           </Button>
         </div>
-        {loading || record === undefined ? (
+        {error !== undefined ? (
+          <div className="px-3 py-3" role="alert">
+            <p className="m-0 text-[13px] font-semibold text-destructive">Selection error</p>
+            <p className="mt-1 mb-0 text-[12px] leading-5 text-muted-foreground">{error}</p>
+            {onRetry !== undefined ? (
+              <div className="mt-3">
+                <Button type="button" variant="secondary" onClick={onRetry}>
+                  Retry
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        ) : loading || record === undefined ? (
           <div className="px-3 py-3">
             {loading ? (
               <LoadingRegion label="Loading selection" className="space-y-2">
@@ -458,8 +654,7 @@ export function SurfaceInspector({
               <div>
                 <p className="m-0 text-[13px] font-semibold">Selection unavailable</p>
                 <p className="mt-1 mb-0 text-[12px] leading-5 text-muted-foreground">
-                  That row is no longer in the loaded surface. Refresh the surface or clear the
-                  selection.
+                  That row is no longer in the loaded surface, or the selection link is ambiguous across multiple observations. Refresh the surface or clear the selection.
                 </p>
                 <div className="mt-3">
                   <Button type="button" variant="secondary" onClick={onClose}>
@@ -729,6 +924,15 @@ export function ActionLauncher({ archived, engagementId, onClose, request }: Act
   const detail = useEngagementDetailQuery(engagementId);
   const hasDetail = detail.data !== undefined;
 
+  useEffect(() => {
+    const root = dialogRef.current;
+    if (root === null) return;
+    const focusable = root.querySelector<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    (focusable ?? root).focus({ preventScroll: true });
+  }, []);
+
   const attemptClose = () => {
     if (pending) return;
     if (dirty && !confirmDiscard) {
@@ -779,6 +983,7 @@ export function ActionLauncher({ archived, engagementId, onClose, request }: Act
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
+        tabIndex={-1}
         aria-labelledby={titleId}
         className="relative max-h-full w-full max-w-[520px] overflow-y-auto rounded-[10px] border border-border bg-popover p-5 text-popover-foreground shadow-[0_24px_64px_rgba(0,0,0,0.6)]"
         data-keybinding-capture=""
@@ -922,14 +1127,16 @@ function useLauncherActionState(
 
   const trackLaunched = (action: PersistedAction) => {
     setResult(action);
-    setTrackedActionId(action.action.state === "queued" ? action.action.actionId : undefined);
+    setTrackedActionId(
+      isTerminalActionState(action.action.state) ? undefined : action.action.actionId,
+    );
   };
 
   const terminal = displayAction !== undefined && isTerminalActionState(displayAction.action.state);
   const stoppable =
     displayAction !== undefined &&
     !terminal &&
-    (displayAction.action.state === "queued" || displayAction.action.state === "active");
+    (displayAction.action.state === "queued" || displayAction.action.state === "active_paused_for_warning");
 
   return {
     displayAction,
@@ -1186,11 +1393,22 @@ function FfufLauncherForm({
       setMaxTimeSeconds(String(storedDefaults.ffufMaxTimeSeconds));
   }, [storedDefaults]);
 
+  const initialWordlist = storedDefaults?.ffufWordlistPath ?? "";
+  const initialRate = String(storedDefaults?.ffufRate ?? FFUF_RATE_DEFAULT);
+  const initialThreads = String(storedDefaults?.ffufThreads ?? FFUF_THREADS_DEFAULT);
+  const initialTimeout = String(storedDefaults?.ffufTimeoutSeconds ?? FFUF_TIMEOUT_SECONDS_DEFAULT);
+  const initialMaxTime = String(storedDefaults?.ffufMaxTimeSeconds ?? FFUF_MAX_TIME_SECONDS_DEFAULT);
+  const initialCodes = FFUF_DEFAULT_MATCH_CODES.join(", ");
+
   const [fieldError, setFieldError] = useState<string | undefined>(undefined);
   const dirty =
     originText !== origin ||
-    editedFields.current.size > 0 ||
-    matchCodes !== FFUF_DEFAULT_MATCH_CODES.join(", ");
+    wordlistPath !== initialWordlist ||
+    rate !== initialRate ||
+    threads !== initialThreads ||
+    timeoutSeconds !== initialTimeout ||
+    maxTimeSeconds !== initialMaxTime ||
+    matchCodes !== initialCodes;
   useEffect(() => {
     onDirtyChange(dirty && launcher.result === undefined);
   }, [dirty, launcher.result, onDirtyChange]);
@@ -1198,8 +1416,12 @@ function FfufLauncherForm({
     onPendingChange(launch.isPending);
   }, [launch.isPending, onPendingChange]);
 
-  const markEdited = (field: string) => {
-    editedFields.current.add(field);
+  const markEdited = (field: string, nextValue: string, initialValue: string) => {
+    if (nextValue !== initialValue) {
+      editedFields.current.add(field);
+    } else {
+      editedFields.current.delete(field);
+    }
   };
   const canLaunch = !archived && !launch.isPending;
 
@@ -1298,7 +1520,7 @@ function FfufLauncherForm({
             disabled={archived || launch.isPending}
             className="h-9 w-full rounded-md border border-input bg-transparent px-2.5 font-mono text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
             onChange={(event) => {
-              markEdited("wordlistPath");
+              markEdited("wordlistPath", event.target.value, initialWordlist);
               setWordlistPath(event.target.value);
             }}
           />
@@ -1316,7 +1538,14 @@ function FfufLauncherForm({
                 disabled={archived || launch.isPending}
                 className="h-9 w-full rounded-md border border-input bg-transparent px-2.5 font-mono text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 onChange={(event) => {
-                  markEdited(field.field);
+                  let initialVal = "";
+                  switch (field.field) {
+                    case "rate": initialVal = initialRate; break;
+                    case "threads": initialVal = initialThreads; break;
+                    case "timeoutSeconds": initialVal = initialTimeout; break;
+                    case "maxTimeSeconds": initialVal = initialMaxTime; break;
+                  }
+                  markEdited(field.field, event.target.value, initialVal);
                   field.onChange(event.target.value);
                 }}
               />
@@ -1332,7 +1561,10 @@ function FfufLauncherForm({
             spellCheck={false}
             disabled={archived || launch.isPending}
             className="h-9 w-full rounded-md border border-input bg-transparent px-2.5 font-mono text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            onChange={(event) => setMatchCodes(event.target.value)}
+            onChange={(event) => {
+              markEdited("matchCodes", event.target.value, initialCodes);
+              setMatchCodes(event.target.value);
+            }}
           />
         </label>
         {fieldError !== undefined ? (

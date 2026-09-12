@@ -255,6 +255,18 @@ export function RunHistoryPanel({
   const clearFilters = () => {
     setFilters({ engagementId, runState: "all", text: "" });
   };
+  const heldBackBanner =
+    heldBackCount > 0 ? (
+      <div className="mb-2 flex flex-wrap items-center gap-2" aria-live="polite">
+        <span className="text-[12px] text-muted-foreground">
+          {heldBackCount} new {heldBackCount === 1 ? "run" : "runs"} arrived. Order stays
+          stable until you opt in.
+        </span>
+        <Button type="button" variant="secondary" onClick={showNewResults}>
+          Show new results
+        </Button>
+      </div>
+    ) : null;
   const listBody =
     runs.length === 0 && !filtersActive ? (
       <div>
@@ -262,6 +274,7 @@ export function RunHistoryPanel({
         <p className="mt-1 mb-0 text-[12px] leading-5 text-muted-foreground">
           Queue an action to produce preserved runs for this engagement.
         </p>
+        {heldBackBanner}
       </div>
     ) : (
       <div>
@@ -276,17 +289,7 @@ export function RunHistoryPanel({
             ? `${visibleRuns.length} of ${runs.length} ${runs.length === 1 ? "run" : "runs"} shown, newest first. Filters match loaded runs only.`
             : `${runs.length} ${runs.length === 1 ? "run" : "runs"} shown, newest first`}
         </p>
-        {heldBackCount > 0 ? (
-          <div className="mb-2 flex flex-wrap items-center gap-2" aria-live="polite">
-            <span className="text-[12px] text-muted-foreground">
-              {heldBackCount} new {heldBackCount === 1 ? "run" : "runs"} arrived. Order stays
-              stable until you opt in.
-            </span>
-            <Button type="button" variant="secondary" onClick={showNewResults}>
-              Show new results
-            </Button>
-          </div>
-        ) : null}
+        {heldBackBanner}
         {visibleRuns.length === 0 ? (
           <div>
             <h3 className="m-0 text-[13px] font-semibold">No matching runs</h3>

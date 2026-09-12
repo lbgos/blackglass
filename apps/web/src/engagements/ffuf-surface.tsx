@@ -19,7 +19,7 @@ import { latestActionSnapshot } from "./action-targets.js";
 import { engagementMutationMessage } from "./errors.js";
 import { type FfufDiscoveryInput, useLaunchFfufDiscoveryMutation } from "./ffuf-mutations.js";
 import { formatEngagementTimestamp } from "./format.js";
-import { pathInspectorRecord, pathSelectionKey, type ExtraRowActions } from "./inspector.js";
+import { isPathRowSelected, pathInspectorRecord, pathSelectionKey, type ExtraRowActions } from "./inspector.js";
 import {
   engagementFfufResultsQueryKey,
   useEngagementDetailQuery,
@@ -192,7 +192,9 @@ function FfufDiscoveryBody({
 
   const trackLaunched = (action: PersistedAction) => {
     setResult(action);
-    setTrackedActionId(action.action.state === "queued" ? action.action.actionId : undefined);
+    setTrackedActionId(
+      isTerminalActionState(action.action.state) ? undefined : action.action.actionId,
+    );
   };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -268,7 +270,7 @@ function FfufDiscoveryBody({
   const stoppable =
     displayAction !== undefined &&
     !terminal &&
-    (displayAction.action.state === "queued" || displayAction.action.state === "active");
+    (displayAction.action.state === "queued" || displayAction.action.state === "active_paused_for_warning");
 
   const numericFields = [
     { id: `${formId}-rate`, label: "Rate", value: rate, onChange: setRate, field: "rate" },
@@ -454,7 +456,7 @@ function FfufResultsList({
           extraRowActions={extraRowActions}
           onSelectKey={onSelectKey}
           result={result}
-          selected={selectedKey === pathSelectionKey(result.url)}
+          selected={isPathRowSelected(result, selectedKey, results)}
         />
       ))}
     </ul>
@@ -475,7 +477,7 @@ function FfufResultRow({
   selected: boolean;
 }) {
   const [copied, setCopied] = useState<string | undefined>(undefined);
-  const key = pathSelectionKey(result.url);
+  const key = pathSelectionKey(result.url, result.artifactId);
   const copyValue = (label: string, value: string) => {
     void copyTextToClipboard(value).then((ok) => {
       if (ok) setCopied(label);

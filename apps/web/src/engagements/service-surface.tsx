@@ -3,7 +3,7 @@ import type {
   HttpProbeProjected,
   NmapProjectedService,
 } from "@stonehush/contracts";
-import { LoadingRegion, RecoverableError, Skeleton, StaleDataState } from "@stonehush/ui";
+import { Button, LoadingRegion, RecoverableError, Skeleton, StaleDataState } from "@stonehush/ui";
 import { useRef, useState } from "react";
 
 import { formatEngagementTimestamp } from "./format.js";
@@ -13,6 +13,9 @@ import {
   decodeSurfaceSelection,
   defaultSchemeForPort,
   focusSurfaceRow,
+  isPathRowSelected,
+  isProbeRowSelected,
+  isServiceRowSelected,
   isWebServiceCandidate,
   pathInspectorRecord,
   pathSelectionKey,
@@ -180,7 +183,6 @@ export function EngagementServicesSection({
     const returnElement = returnFocusRef.current;
     setLauncher(null);
     returnFocusRef.current = null;
-    returnKeyRef.current = undefined;
     const savedY = scrollRestoreRef.current;
     requestAnimationFrame(() => {
       restoreSurfacePosition(savedY, undefined);
@@ -197,8 +199,18 @@ export function EngagementServicesSection({
     selection === undefined ? null : (
       <SurfaceInspectorLoader
         engagementId={engagementId}
-        ffufQuery={{ data: ffufResults, isFetching: ffufQuery.isFetching }}
-        probesQuery={{ data: probes, isFetching: probesQuery.isFetching }}
+        ffufQuery={{
+          data: ffufResults,
+          isFetching: ffufQuery.isFetching,
+          isError: ffufQuery.isError,
+          refetch: () => void ffufQuery.refetch(),
+        }}
+        probesQuery={{
+          data: probes,
+          isFetching: probesQuery.isFetching,
+          isError: probesQuery.isError,
+          refetch: () => void probesQuery.refetch(),
+        }}
         selectionKey={selection.key}
         services={sorted}
         onAskAbout={onAskAbout}
@@ -306,21 +318,53 @@ export function EngagementServicesSection({
       </section>
     );
 
+  const isWebError = probesQuery.isError || ffufQuery.isError;
+  const retryWeb = () => {
+    if (probesQuery.isError) void probesQuery.refetch();
+    if (ffufQuery.isError) void ffufQuery.refetch();
+  };
+  const webStatusBanner = isWebError ? (
+    <div className="rounded-[10px] border border-warning/35 bg-warning/10 p-3" role="status">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="m-0 text-[12px] text-warning">
+          {probesQuery.isError && ffufQuery.isError
+            ? "Web probes and path discovery results could not be loaded. Showing services only."
+            : probesQuery.isError
+              ? "Web probes could not be loaded. Showing services only."
+              : "Path discovery results could not be loaded. Showing services only."}
+        </p>
+        <Button type="button" variant="secondary" className="h-7 px-2 text-[12px]" onClick={retryWeb}>
+          Retry web observations
+        </Button>
+      </div>
+    </div>
+  ) : null;
+
   const body = (
     <div className={inspector === null ? "grid gap-4" : "grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start"}>
       <div className="grid min-w-0 gap-4">
         {statBar}
+        {webStatusBanner}
         {attackSurface}
       </div>
       {inspector}
     </div>
   );
 
-  const content = servicesQuery.isError ? (
+  const retryAll = () => {
+    if (servicesQuery.isError) void servicesQuery.refetch();
+    if (probesQuery.isError) void probesQuery.refetch();
+    if (ffufQuery.isError) void ffufQuery.refetch();
+  };
+  const hasFailedQuery = servicesQuery.isError || probesQuery.isError || ffufQuery.isError;
+  const staleDescription = servicesQuery.isError
+    ? "The latest refresh failed. Existing services are still available."
+    : "The latest web refresh failed. Existing web observations are marked where they failed to load.";
+  const content = hasFailedQuery ? (
     <StaleDataState
       title="Showing the last successful attack surface"
-      description="The latest refresh failed. Existing services are still available."
-      onRetry={retry}
+      description={staleDescription}
+      onRetry={retryAll}
     >
       {body}
     </StaleDataState>
@@ -351,6 +395,29 @@ interface TargetSummary {
   readonly target: string;
 }
 
+function canonicalTargetForHost(
+  host: string,
+  services: readonly NmapProjectedService[],
+): string {
+  const normalized = host.replace(/^\[|\]$/g, "").toLowerCase();
+  const addressMatch = services.find(
+    (s) => s.address.replace(/^\[|\]$/g, "").toLowerCase() === normalized,
+  );
+  if (addressMatch !== undefined) {
+    return addressMatch.address;
+  }
+  const matchingAddresses = new Set<string>();
+  for (const s of services) {
+    if (s.hostname !== null && s.hostname.replace(/^\[|\]$/g, "").toLowerCase() === normalized) {
+      matchingAddresses.add(s.address);
+    }
+  }
+  if (matchingAddresses.size === 1) {
+    return Array.from(matchingAddresses)[0]!;
+  }
+  return host;
+}
+
 function collectTargets(
   services: readonly NmapProjectedService[],
   probes: readonly HttpProbeProjected[] | undefined,
@@ -376,7 +443,8 @@ function collectTargets(
     for (const probe of probes) {
       const parts = splitOriginUrl(probe.url);
       if (parts === undefined) continue;
-      const entry = ensure(parts.host);
+      const canonicalTarget = canonicalTargetForHost(parts.host, services);
+      const entry = ensure(canonicalTarget);
       entry.origins.add(`${parts.host}:${String(parts.port)}`);
     }
   }
@@ -384,7 +452,8 @@ function collectTargets(
     for (const result of ffufResults) {
       const parts = splitOriginUrl(result.url);
       if (parts === undefined) continue;
-      const entry = ensure(parts.host);
+      const canonicalTarget = canonicalTargetForHost(parts.host, services);
+      const entry = ensure(canonicalTarget);
       entry.origins.add(`${parts.host}:${String(parts.port)}`);
       entry.paths += 1;
     }
@@ -497,7 +566,7 @@ function TargetGroup({
               engagementId={engagementId}
               extraRowActions={extraRowActions}
               onSelect={onSelectKey}
-              selected={selectedKey === serviceSelectionKey(service.address, service.port)}
+              selected={isServiceRowSelected(service, selectedKey, services)}
               service={service}
             />
             {isWebServiceCandidate(service) ? (
@@ -515,8 +584,7 @@ function TargetGroup({
                   return (
                     parts !== undefined &&
                     parts.port === service.port &&
-                    (parts.host === service.address.toLowerCase() ||
-                      (service.hostname !== null && parts.host === service.hostname.toLowerCase()))
+                    hostMatchesService(parts.host, service)
                   );
                 })}
                 port={service.port}
@@ -558,11 +626,17 @@ function TargetGroup({
   );
 }
 
+function hostMatchesService(host: string, service: NmapProjectedService): boolean {
+  const normalized = host.replace(/^\[|\]$/g, "").toLowerCase();
+  const serviceAddr = service.address.replace(/^\[|\]$/g, "").toLowerCase();
+  if (normalized === serviceAddr) return true;
+  return service.hostname !== null && normalized === service.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+}
+
 function probeMatchesService(probe: HttpProbeProjected, service: NmapProjectedService): boolean {
   const parts = splitOriginUrl(probe.url);
   if (parts === undefined || parts.port !== service.port) return false;
-  if (parts.host === service.address.toLowerCase()) return true;
-  return service.hostname !== null && parts.host === service.hostname.toLowerCase();
+  return hostMatchesService(parts.host, service);
 }
 
 function defaultSchemeForService(
@@ -608,13 +682,16 @@ function UnmatchedOrigins({
   setSchemes: (next: Readonly<Record<string, OriginScheme>>) => void;
   target: string;
 }) {
-  const knownPorts = new Set(services.map((service) => service.port));
   const groups = new Map<string, { host: string; port: number; probes: HttpProbeProjected[]; paths: FfufProjected[] }>();
   for (const probe of probes ?? []) {
     const parts = splitOriginUrl(probe.url);
     if (parts === undefined) continue;
-    if (parts.host !== target.toLowerCase()) continue;
-    if (services.some((service) => probeMatchesService(probe, service))) continue;
+    const probeTarget = canonicalTargetForHost(parts.host, services);
+    if (probeTarget !== target && probeTarget.toLowerCase() !== target.toLowerCase()) continue;
+    if (
+      services.some((service) => isWebServiceCandidate(service) && probeMatchesService(probe, service))
+    )
+      continue;
     const key = `${parts.host}:${String(parts.port)}`;
     const existing = groups.get(key);
     if (existing === undefined) {
@@ -626,8 +703,17 @@ function UnmatchedOrigins({
   for (const result of ffufResults ?? []) {
     const parts = splitOriginUrl(result.url);
     if (parts === undefined) continue;
-    if (parts.host !== target.toLowerCase()) continue;
-    if (knownPorts.has(parts.port)) continue;
+    const pathTarget = canonicalTargetForHost(parts.host, services);
+    if (pathTarget !== target && pathTarget.toLowerCase() !== target.toLowerCase()) continue;
+    if (
+      services.some(
+        (service) =>
+          isWebServiceCandidate(service) &&
+          parts.port === service.port &&
+          hostMatchesService(parts.host, service),
+      )
+    )
+      continue;
     const key = `${parts.host}:${String(parts.port)}`;
     const existing = groups.get(key);
     if (existing === undefined) {
@@ -797,7 +883,8 @@ function OriginBlock({
   setScheme: (scheme: OriginScheme) => void;
   target: string;
 }) {
-  const origin = withOriginScheme(`${host}:${String(port)}`, scheme);
+  const formattedHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  const origin = withOriginScheme(`${formattedHost}:${String(port)}`, scheme);
   const sortedPaths = [...paths].sort((left, right) => left.url.localeCompare(right.url));
   // Origin-level row identifier so launcher actions carry a defined sourceKey
   // for focus restoration. The container is not a selectable inspector row,
@@ -876,7 +963,7 @@ function OriginBlock({
               extraRowActions={extraRowActions}
               onSelectKey={onSelectKey}
               probe={probe}
-              selected={selectedKey === probeSelectionKey(probe.url)}
+              selected={isProbeRowSelected(probe, selectedKey, probes)}
             />
           ))}
         </ul>
@@ -900,7 +987,7 @@ function OriginBlock({
               }
               onSelectKey={onSelectKey}
               result={result}
-              selected={selectedKey === pathSelectionKey(result.url)}
+              selected={isPathRowSelected(result, selectedKey, sortedPaths)}
             />
           ))}
         </ul>
@@ -954,7 +1041,7 @@ function ProbeEnrichmentRow({
   probe: HttpProbeProjected;
   selected: boolean;
 }) {
-  const key = probeSelectionKey(probe.url);
+  const key = probeSelectionKey(probe.url, probe.artifactId);
   const status = probe.status === null ? (probe.error ?? "no status") : String(probe.status);
   const label = `${status} · ${probe.title ?? "no title"}`;
   return (
@@ -1013,7 +1100,7 @@ function PathRow({
   selected: boolean;
 }) {
   const [copied, setCopied] = useState<string | undefined>(undefined);
-  const key = pathSelectionKey(result.url);
+  const key = pathSelectionKey(result.url, result.artifactId);
   const meta = `${String(result.status)} · ${String(result.length)} bytes`;
   const copyValue = (label: string, value: string) => {
     void copyTextToClipboard(value).then((ok) => {
@@ -1111,49 +1198,98 @@ function SurfaceInspectorLoader({
   services,
 }: {
   engagementId: string;
-  ffufQuery: { data: readonly FfufProjected[] | undefined; isFetching: boolean };
+  ffufQuery: { data: readonly FfufProjected[] | undefined; isFetching: boolean; isError?: boolean; refetch?: () => void };
   onAskAbout: ((target: string) => void) | undefined;
   onClose: () => void;
   onDiscoverOrigin: (origin: string, scopeHint: string | undefined) => void;
   onOpenNotes: (() => void) | undefined;
   onProbeOrigin: (origin: string) => void;
   onStartLead: ((target: string) => void) | undefined;
-  probesQuery: { data: readonly HttpProbeProjected[] | undefined; isFetching: boolean };
+  probesQuery: { data: readonly HttpProbeProjected[] | undefined; isFetching: boolean; isError?: boolean; refetch?: () => void };
   selectionKey: string;
   services: readonly NmapProjectedService[];
 }) {
   const selection = decodeSurfaceSelection(selectionKey);
   let record: InspectorRecord | undefined;
   let loading = false;
+  let error: string | undefined;
+  let onRetry: (() => void) | undefined;
   if (selection?.kind === "service") {
-    const service = services.find(
-      (entry) => serviceSelectionKey(entry.address, entry.port) === selection.key,
-    );
+    let service: NmapProjectedService | undefined;
+    if (selection.artifactId !== undefined) {
+      service = services.find(
+        (entry) =>
+          serviceSelectionKey(entry.address, entry.port, entry.protocol, entry.artifactId) ===
+          selection.key,
+      );
+    } else {
+      const decodedAddr = selection.address?.replace(/^\[|\]$/g, "").toLowerCase();
+      const matches = services.filter(
+        (entry) =>
+          entry.address.replace(/^\[|\]$/g, "").toLowerCase() === decodedAddr &&
+          entry.port === selection.port,
+      );
+      if (matches.length === 1) {
+        service = matches[0];
+      }
+    }
     record = service === undefined ? undefined : serviceInspectorRecord(service, engagementId);
   } else if (selection?.kind === "probe") {
     if (probesQuery.data === undefined) {
-      loading = probesQuery.isFetching;
+      if (probesQuery.isError) {
+        error = "Web probes could not be loaded.";
+        onRetry = probesQuery.refetch;
+      } else {
+        loading = probesQuery.isFetching;
+      }
     } else {
-      const probe = probesQuery.data.find((entry) => probeSelectionKey(entry.url) === selection.key);
+      let probe: HttpProbeProjected | undefined;
+      if (selection.artifactId !== undefined) {
+        probe = probesQuery.data.find(
+          (entry) => entry.url === selection.url && entry.artifactId === selection.artifactId,
+        );
+      } else {
+        const matches = probesQuery.data.filter((entry) => entry.url === selection.url);
+        if (matches.length === 1) {
+          probe = matches[0];
+        }
+      }
       record = probe === undefined ? undefined : probeInspectorRecord(probe, engagementId);
     }
   } else if (selection?.kind === "path") {
     if (ffufQuery.data === undefined) {
-      loading = ffufQuery.isFetching;
+      if (ffufQuery.isError) {
+        error = "Path discovery results could not be loaded.";
+        onRetry = ffufQuery.refetch;
+      } else {
+        loading = ffufQuery.isFetching;
+      }
     } else {
-      const result = ffufQuery.data.find((entry) => pathSelectionKey(entry.url) === selection.key);
+      let result: FfufProjected | undefined;
+      if (selection.artifactId !== undefined) {
+        result = ffufQuery.data.find(
+          (entry) => entry.url === selection.url && entry.artifactId === selection.artifactId,
+        );
+      } else {
+        const matches = ffufQuery.data.filter((entry) => entry.url === selection.url);
+        if (matches.length === 1) {
+          result = matches[0];
+        }
+      }
       record = result === undefined ? undefined : pathInspectorRecord(result, engagementId);
     }
   }
   return (
     <SurfaceInspector
       engagementId={engagementId}
+      error={error}
       loading={loading}
       onAskAbout={onAskAbout}
       onClose={onClose}
       onDiscoverOrigin={onDiscoverOrigin}
       onOpenNotes={onOpenNotes}
       onProbeOrigin={onProbeOrigin}
+      onRetry={onRetry}
       onStartLead={onStartLead}
       record={record}
       selectionKey={selectionKey}
@@ -1199,7 +1335,7 @@ function ServiceRow({
   const secondary =
     service.serviceName !== null && service.serviceName !== primary ? service.serviceName : null;
   const evidenceUrl = artifactContentUrl(engagementId, service.artifactId);
-  const key = serviceSelectionKey(service.address, service.port);
+  const key = serviceSelectionKey(service.address, service.port, service.protocol, service.artifactId);
 
   const identity =
     onSelect === undefined ? (

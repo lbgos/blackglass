@@ -2,7 +2,7 @@ import type { HttpProbeProjected } from "@stonehush/contracts";
 import { LoadingRegion, RecoverableError, Skeleton, StaleDataState } from "@stonehush/ui";
 
 import { formatEngagementTimestamp } from "./format.js";
-import { probeSelectionKey, type ExtraRowActions } from "./inspector.js";
+import { isProbeRowSelected, probeSelectionKey, type ExtraRowActions } from "./inspector.js";
 import { useEngagementHttpProbesQuery } from "./query.js";
 
 function sortProbes(probes: readonly HttpProbeProjected[]): HttpProbeProjected[] {
@@ -84,7 +84,7 @@ export function EngagementHttpProbesSection({
               extraRowActions={extraRowActions}
               onSelectKey={onSelectKey}
               probe={probe}
-              selected={selectedKey === probeSelectionKey(probe.url)}
+              selected={isProbeRowSelected(probe, selectedKey, probes)}
             />
           ))}
         </div>
@@ -135,7 +135,7 @@ function ProbeRow({
 }) {
   const observedLabel = formatEngagementTimestamp(probe.observedAt);
   const downloadHref = `/api/v1/engagements/${engagementId}/artifacts/${probe.artifactId}/content`;
-  const key = probeSelectionKey(probe.url);
+  const key = probeSelectionKey(probe.url, probe.artifactId);
 
   return (
     <div className="border-b border-border last:border-b-0" data-surface-row={key}>
@@ -150,7 +150,9 @@ function ProbeRow({
               type="button"
               aria-current={selected ? "true" : undefined}
               onClick={() => onSelectKey(key)}
-              className="block w-full truncate text-left font-mono text-[13px] font-semibold tracking-[-0.02em] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+              className={`block w-full truncate text-left font-mono text-[13px] font-semibold tracking-[-0.02em] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring ${
+                selected ? "text-primary underline" : ""
+              }`}
               title={probe.url}
             >
               {probe.url}
@@ -184,6 +186,7 @@ function ProbeRow({
             {onSelectKey === undefined ? null : (
               <button
                 type="button"
+                aria-label={`Inspect ${probe.url}`}
                 onClick={() => onSelectKey(key)}
                 className="inline-flex min-h-11 items-center text-[12px] font-semibold text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring md:min-h-8"
               >

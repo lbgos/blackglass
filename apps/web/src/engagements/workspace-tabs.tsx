@@ -59,8 +59,24 @@ export function ExecutionTray({ engagementId, onOpenRun }: ExecutionTrayProps) {
     });
   }
 
+  const MAX_TRAY_PAGES = 8;
   const runs = history.data?.pages.flatMap((page) => page.runs) ?? [];
   const active = runs.filter((run) => !isTerminalRunState(run.state));
+  const pageCount = history.data?.pages.length ?? 0;
+  // Keep fetching while no active run is visible yet; stop as soon as one
+  // appears so the tray never walks the full history on busy engagements.
+  const canFetchMore =
+    active.length === 0 &&
+    history.hasNextPage === true &&
+    !history.isFetchingNextPage &&
+    !history.isError &&
+    pageCount < MAX_TRAY_PAGES;
+
+  useEffect(() => {
+    if (canFetchMore) {
+      void history.fetchNextPage();
+    }
+  }, [canFetchMore, history]);
   const baselineTerminal = baseline === undefined ? undefined : new Set(baseline.terminalIds);
   const finished =
     baselineTerminal === undefined

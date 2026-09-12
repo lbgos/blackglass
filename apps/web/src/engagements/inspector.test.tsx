@@ -9,6 +9,8 @@ import {
   decodeSurfaceSelection,
   defaultSchemeForPort,
   focusSurfaceRow,
+  isServiceRowSelected,
+  serviceSelectionKey,
   isWebServiceCandidate,
   parseOriginScheme,
   pathInspectorRecord,
@@ -149,15 +151,68 @@ describe("surface selection keys", () => {
     expect(decodeSurfaceSelection("service:192.0.2.10:80")).toEqual({
       kind: "service",
       key: "service:192.0.2.10:80",
+      address: "192.0.2.10",
+      port: 80,
     });
     expect(decodeSurfaceSelection("probe:http://192.0.2.10/")).toEqual({
       kind: "probe",
       key: "probe:http://192.0.2.10/",
+      url: "http://192.0.2.10/",
     });
     expect(decodeSurfaceSelection("path:http://192.0.2.10/admin")).toEqual({
       kind: "path",
       key: "path:http://192.0.2.10/admin",
+      url: "http://192.0.2.10/admin",
     });
+  });
+
+  it("decodes provenance-aware keys with artifact and protocol", () => {
+    expect(decodeSurfaceSelection("service:192.0.2.10:80:tcp:artifact-1")).toEqual({
+      kind: "service",
+      key: "service:192.0.2.10:80:tcp:artifact-1",
+      address: "192.0.2.10",
+      port: 80,
+      protocol: "tcp",
+      artifactId: "artifact-1",
+    });
+    expect(decodeSurfaceSelection("service:[2001:db8::1]:80:tcp:artifact-1")).toEqual({
+      kind: "service",
+      key: "service:[2001:db8::1]:80:tcp:artifact-1",
+      address: "2001:db8::1",
+      port: 80,
+      protocol: "tcp",
+      artifactId: "artifact-1",
+    });
+    expect(decodeSurfaceSelection("probe:artifact-2:http://192.0.2.10/")).toEqual({
+      kind: "probe",
+      key: "probe:artifact-2:http://192.0.2.10/",
+      artifactId: "artifact-2",
+      url: "http://192.0.2.10/",
+    });
+    expect(decodeSurfaceSelection("path:artifact-3:http://192.0.2.10/admin")).toEqual({
+      kind: "path",
+      key: "path:artifact-3:http://192.0.2.10/admin",
+      artifactId: "artifact-3",
+      url: "http://192.0.2.10/admin",
+    });
+  });
+
+  it("distinguishes repeated observations of identical address and port", () => {
+    const firstScan = { ...webService, artifactId: "art-1" };
+    const secondScan = { ...webService, artifactId: "art-2" };
+    const all = [firstScan, secondScan];
+    const firstKey = serviceSelectionKey(firstScan.address, firstScan.port, firstScan.protocol, firstScan.artifactId);
+    const secondKey = serviceSelectionKey(secondScan.address, secondScan.port, secondScan.protocol, secondScan.artifactId);
+    expect(isServiceRowSelected(firstScan, firstKey, all)).toBe(true);
+    expect(isServiceRowSelected(secondScan, firstKey, all)).toBe(false);
+    expect(isServiceRowSelected(firstScan, secondKey, all)).toBe(false);
+    expect(isServiceRowSelected(secondScan, secondKey, all)).toBe(true);
+    // Ambiguous old key matches multiple scans: neither is selected
+    const oldKey = "service:192.0.2.10:80";
+    expect(isServiceRowSelected(firstScan, oldKey, all)).toBe(false);
+    expect(isServiceRowSelected(secondScan, oldKey, all)).toBe(false);
+    // Unambiguous old key matches single scan: selected
+    expect(isServiceRowSelected(firstScan, oldKey, [firstScan])).toBe(true);
   });
 
   it("rejects unknown kinds, bad ports, and non-http targets", () => {
@@ -205,6 +260,13 @@ describe("origin helpers", () => {
       "https://example.test:8080",
     );
     expect(withOriginScheme("https://example.test", "http")).toBe("http://example.test");
+    expect(withOriginScheme("http://[2001:db8::1]", "https")).toBe("https://[2001:db8::1]");
+    expect(withOriginScheme("http://[2001:db8::1]:8080/query?a=1", "https")).toBe(
+      "https://[2001:db8::1]:8080/query?a=1",
+    );
+    expect(withOriginScheme("2001:db8::1", "http")).toBe("http://[2001:db8::1]");
+    expect(withOriginScheme("[2001:db8::1]:80", "http")).toBe("http://[2001:db8::1]");
+    expect(withOriginScheme("[2001:db8::1]:80", "https")).toBe("https://[2001:db8::1]:80");
   });
 
   it("detects web candidates and port defaults", () => {
