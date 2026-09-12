@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAppQueryClient } from "../query-client.js";
 import { createAppRouter } from "../router.js";
+import { ExecutionTray } from "./workspace-tabs.js";
 import { resolveEngagementTab } from "./workspace.js";
 
 const activeEngagement = {
@@ -561,5 +562,90 @@ describe("engagement tabs", () => {
     fireEvent.click(within(releave).getByRole("button", { name: "Leave" }));
     const targets = await screen.findByLabelText("Targets");
     expect(document.activeElement).toBe(targets);
+  });
+});
+
+describe("ExecutionTray coverage", () => {
+  function renderTray() {
+    const queryClient = createAppQueryClient();
+    testQueryClients.add(queryClient);
+    const onOpenRun = vi.fn();
+    const view = render(
+      <ThemeProvider>
+        <QueryClientProvider client={queryClient}>
+          <ExecutionTray engagementId={activeEngagement.id} onOpenRun={onOpenRun} />
+        </QueryClientProvider>
+      </ThemeProvider>,
+    );
+    return { ...view, onOpenRun };
+  }
+
+  it("keeps paging past the first active run so older concurrent actives stay visible", async () => {
+    const fetchMock = stubFetch((url, init) => {
+      if (init?.method !== undefined && init.method !== "GET") {
+        return response({ code: "invalid_request" }, 400);
+      }
+      if (url.includes("/runs?")) {
+        if (url.includes("before=")) {
+          return response({
+            runs: [runSummary("run-active-old", "2026-08-10T11:00:00.000Z", "running")],
+            nextCursor: null,
+          });
+        }
+        return response({
+          runs: [
+            runSummary("run-active-new", "2026-08-10T12:00:00.000Z", "running"),
+            runSummary("run-old-terminal", "2026-08-09T12:00:00.000Z"),
+          ],
+          nextCursor: "cursor-1",
+        });
+      }
+      return response({ code: "invalid_request" }, 400);
+    });
+
+    renderTray();
+
+    expect(await screen.findByTitle("run-active-new")).toBeTruthy();
+    expect(await screen.findByTitle("run-active-old")).toBeTruthy();
+    const tray = screen.getByLabelText("Execution tray");
+    expect(tray.textContent).toMatch(/2 active/);
+    expect(fetchUrls(fetchMock).some((entry) => entry.includes("before=cursor-1"))).toBe(true);
+  });
+
+  it("declares partial coverage with a working continue when older history remains unchecked", async () => {
+    const fetchMock = stubFetch((url, init) => {
+      if (init?.method !== undefined && init.method !== "GET") {
+        return response({ code: "invalid_request" }, 400);
+      }
+      if (url.includes("/runs?")) {
+        const match = url.match(/before=(cursor-\d+)/);
+        if (match === null) {
+          return response({
+            runs: [runSummary("run-terminal-1", "2026-08-10T12:00:00.000Z")],
+            nextCursor: "cursor-1",
+          });
+        }
+        const page = Number(match[1]?.split("-")[1] ?? "0");
+        if (page >= 8) return response({ runs: [], nextCursor: null });
+        return response({
+          runs: [runSummary(`run-terminal-${page + 1}`, "2026-08-10T11:00:00.000Z")],
+          nextCursor: `cursor-${page + 1}`,
+        });
+      }
+      return response({ code: "invalid_request" }, 400);
+    });
+
+    renderTray();
+
+    const continueButton = await screen.findByRole("button", { name: "Check older runs" });
+    expect(screen.getByText(/older history unchecked/)).toBeTruthy();
+    // Auto-paged older terminals are history, not newly finished work.
+    expect(screen.queryByText(/finished/)).toBeNull();
+
+    fireEvent.click(continueButton);
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Check older runs" })).toBeNull();
+    });
+    expect(fetchUrls(fetchMock).some((entry) => entry.includes("before=cursor-8"))).toBe(true);
   });
 });
