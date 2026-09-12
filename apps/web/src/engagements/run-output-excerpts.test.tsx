@@ -3,7 +3,7 @@
 import { ThemeProvider } from "@stonehush/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAppQueryClient } from "../query-client.js";
@@ -227,11 +227,12 @@ describe("run output fast capture", () => {
       expect(screen.getByText("Raw output unavailable")).toBeTruthy();
     });
     // Reference plus metadata survive the failed download.
-    expect(screen.getByText(/artifact-stdout/)).toBeTruthy();
+    expect(await screen.findByText(/artifact-stdout/)).toBeTruthy();
     expect(screen.getByText(/128 bytes/)).toBeTruthy();
 
     const outputCalls = calls.filter((url) => url.endsWith("/runs/run-old/output")).length;
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    const consolePanel = screen.getByRole("tabpanel", { name: "Raw output" });
+    fireEvent.click(within(consolePanel).getByRole("button", { name: "Retry" }));
     await waitFor(() => {
       expect(
         calls.filter((url) => url.endsWith("/runs/run-old/output")).length,

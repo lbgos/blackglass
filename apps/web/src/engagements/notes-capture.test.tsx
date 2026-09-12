@@ -195,7 +195,7 @@ describe("notes image capture", () => {
       const editor = screen.getByLabelText("Markdown") as HTMLTextAreaElement;
       expect(editor.value).toContain(`(attachment:${ATTACHMENT_ID})`);
     });
-    expect(await screen.findByText("admin-login-as-sa")).toBeTruthy();
+    expect(await screen.findByText(/admin-login-as-sa/)).toBeTruthy();
   });
 
   it("keeps the pasted image with retry when the upload fails", async () => {
@@ -231,7 +231,7 @@ describe("notes image capture", () => {
     });
     await screen.findByLabelText("Proves (names the file)");
     fireEvent.click(screen.getByRole("button", { name: "Save image" }));
-    await screen.findByText("admin-login-as-sa");
+    await screen.findByLabelText("Caption for admin-login-as-sa");
 
     fireEvent.change(screen.getByLabelText("Caption for admin-login-as-sa"), {
       target: { value: "edited caption" },

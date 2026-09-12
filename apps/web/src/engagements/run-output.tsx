@@ -2,7 +2,7 @@ import type { Excerpt, RunOutputResponse } from "@stonehush/contracts";
 import { formatExcerptSourceLabel, selectionBytesFromText } from "@stonehush/domain";
 import { Button, LoadingRegion, RecoverableError, Skeleton } from "@stonehush/ui";
 import { useRouterState } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   NoTerminalRunError,
@@ -209,6 +209,7 @@ function RawOutputContent({
   onAddToLead: ((excerpt: Excerpt) => void) | undefined;
 }) {
   const { openAdvisor } = useEngagementWorkspace();
+  const [searchActive, setSearchActive] = useState(false);
   // Only real published artifact IDs from this run's preserved streams
   // seed the advisor draft. A run ID is never an excerpt.
   const askIds = [output.stdout, output.stderr].flatMap((stream) =>
@@ -244,21 +245,26 @@ function RawOutputContent({
         engagementId={engagementId}
         runId={output.run.id}
         onAddToLead={onAddToLead}
+        onActiveChange={setSearchActive}
       />
-      <RawStream
-        engagementId={engagementId}
-        label="stdout"
-        stream={output.stdout}
-        runId={output.run.id}
-        onAddToLead={onAddToLead}
-      />
-      <RawStream
-        engagementId={engagementId}
-        label="stderr"
-        stream={output.stderr}
-        runId={output.run.id}
-        onAddToLead={onAddToLead}
-      />
+      {searchActive ? null : (
+        <>
+          <RawStream
+            engagementId={engagementId}
+            label="stdout"
+            stream={output.stdout}
+            runId={output.run.id}
+            onAddToLead={onAddToLead}
+          />
+          <RawStream
+            engagementId={engagementId}
+            label="stderr"
+            stream={output.stderr}
+            runId={output.run.id}
+            onAddToLead={onAddToLead}
+          />
+        </>
+      )}
       <KeptExcerptsSection
         engagementId={engagementId}
         runId={output.run.id}
@@ -276,10 +282,12 @@ function RunOutputSearch({
   engagementId,
   runId,
   onAddToLead,
+  onActiveChange,
 }: {
   engagementId: string;
   runId: string;
   onAddToLead: ((excerpt: Excerpt) => void) | undefined;
+  onActiveChange: (active: boolean) => void;
 }) {
   const [input, setInput] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
@@ -296,6 +304,10 @@ function RunOutputSearch({
   >({ status: "idle" });
   const create = useCreateExcerptMutation(engagementId);
   const { announce } = useEngagementWorkspace();
+
+  useEffect(() => {
+    onActiveChange(activeQuery.length > 0);
+  }, [activeQuery, onActiveChange]);
 
   const submit = () => {
     const query = input.trim();
