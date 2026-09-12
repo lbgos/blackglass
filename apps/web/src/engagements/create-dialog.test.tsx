@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { PersistedActionSchema, type PersistedAction } from "@blackglass/contracts";
-import { ThemeProvider } from "@blackglass/ui";
+import { PersistedActionSchema, type PersistedAction } from "@stonehush/contracts";
+import { ThemeProvider } from "@stonehush/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -202,6 +202,18 @@ function engagementHandler(name: string) {
 
 beforeEach(() => {
   window.localStorage.clear();
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280, writable: true });
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: 900, writable: true });
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: vi.fn(() => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
+  });
   Object.defineProperty(window, "requestAnimationFrame", {
     configurable: true,
     value: vi.fn((callback: FrameRequestCallback) => {
@@ -209,6 +221,11 @@ beforeEach(() => {
       return 1;
     }),
   });
+  Object.defineProperty(window, "scrollTo", {
+    configurable: true,
+    value: vi.fn(),
+  });
+  Element.prototype.scrollIntoView = vi.fn();
 });
 
 afterEach(() => {
@@ -245,7 +262,7 @@ describe("CreateEngagementDialog start", () => {
       targets: ["192.0.2.10"],
       declaredPorts: null,
     });
-    expect(window.localStorage.getItem("blackglass.lastEngagementId")).toBe(ENGAGEMENT_ID);
+    expect(window.localStorage.getItem("stonehush.lastEngagementId")).toBe(ENGAGEMENT_ID);
   });
 
   it("accepts hostnames, URLs, and pasted lists", async () => {

@@ -1,5 +1,5 @@
-import type { RunHistorySummary } from "@blackglass/contracts";
-import { Button } from "@blackglass/ui";
+import type { RunHistorySummary } from "@stonehush/contracts";
+import { Button } from "@stonehush/ui";
 
 import { useAdvisorStatusQuery } from "../advisor-status-query.js";
 import { useSystemStatusQuery } from "../system-status-query.js";

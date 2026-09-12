@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { PersistedActionSchema, type PersistedAction } from "@blackglass/contracts";
-import { ThemeProvider } from "@blackglass/ui";
+import { PersistedActionSchema, type PersistedAction } from "@stonehush/contracts";
+import { ThemeProvider } from "@stonehush/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -199,7 +199,7 @@ afterEach(() => {
 describe("opening screen", () => {
   it("favors Resume and Start with no stats dashboard", async () => {
     stubFetch(openingHandler());
-    window.localStorage.setItem("blackglass.lastEngagementId", OTHER_ID);
+    window.localStorage.setItem("stonehush.lastEngagementId", OTHER_ID);
     await renderOpening();
 
     expect(await screen.findByRole("heading", { name: "Resume" })).toBeTruthy();
@@ -241,7 +241,9 @@ describe("opening screen", () => {
     await waitFor(() =>
       expect(router.state.location.pathname).toBe(`/engagements/${ENGAGEMENT_ID}`),
     );
-    const createCall = fetchMock.mock.calls.find(([url]) => url === "/api/v1/engagements");
+    const createCall = fetchMock.mock.calls.find(
+      ([url, init]) => url === "/api/v1/engagements" && init?.method === "POST",
+    );
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
       name: "Lab 192-0-2-10",
       kind: "ctf",
@@ -251,14 +253,14 @@ describe("opening screen", () => {
       targets: ["192.0.2.10"],
       declaredPorts: null,
     });
-    expect(window.localStorage.getItem("blackglass.lastEngagementId")).toBe(ENGAGEMENT_ID);
+    expect(window.localStorage.getItem("stonehush.lastEngagementId")).toBe(ENGAGEMENT_ID);
   });
 
   it("rejects an empty start without posting", async () => {
     const fetchMock = stubFetch(openingHandler());
     await renderOpening();
 
-    const form = screen.getByRole("button", { name: "Start scan" }).closest("form");
+    const form = (await screen.findByRole("button", { name: "Start scan" })).closest("form");
     if (!form) throw new Error("Start scan form is missing.");
     fireEvent.submit(form);
 

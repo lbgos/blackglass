@@ -1,5 +1,5 @@
-import type { PersistedAction, SavedScopeRule } from "@blackglass/contracts";
-import { Button, LoadingRegion, Skeleton, cn } from "@blackglass/ui";
+import type { PersistedAction, SavedScopeRule } from "@stonehush/contracts";
+import { Button, LoadingRegion, Skeleton, cn } from "@stonehush/ui";
 import {
   useEffect,
   useId,

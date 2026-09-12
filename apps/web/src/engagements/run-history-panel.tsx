@@ -1,12 +1,13 @@
-import type { RunOutputResponse } from "@blackglass/contracts";
-import { isTerminalRunState } from "@blackglass/domain";
+import type { RunOutputResponse } from "@stonehush/contracts";
+import { RunStateSchema } from "@stonehush/contracts";
+import { isTerminalRunState } from "@stonehush/domain";
 import {
   Button,
   LoadingRegion,
   RecoverableError,
   Skeleton,
   StaleDataState,
-} from "@blackglass/ui";
+} from "@stonehush/ui";
 import { useEffect, useRef, useState } from "react";
 
 import { formatEngagementTimestamp } from "./format.js";
@@ -59,6 +60,15 @@ export function RunHistoryPanel({
     const fresh = { key: sessionKey, used: 0, locked: false };
     pollRef.current = fresh;
     setPoll(fresh);
+  }
+  // List filters are caller-visible state, not query state: a refetch or a
+  // new page never clears them, while switching engagements restarts them.
+  // They match loaded rows only. Run history carries no per-run tool or
+  // target fields and the list endpoint takes no filter params, so the
+  // controls cover run state plus run/action ID text.
+  const [filters, setFilters] = useState({ engagementId, runState: "all", text: "" });
+  if (filters.engagementId !== engagementId) {
+    setFilters({ engagementId, runState: "all", text: "" });
   }
   const resetPollBudget = () => {
     const fresh = { key: sessionKey, used: 0, locked: false };
@@ -177,8 +187,20 @@ export function RunHistoryPanel({
   }
 
   const runs = history.data.pages.flatMap((page) => page.runs);
+  const filterText = filters.text.trim().toLowerCase();
+  const filtersActive = filters.runState !== "all" || filterText !== "";
+  const visibleRuns = runs.filter(
+    (run) =>
+      (filters.runState === "all" || run.state === filters.runState) &&
+      (filterText === "" ||
+        run.id.toLowerCase().includes(filterText) ||
+        run.actionId.toLowerCase().includes(filterText)),
+  );
+  const clearFilters = () => {
+    setFilters({ engagementId, runState: "all", text: "" });
+  };
   const listBody =
-    runs.length === 0 ? (
+    runs.length === 0 && !filtersActive ? (
       <div>
         <h3 className="m-0 text-[13px] font-semibold">No runs yet</h3>
         <p className="mt-1 mb-0 text-[12px] leading-5 text-muted-foreground">
@@ -187,11 +209,32 @@ export function RunHistoryPanel({
       </div>
     ) : (
       <div>
+        <RunHistoryFilters
+          runState={filters.runState}
+          text={filters.text}
+          onRunStateChange={(runState) => setFilters({ engagementId, runState, text: filters.text })}
+          onTextChange={(text) => setFilters({ engagementId, runState: filters.runState, text })}
+        />
         <p className="m-0 mb-2 text-[12px] text-muted-foreground" aria-live="polite">
-          {runs.length} {runs.length === 1 ? "run" : "runs"} shown, newest first
+          {filtersActive
+            ? `${visibleRuns.length} of ${runs.length} ${runs.length === 1 ? "run" : "runs"} shown, newest first. Filters match loaded runs only.`
+            : `${runs.length} ${runs.length === 1 ? "run" : "runs"} shown, newest first`}
         </p>
-        <ul className="m-0 list-none divide-y divide-border border-y border-border p-0">
-          {runs.map((run) => {
+        {visibleRuns.length === 0 ? (
+          <div>
+            <h3 className="m-0 text-[13px] font-semibold">No matching runs</h3>
+            <p className="mt-1 mb-0 text-[12px] leading-5 text-muted-foreground">
+              No loaded runs match these filters.
+            </p>
+            <div className="mt-3">
+              <Button type="button" variant="secondary" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <ul className="m-0 list-none divide-y divide-border border-y border-border p-0">
+            {visibleRuns.map((run) => {
             const selected = run.id === selectedRunId;
             return (
               <li key={run.id}>
@@ -221,7 +264,8 @@ export function RunHistoryPanel({
               </li>
             );
           })}
-        </ul>
+          </ul>
+        )}
         {history.hasNextPage ? (
           <div className="mt-3">
             <Button
@@ -300,6 +344,54 @@ export function RunHistoryPanel({
         )}
       </div>
     </section>
+  );
+}
+
+function RunHistoryFilters({
+  onRunStateChange,
+  onTextChange,
+  runState,
+  text,
+}: {
+  onRunStateChange: (runState: string) => void;
+  onTextChange: (text: string) => void;
+  runState: string;
+  text: string;
+}) {
+  return (
+    <div className="mb-2 flex flex-wrap gap-2">
+      <label className="grid gap-1 text-[11px] text-muted-foreground" htmlFor="run-history-state">
+        <span>State</span>
+        <select
+          id="run-history-state"
+          value={runState}
+          className="min-h-8 rounded-md border border-input bg-transparent px-2 text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onChange={(event) => onRunStateChange(event.target.value)}
+        >
+          <option value="all">All states</option>
+          {RunStateSchema.options.map((state) => (
+            <option key={state} value={state}>
+              {state}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label
+        className="grid min-w-40 flex-1 gap-1 text-[11px] text-muted-foreground"
+        htmlFor="run-history-search"
+      >
+        <span>Search loaded runs</span>
+        <input
+          id="run-history-search"
+          type="search"
+          value={text}
+          placeholder="Run or action ID"
+          aria-label="Search loaded runs by run or action ID"
+          className="min-h-8 w-full rounded-md border border-input bg-transparent px-2 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          onChange={(event) => onTextChange(event.target.value)}
+        />
+      </label>
+    </div>
   );
 }
 

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { PersistedActionSchema, type PersistedAction } from "@blackglass/contracts";
-import { ThemeProvider } from "@blackglass/ui";
+import { PersistedActionSchema, type PersistedAction } from "@stonehush/contracts";
+import { ThemeProvider } from "@stonehush/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -582,7 +582,7 @@ describe("action planner", () => {
     await renderPlanner({ ...activeEngagement, revision: 1, activeScopeRevisionId: null });
     fireEvent.click(await screen.findByRole("radio", { name: /Fuller port pass/ }));
     const targetsField = await screen.findByLabelText("Targets");
-    const portsField = await screen.findByLabelText(/TCP ports/i);
+    const portsField = await screen.findByLabelText(/^TCP ports/i);
     expect(portsField.getAttribute("placeholder")).toBe("22,80,443");
     fireEvent.change(targetsField, { target: { value: "192.0.2.10" } });
     fireEvent.change(portsField, { target: { value: "443,80,80,22" } });
@@ -598,7 +598,7 @@ describe("action planner", () => {
 
     await renderPlanner();
     fireEvent.click(await screen.findByRole("radio", { name: /Fuller port pass/ }));
-    const portsField = await screen.findByLabelText(/TCP ports/i);
+    const portsField = await screen.findByLabelText(/^TCP ports/i);
     const form = portsField.closest("form")!;
     fireEvent.change(await screen.findByLabelText("Targets"), { target: { value: "192.0.2.10" } });
 
@@ -702,7 +702,7 @@ describe("action planner", () => {
     }
 
     function stubWithHistory(runs: unknown[]) {
-      return stubFetch((url, init) => {
+      return stubFetch((url, _init) => {
         if (url.includes("/api/v1/advisor/status")) return response(unconfiguredAdvisor);
         if (url.includes("/runs")) return response({ runs, nextCursor: null });
         return readResponse(url, activeEngagement, emptyRevision) ?? response({ code: "invalid_request" }, 400);
@@ -735,16 +735,16 @@ describe("action planner", () => {
 
       await renderPlanner({ ...activeEngagement, revision: 1, activeScopeRevisionId: null });
       fireEvent.click(await screen.findByRole("radio", { name: /Fuller port pass/ }));
-      const portsField = await screen.findByLabelText(/TCP ports/i);
+      const portsField = await screen.findByLabelText(/^TCP ports/i);
       expect((portsField as HTMLInputElement).value).toBe("22,80,443");
       fireEvent.change(await screen.findByLabelText("Targets"), { target: { value: "192.0.2.10" } });
       fireEvent.submit(screen.getByRole("button", { name: "Plan action" }).closest("form")!);
       expect(await screen.findByText(/Action queued/)).toBeTruthy();
-      expect(window.localStorage.getItem("blackglass.firstActionDefaults")).toContain("fuller");
+      expect(window.localStorage.getItem("stonehush.firstActionDefaults")).toContain("fuller");
 
       cleanup();
       await renderPlanner({ ...activeEngagement, revision: 1, activeScopeRevisionId: null });
-      expect((await screen.findByLabelText(/TCP ports/i) as HTMLInputElement).value).toBe(
+      expect((await screen.findByLabelText(/^TCP ports/i) as HTMLInputElement).value).toBe(
         "22,80,443",
       );
       expect(
@@ -758,13 +758,13 @@ describe("action planner", () => {
       await renderPlanner();
 
       fireEvent.click(await screen.findByRole("radio", { name: /Fuller port pass/ }));
-      const portsField = (await screen.findByLabelText(/TCP ports/i)) as HTMLInputElement;
+      const portsField = (await screen.findByLabelText(/^TCP ports/i)) as HTMLInputElement;
       fireEvent.change(portsField, { target: { value: "8080" } });
       expect(portsField.value).toBe("8080");
       fireEvent.click(await screen.findByRole("radio", { name: /Quick port pass/ }));
-      expect((await screen.findByLabelText(/TCP ports/i) as HTMLInputElement).value).toBe("");
+      expect((await screen.findByLabelText(/^TCP ports/i) as HTMLInputElement).value).toBe("");
       fireEvent.click(await screen.findByRole("radio", { name: /Fuller port pass/ }));
-      expect((await screen.findByLabelText(/TCP ports/i) as HTMLInputElement).value).toBe("8080");
+      expect((await screen.findByLabelText(/^TCP ports/i) as HTMLInputElement).value).toBe("8080");
       expect((await screen.findByLabelText("Targets") as HTMLTextAreaElement).value).toBe("");
     });
 

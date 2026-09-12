@@ -1,4 +1,4 @@
-import type { Engagement } from "@blackglass/contracts";
+import type { Engagement } from "@stonehush/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -125,12 +125,12 @@ describe("first action defaults storage", () => {
       declaredPorts: FULLER_PORTS_PRESET,
     });
     expect(
-      readFirstActionDefaults(memoryStorage({ "blackglass.firstActionDefaults": "oops" })),
+      readFirstActionDefaults(memoryStorage({ "stonehush.firstActionDefaults": "oops" })),
     ).toEqual({ profile: "quick", declaredPorts: "" });
     expect(
       readFirstActionDefaults(
         memoryStorage({
-          "blackglass.firstActionDefaults": JSON.stringify({
+          "stonehush.firstActionDefaults": JSON.stringify({
             profile: "root-shell",
             declaredPorts: "22; rm -rf /",
             targets: ["192.0.2.10"],
@@ -160,7 +160,7 @@ describe("last engagement storage", () => {
     expect(readLastEngagementId(storage)).toBeNull();
     storeLastEngagementId(storage, "10000000-0000-4000-8000-000000000001");
     expect(readLastEngagementId(storage)).toBe("10000000-0000-4000-8000-000000000001");
-    expect(readLastEngagementId(memoryStorage({ "blackglass.lastEngagementId": "not an id!!" }))).toBeNull();
+    expect(readLastEngagementId(memoryStorage({ "stonehush.lastEngagementId": "not an id!!" }))).toBeNull();
   });
 });
 

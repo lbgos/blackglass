@@ -5,9 +5,9 @@ import {
   type Engagement,
   type EngagementKind,
   type SavedScopeRule,
-} from "@blackglass/contracts";
-import { normalizeTarget } from "@blackglass/domain";
-import { Button, cn } from "@blackglass/ui";
+} from "@stonehush/contracts";
+import { normalizeTarget } from "@stonehush/domain";
+import { Button, cn } from "@stonehush/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -635,7 +635,7 @@ export function CreateEngagementDialog({ onOpenChange, open }: CreateEngagementD
             </div>
           </details>
           {mutationError && (
-            <p className="m-0 text-sm text-destructive" role="alert">
+            <p className="m-0 text-[13px] text-destructive" role="alert">
               {mutationError}
             </p>
           )}

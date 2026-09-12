@@ -1,7 +1,7 @@
 import {
   FfufDiscoveryLaunchSchema,
   type PersistedAction,
-} from "@blackglass/contracts";
+} from "@stonehush/contracts";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 

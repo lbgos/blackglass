@@ -1,4 +1,4 @@
-import type { Engagement } from "@blackglass/contracts";
+import type { Engagement } from "@stonehush/contracts";
 
 // Shared helpers for the first useful action: opening-screen Resume,
 // engagement Start with a pasted target, and the planner first-scan profile.
@@ -6,9 +6,9 @@ import type { Engagement } from "@blackglass/contracts";
 // (scan profile plus ports text) and the last engagement id use storage,
 // and every read is strict with safe fallbacks.
 
-export const LAST_ENGAGEMENT_STORAGE_KEY = "blackglass.lastEngagementId";
+export const LAST_ENGAGEMENT_STORAGE_KEY = "stonehush.lastEngagementId";
 
-export const FIRST_ACTION_DEFAULTS_STORAGE_KEY = "blackglass.firstActionDefaults";
+export const FIRST_ACTION_DEFAULTS_STORAGE_KEY = "stonehush.firstActionDefaults";
 
 export type FirstActionProfile = "quick" | "fuller" | "web";
 
