@@ -561,7 +561,7 @@ function TargetGroup({
       </div>
       <div className="divide-y divide-border">
         {services.map((service) => (
-          <div key={`${service.address}:${String(service.port)}:${service.artifactId}`}>
+          <div key={`${service.address}:${String(service.port)}:${service.protocol}:${service.artifactId}`}>
             <ServiceRow
               engagementId={engagementId}
               extraRowActions={extraRowActions}

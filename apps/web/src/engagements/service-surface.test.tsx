@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAppQueryClient } from "../query-client.js";
 import { ENGAGEMENT_SERVICES_QUERY_ERROR_MESSAGE } from "./errors.js";
+import { serviceSelectionKey } from "./inspector.js";
 import { EngagementServicesSection } from "./service-surface.js";
 
 const engagementId = "10000000-0000-4000-8000-000000000001";
@@ -180,5 +181,37 @@ describe("EngagementServicesSection", () => {
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.queryByText("secret")).toBeNull();
     expect(screen.queryByText("private")).toBeNull();
+  });
+
+  it("keys service rows by the canonical selection identity including protocol", async () => {
+    const first = {
+      ...serviceA,
+      port: 53,
+      serviceName: "domain",
+      runId: "run-1",
+      artifactId: "artifact-1",
+      artifactDigest: `sha256:${"a".repeat(64)}`,
+    };
+    const second = {
+      ...serviceA,
+      port: 53,
+      serviceName: "domain",
+      runId: "run-2",
+      artifactId: "artifact-2",
+      artifactDigest: `sha256:${"b".repeat(64)}`,
+    };
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(response([first, second]))));
+    const { container } = renderSurface();
+    expect((await screen.findAllByText("53/tcp")).length).toBe(2);
+    const rowKeys = [...container.querySelectorAll("[data-surface-row]")]
+      .map((node) => node.getAttribute("data-surface-row"))
+      .filter((key) => key?.startsWith("service:"));
+    expect(rowKeys).toHaveLength(2);
+    expect(rowKeys).toContain(
+      serviceSelectionKey(first.address, first.port, first.protocol, first.artifactId),
+    );
+    expect(rowKeys).toContain(
+      serviceSelectionKey(second.address, second.port, second.protocol, second.artifactId),
+    );
   });
 });
