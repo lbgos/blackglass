@@ -580,8 +580,9 @@ describe("action planner", () => {
     });
 
     await renderPlanner({ ...activeEngagement, revision: 1, activeScopeRevisionId: null });
+    fireEvent.click(await screen.findByRole("radio", { name: /Fuller port pass/ }));
     const targetsField = await screen.findByLabelText("Targets");
-    const portsField = await screen.findByLabelText(/TCP ports/i);
+    const portsField = await screen.findByLabelText(/^TCP ports/i);
     expect(portsField.getAttribute("placeholder")).toBe("22,80,443");
     fireEvent.change(targetsField, { target: { value: "192.0.2.10" } });
     fireEvent.change(portsField, { target: { value: "443,80,80,22" } });
@@ -596,7 +597,8 @@ describe("action planner", () => {
     });
 
     await renderPlanner();
-    const portsField = await screen.findByLabelText(/TCP ports/i);
+    fireEvent.click(await screen.findByRole("radio", { name: /Fuller port pass/ }));
+    const portsField = await screen.findByLabelText(/^TCP ports/i);
     const form = portsField.closest("form")!;
     fireEvent.change(await screen.findByLabelText("Targets"), { target: { value: "192.0.2.10" } });
 
@@ -669,5 +671,178 @@ describe("action planner", () => {
       spy.mock.calls.filter(([a]) => JSON.stringify((a as { queryKey?: unknown })?.queryKey).includes("services")),
     ).toHaveLength(1);
     expect(fetchMock.mock.calls.filter(([u]) => String(u).includes(`/actions/${ACTION_ID}`))).toHaveLength(2);
+  });
+
+  describe("first action profile", () => {
+    const unconfiguredAdvisor = {
+      configured: false,
+      endpointReachable: null,
+      modelId: "",
+      endpointHost: "",
+      publicEndpoint: false,
+      optIn: false,
+      keyEnvVar: "",
+      keyPresent: false,
+      latencyMs: null,
+      reason: "unconfigured",
+    };
+
+    function historyRow(overrides: Record<string, unknown>) {
+      return {
+        id: "run-00000000-0000-4000-8000-000000000001",
+        actionId: ACTION_ID,
+        state: "succeeded",
+        terminalKind: "succeeded",
+        terminalReason: null,
+        updatedAt: "2026-08-12T12:15:00.000Z",
+        createdAt: "2026-08-12T12:11:00.000Z",
+        attempt: 1,
+        ...overrides,
+      };
+    }
+
+    function stubWithHistory(runs: unknown[]) {
+      return stubFetch((url, _init) => {
+        if (url.includes("/api/v1/advisor/status")) return response(unconfiguredAdvisor);
+        if (url.includes("/runs")) return response({ runs, nextCursor: null });
+        return readResponse(url, activeEngagement, emptyRevision) ?? response({ code: "invalid_request" }, 400);
+      });
+    }
+
+    it("labels the three passes with what they cover", async () => {
+      stubWithHistory([]);
+      await renderPlanner();
+
+      expect(await screen.findByRole("radio", { name: /Quick port pass/ })).toBeTruthy();
+      expect(screen.getByRole("radio", { name: /Fuller port pass/ })).toBeTruthy();
+      expect(screen.getByRole("radio", { name: /Web-origin inspection/ })).toBeTruthy();
+      expect(screen.getByText(/Default Nmap ports for IP, CIDR, and hostname targets/)).toBeTruthy();
+      expect(screen.getByText(/Direct HTTP\(S\) probe of URL targets, no Nmap/)).toBeTruthy();
+      fireEvent.click(screen.getByText("What each pass covers"));
+      expect(
+        await screen.findByText(/URL targets run the HTTP probe and record status/),
+      ).toBeTruthy();
+    });
+
+    it("remembers the ports default without restoring targets", async () => {
+      const queued = persistedAction("queued");
+      stubFetch((url, init) => {
+        if (url.includes("/api/v1/advisor/status")) return response(unconfiguredAdvisor);
+        if (url.includes("/runs")) return response({ runs: [], nextCursor: null });
+        if (url.endsWith("/actions") && init?.method === "POST") return response(queued, 201);
+        return readResponse(url, { ...activeEngagement, revision: 1, activeScopeRevisionId: null }, null) ?? response({ code: "invalid_request" }, 400);
+      });
+
+      await renderPlanner({ ...activeEngagement, revision: 1, activeScopeRevisionId: null });
+      fireEvent.click(await screen.findByRole("radio", { name: /Fuller port pass/ }));
+      const portsField = await screen.findByLabelText(/^TCP ports/i);
+      expect((portsField as HTMLInputElement).value).toBe("22,80,443");
+      fireEvent.change(await screen.findByLabelText("Targets"), { target: { value: "192.0.2.10" } });
+      fireEvent.submit(screen.getByRole("button", { name: "Plan action" }).closest("form")!);
+      expect(await screen.findByText(/Action queued/)).toBeTruthy();
+      expect(window.localStorage.getItem("stonehush.firstActionDefaults")).toContain("fuller");
+
+      cleanup();
+      await renderPlanner({ ...activeEngagement, revision: 1, activeScopeRevisionId: null });
+      expect((await screen.findByLabelText(/^TCP ports/i) as HTMLInputElement).value).toBe(
+        "22,80,443",
+      );
+      expect(
+        (await screen.findByRole("radio", { name: /Fuller port pass/ }) as HTMLInputElement).checked,
+      ).toBe(true);
+      expect((await screen.findByLabelText("Targets") as HTMLTextAreaElement).value).toBe("");
+    });
+
+    it("preserves a custom fuller ports value across profile switches", async () => {
+      stubWithHistory([]);
+      await renderPlanner();
+
+      fireEvent.click(await screen.findByRole("radio", { name: /Fuller port pass/ }));
+      const portsField = (await screen.findByLabelText(/^TCP ports/i)) as HTMLInputElement;
+      fireEvent.change(portsField, { target: { value: "8080" } });
+      expect(portsField.value).toBe("8080");
+      fireEvent.click(await screen.findByRole("radio", { name: /Quick port pass/ }));
+      expect((await screen.findByLabelText(/^TCP ports/i) as HTMLInputElement).value).toBe("");
+      fireEvent.click(await screen.findByRole("radio", { name: /Fuller port pass/ }));
+      expect((await screen.findByLabelText(/^TCP ports/i) as HTMLInputElement).value).toBe("8080");
+      expect((await screen.findByLabelText("Targets") as HTMLTextAreaElement).value).toBe("");
+    });
+
+    it("shows a specific readiness summary next to the first action", async () => {
+      stubWithHistory([]);
+      await renderPlanner();
+
+      expect(await screen.findByText("Control plane: ready.")).toBeTruthy();
+      expect(await screen.findByText("Runner: no runs yet. The first scan appears here.")).toBeTruthy();
+      expect(
+        await screen.findByText("Advisor: not set up. Manual work is unaffected."),
+      ).toBeTruthy();
+    });
+
+    it("reads runner disconnected differently from target not answering", async () => {
+      stubWithHistory([
+        historyRow({ state: "failed", terminalKind: "failed", terminalReason: "runner_lost" }),
+      ]);
+      await renderPlanner();
+      expect(
+        await screen.findByText(/Runner disconnected during the last run/),
+      ).toBeTruthy();
+      expect(screen.queryByText(/did not answer/)).toBeNull();
+      cleanup();
+
+      stubWithHistory([historyRow({})]);
+      await renderPlanner();
+      expect(
+        await screen.findByText(/No new services means the target did not answer/),
+      ).toBeTruthy();
+      expect(screen.queryByText(/Runner disconnected/)).toBeNull();
+    });
+
+    it("names a missing Nmap binary from the last run", async () => {
+      stubWithHistory([
+        historyRow({ state: "failed", terminalKind: "failed", terminalReason: "nmap_unavailable" }),
+      ]);
+      await renderPlanner();
+      expect(await screen.findByText(/Nmap is not available to the runner/)).toBeTruthy();
+    });
+
+    it("offers a retry while readiness queries fail", async () => {
+      const fetchMock = stubFetch((url) => {
+        if (url.includes("/api/v1/system/status")) return Promise.reject(new Error("offline"));
+        if (url.includes("/api/v1/advisor/status")) return response(unconfiguredAdvisor);
+        if (url.includes("/runs")) return response({ runs: [], nextCursor: null });
+        return (
+          readResponse(url, activeEngagement, emptyRevision) ??
+          response({ code: "invalid_request" }, 400)
+        );
+      });
+      await renderPlanner();
+
+      expect(await screen.findByText(/Control plane: unreachable/)).toBeTruthy();
+      const systemCalls = () =>
+        fetchMock.mock.calls.filter(([url]) => String(url).includes("/system/status")).length;
+      const before = systemCalls();
+      fireEvent.click(await screen.findByRole("button", { name: "Retry status" }));
+      await waitFor(() => expect(systemCalls()).toBeGreaterThan(before));
+    });
+
+    it("explains Nmap unavailability next to the action", async () => {
+      const failed = persistedAction("capability_error");
+      stubFetch((url, init) => {
+        if (url.includes("/api/v1/advisor/status")) return response(unconfiguredAdvisor);
+        if (url.includes("/runs")) return response({ runs: [], nextCursor: null });
+        if (url.endsWith("/actions") && init?.method === "POST") return response(failed, 201);
+        return readResponse(url, { ...activeEngagement, revision: 1, activeScopeRevisionId: null }, null) ??
+          response({ code: "invalid_request" }, 400);
+      });
+
+      await renderPlanner({ ...activeEngagement, revision: 1, activeScopeRevisionId: null });
+      await planTarget();
+
+      expect(await screen.findByRole("heading", { name: "This action cannot run" })).toBeTruthy();
+      expect(
+        await screen.findByText(/cannot run as an Nmap scan here/),
+      ).toBeTruthy();
+    });
   });
 });
