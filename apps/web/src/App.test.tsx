@@ -7,7 +7,7 @@ import {
   THEME_FAMILY_STORAGE_KEY,
   THEME_STORAGE_KEY,
   ThemeProvider,
-} from "@blackglass/ui";
+} from "@stonehush/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import {
@@ -357,7 +357,7 @@ describe("App system readiness", () => {
       endpointHost: "127.0.0.1",
       publicEndpoint: false,
       optIn: false,
-      keyEnvVar: "BLACKGLASS_ADVISOR_API_KEY",
+      keyEnvVar: "STONEHUSH_ADVISOR_API_KEY",
       keyPresent: true,
       latencyMs: 12,
       reason: "ok",
@@ -434,12 +434,14 @@ describe("Application shell", () => {
     const trigger = screen.getByRole("button", { name: "Open navigation" });
     trigger.focus();
     fireEvent.click(trigger);
-    expect(await screen.findByRole("dialog", { name: "Blackglass navigation" })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: "Stonehush navigation" })).toBeTruthy();
     expect(screen.getByTestId("application-shell").dataset.sidebarOpen).toBe("false");
 
-    fireEvent.click(screen.getAllByRole("link", { name: "Engagements" })[0]!);
+    const dialog = await screen.findByRole("dialog", { name: "Stonehush navigation" });
+    fireEvent.click(within(dialog).getByRole("link", { name: "Settings" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Appearance" })).toBeTruthy();
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Blackglass navigation" })).toBeNull(),
+      expect(screen.queryByRole("dialog", { name: "Stonehush navigation" })).toBeNull(),
     );
     expect(document.activeElement).toBe(trigger);
     expect(screen.getByTestId("application-shell").dataset.sidebarOpen).toBe("false");
@@ -469,7 +471,7 @@ describe("Application shell", () => {
     const trigger = screen.getByRole("button", { name: "Open navigation" });
 
     fireEvent.click(trigger);
-    const dialog = await screen.findByRole("dialog", { name: "Blackglass navigation" });
+    const dialog = await screen.findByRole("dialog", { name: "Stonehush navigation" });
     fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.activeElement).toBe(trigger);
@@ -480,14 +482,14 @@ describe("Application shell", () => {
     await renderApp();
 
     fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
-    await screen.findByRole("dialog", { name: "Blackglass navigation" });
+    await screen.findByRole("dialog", { name: "Stonehush navigation" });
     window.innerWidth = 700;
     fireEvent(window, new Event("resize"));
-    expect(screen.getByRole("dialog", { name: "Blackglass navigation" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Stonehush navigation" })).toBeTruthy();
     window.innerWidth = 1000;
     fireEvent(window, new Event("resize"));
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Blackglass navigation" })).toBeNull(),
+      expect(screen.queryByRole("dialog", { name: "Stonehush navigation" })).toBeNull(),
     );
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Hide sidebar" }));
 
@@ -1078,25 +1080,25 @@ describe("Appearance local preferences", () => {
     expect(document.documentElement.classList.contains("reduce-motion")).toBe(false);
 
     fireEvent.change(slider, { target: { value: "40" } });
-    expect(window.localStorage.getItem("blackglass.glassOpacity")).toBe("40");
+    expect(window.localStorage.getItem("stonehush.glassOpacity")).toBe("40");
     expect(document.documentElement.dataset.glassOpacity).toBe("40");
 
     const density = screen.getByRole("combobox", { name: "Density" }) as HTMLSelectElement;
     fireEvent.change(density, { target: { value: "regular" } });
-    expect(window.localStorage.getItem("blackglass.density")).toBe("regular");
+    expect(window.localStorage.getItem("stonehush.density")).toBe("regular");
     expect(document.documentElement.dataset.density).toBe("regular");
 
     const toggle = screen.getByRole("switch", { name: "Reduced motion" });
     fireEvent.click(toggle);
-    expect(window.localStorage.getItem("blackglass.reducedMotion")).toBe("true");
+    expect(window.localStorage.getItem("stonehush.reducedMotion")).toBe("true");
     expect(document.documentElement.dataset.reducedMotion).toBe("true");
     expect(document.documentElement.classList.contains("reduce-motion")).toBe(true);
   });
 
   it("ignores malformed appearance storage and falls back to defaults", async () => {
-    window.localStorage.setItem("blackglass.glassOpacity", "oops");
-    window.localStorage.setItem("blackglass.density", "huge");
-    window.localStorage.setItem("blackglass.reducedMotion", "maybe");
+    window.localStorage.setItem("stonehush.glassOpacity", "oops");
+    window.localStorage.setItem("stonehush.density", "huge");
+    window.localStorage.setItem("stonehush.reducedMotion", "maybe");
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     await renderApp("/settings");
     await openAppearanceSection();
@@ -1116,23 +1118,23 @@ describe("Appearance local preferences", () => {
     await openAppearanceSection();
 
     act(() => {
-      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "32" }));
+      window.dispatchEvent(new StorageEvent("storage", { key: "stonehush.glassOpacity", newValue: "32" }));
     });
     expect((screen.getByRole("slider", { name: "Glass opacity" }) as HTMLInputElement).value).toBe("32");
 
     act(() => {
-      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.density", newValue: "regular" }));
+      window.dispatchEvent(new StorageEvent("storage", { key: "stonehush.density", newValue: "regular" }));
     });
     expect((screen.getByRole("combobox", { name: "Density" }) as HTMLSelectElement).value).toBe("regular");
 
     act(() => {
-      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.reducedMotion", newValue: "true" }));
+      window.dispatchEvent(new StorageEvent("storage", { key: "stonehush.reducedMotion", newValue: "true" }));
     });
     expect(screen.getByRole("switch", { name: "Reduced motion" }).getAttribute("aria-checked")).toBe("true");
   });
 
   it("rejects out-of-range glass values from storage and events and clamps UI", async () => {
-    window.localStorage.setItem("blackglass.glassOpacity", "4");
+    window.localStorage.setItem("stonehush.glassOpacity", "4");
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     await renderApp("/settings");
     await openAppearanceSection();
@@ -1144,27 +1146,27 @@ describe("Appearance local preferences", () => {
     expect(document.querySelector('output[for="glass-opacity"]')?.textContent).toContain("26%");
 
     act(() => {
-      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "4" }));
+      window.dispatchEvent(new StorageEvent("storage", { key: "stonehush.glassOpacity", newValue: "4" }));
     });
     expect(slider.value).toBe("26");
     act(() => {
-      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "41" }));
+      window.dispatchEvent(new StorageEvent("storage", { key: "stonehush.glassOpacity", newValue: "41" }));
     });
     expect(slider.value).toBe("26");
     act(() => {
-      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "0" }));
+      window.dispatchEvent(new StorageEvent("storage", { key: "stonehush.glassOpacity", newValue: "0" }));
     });
     expect(slider.value).toBe("26");
     act(() => {
-      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "100" }));
+      window.dispatchEvent(new StorageEvent("storage", { key: "stonehush.glassOpacity", newValue: "100" }));
     });
     expect(slider.value).toBe("26");
     act(() => {
-      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "5" }));
+      window.dispatchEvent(new StorageEvent("storage", { key: "stonehush.glassOpacity", newValue: "5" }));
     });
     expect(slider.value).toBe("5");
     act(() => {
-      window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "40" }));
+      window.dispatchEvent(new StorageEvent("storage", { key: "stonehush.glassOpacity", newValue: "40" }));
     });
     expect(slider.value).toBe("40");
   });
@@ -1189,20 +1191,20 @@ describe("Appearance local preferences", () => {
       await renderApp("/plugins");
       expect(document.documentElement.dataset.glassOpacity).toBe("26");
       expect(document.documentElement.dataset.density).toBe("compact");
-      window.localStorage.setItem("blackglass.glassOpacity", "32");
+      window.localStorage.setItem("stonehush.glassOpacity", "32");
       act(() => {
-        window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "32" }));
+        window.dispatchEvent(new StorageEvent("storage", { key: "stonehush.glassOpacity", newValue: "32" }));
       });
       expect(document.documentElement.dataset.glassOpacity).toBe("32");
-      window.localStorage.setItem("blackglass.density", "regular");
+      window.localStorage.setItem("stonehush.density", "regular");
       act(() => {
-        window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.density", newValue: "regular" }));
+        window.dispatchEvent(new StorageEvent("storage", { key: "stonehush.density", newValue: "regular" }));
       });
       expect(document.documentElement.dataset.density).toBe("regular");
       document.documentElement.dataset.theme = "dark";
-      window.localStorage.setItem("blackglass.glassOpacity", "32");
+      window.localStorage.setItem("stonehush.glassOpacity", "32");
       act(() => {
-        window.dispatchEvent(new StorageEvent("storage", { key: "blackglass.glassOpacity", newValue: "32" }));
+        window.dispatchEvent(new StorageEvent("storage", { key: "stonehush.glassOpacity", newValue: "32" }));
       });
       const beforeGlass = document.documentElement.style.getPropertyValue("--glass");
       document.documentElement.dataset.theme = "light";
@@ -1226,13 +1228,13 @@ describe("Application routes", () => {
   });
 
   it.each([
-    ["/", "Workspace", "Dashboard"],
-    ["/engagements", "Engagements", "Engagements"],
-    ["/plugins", "Plugins", null],
-    ["/settings", "Appearance", null],
+    ["/", "Workspace"],
+    ["/engagements", "Engagements"],
+    ["/plugins", "Plugins"],
+    ["/settings", "Appearance"],
   ])(
     "renders a direct entry for %s inside the shell",
-    async (path, heading, globalActiveLabel) => {
+    async (path, heading) => {
       await renderApp(path);
 
       expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeTruthy();
@@ -1247,57 +1249,32 @@ describe("Application routes", () => {
         return;
       }
 
-      const globalNavigation = screen.getByRole("navigation", { name: "Global" });
-      const activeGlobalLinks = within(globalNavigation)
-        .getAllByRole("link")
-        .filter((link) => link.getAttribute("aria-current") === "page");
-      if (globalActiveLabel === null) {
-        // Plugins lives in the sidebar footer, not the global navigation.
-        expect(activeGlobalLinks).toHaveLength(0);
+      // The sidebar engagement list is the navigator; no global nav section remains.
+      expect(screen.queryByRole("navigation", { name: "Global" })).toBeNull();
+      if (path === "/plugins") {
+        // Plugins lives in the sidebar footer and still carries active state.
         expect(screen.getByRole("link", { name: "Plugins" }).getAttribute("aria-current")).toBe(
           "page",
         );
-      } else {
-        expect(activeGlobalLinks).toHaveLength(1);
-        expect(activeGlobalLinks[0]?.textContent).toBe(globalActiveLabel);
+      }
+      // The brand always links home.
+      const homeLinks = screen.getAllByRole("link", { name: "Stonehush home" });
+      expect(homeLinks.length).toBeGreaterThanOrEqual(1);
+      for (const link of homeLinks) {
+        expect(link.getAttribute("href")).toBe("/");
       }
     },
   );
 
-  it("navigates with exact active state while preserving the shell node", async () => {
-    await renderApp();
+  it("navigates home via the brand link while preserving the shell node", async () => {
+    await renderApp("/plugins");
     const shell = screen.getByTestId("application-shell");
-    const globalNavigation = screen.getByRole("navigation", { name: "Global" });
 
-    expect(
-      within(globalNavigation)
-        .getByRole("link", { name: "Dashboard" })
-        .getAttribute("aria-current"),
-    ).toBe("page");
-    fireEvent.click(within(globalNavigation).getByRole("link", { name: "Engagements" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "Engagements" })).toBeTruthy();
-    expect(screen.getByTestId("application-shell")).toBe(shell);
-    expect(
-      within(globalNavigation)
-        .getByRole("link", { name: "Dashboard" })
-        .getAttribute("aria-current"),
-    ).toBeNull();
-    expect(
-      within(globalNavigation)
-        .getByRole("link", { name: "Engagements" })
-        .getAttribute("aria-current"),
-    ).toBe("page");
-
-    // Plugins moved into the sidebar footer next to Settings.
-    fireEvent.click(screen.getByRole("link", { name: "Plugins" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "Plugins" })).toBeTruthy();
-    expect(screen.getByTestId("application-shell")).toBe(shell);
-    expect(
-      within(globalNavigation)
-        .getByRole("link", { name: "Engagements" })
-        .getAttribute("aria-current"),
-    ).toBeNull();
     expect(screen.getByRole("link", { name: "Plugins" }).getAttribute("aria-current")).toBe("page");
+    fireEvent.click(screen.getAllByRole("link", { name: "Stonehush home" })[0]!);
+    expect(await screen.findByRole("heading", { level: 1, name: "Workspace" })).toBeTruthy();
+    expect(screen.getByTestId("application-shell")).toBe(shell);
+    expect(screen.getByRole("link", { name: "Plugins" }).getAttribute("aria-current")).toBeNull();
   });
 
   it("renders the reference appearance layout with paired orbs and no extra Scheme block", async () => {
@@ -1306,7 +1283,7 @@ describe("Application routes", () => {
     // Settings now opens on Appearance per the glass mock.
     expect(screen.getByRole("heading", { level: 1, name: "Appearance" })).toBeTruthy();
     expect(
-      screen.getByText("Choose how Blackglass looks. Use a built-in theme or make your own."),
+      screen.getByText("Choose how Stonehush looks. Use a built-in theme or make your own."),
     ).toBeTruthy();
     expect(screen.getByText("Left bubble is dark. Right bubble is light.")).toBeTruthy();
     // No full-width Scheme block; orbs are the scheme selection.
@@ -1394,7 +1371,7 @@ describe("Application routes", () => {
     window.innerWidth = 500;
     fireEvent(window, new Event("resize"));
     fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
-    const dialog = await screen.findByRole("dialog", { name: "Blackglass navigation" });
+    const dialog = await screen.findByRole("dialog", { name: "Stonehush navigation" });
     expect(within(dialog).queryByRole("radio")).toBeNull();
     expect(within(dialog).getByRole("button", { name: "New engagement" })).toBeTruthy();
     expect(screen.queryByRole("radio")).toBeNull();
@@ -1405,13 +1382,13 @@ describe("Application routes", () => {
     await renderApp();
 
     fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
-    let dialog = await screen.findByRole("dialog", { name: "Blackglass navigation" });
-    fireEvent.click(within(dialog).getByRole("link", { name: "Engagements" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "Engagements" })).toBeTruthy();
+    let dialog = await screen.findByRole("dialog", { name: "Stonehush navigation" });
+    fireEvent.click(within(dialog).getByRole("link", { name: "Plugins" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Plugins" })).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
     fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
-    dialog = await screen.findByRole("dialog", { name: "Blackglass navigation" });
+    dialog = await screen.findByRole("dialog", { name: "Stonehush navigation" });
     fireEvent.click(within(dialog).getByRole("link", { name: "Settings" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Appearance" })).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -1455,13 +1432,13 @@ describe("Application routes", () => {
     expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Available" }));
   });
 
-  it("shows the v5 plugins header with Blackglass breadcrumb and disabled Install from path", async () => {
+  it("shows the v5 plugins header with Stonehush breadcrumb and disabled Install from path", async () => {
     await renderApp("/plugins");
 
     const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
-    expect(within(breadcrumb).getByText("Blackglass")).toBeTruthy();
+    expect(within(breadcrumb).getByText("Stonehush")).toBeTruthy();
     expect(within(breadcrumb).getByText("Plugins")).toBeTruthy();
-    expect(within(breadcrumb).getByRole("link", { name: "Blackglass" }).getAttribute("href")).toBe("/");
+    expect(within(breadcrumb).getByRole("link", { name: "Stonehush" }).getAttribute("href")).toBe("/");
 
     const install = screen.getByRole("button", { name: "Install from path" });
     expect(install.hasAttribute("disabled") || install.getAttribute("aria-disabled") === "true").toBe(true);
@@ -1546,7 +1523,7 @@ describe("Application routes", () => {
     expect(document.querySelector(".shell-stage-header")).toBeNull();
     // Mobile navigation stays usable without the desktop stage header.
     fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
-    expect(await screen.findByRole("dialog", { name: "Blackglass navigation" })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: "Stonehush navigation" })).toBeTruthy();
     settings.unmount();
 
     const plugins = await renderApp("/plugins");
@@ -1565,11 +1542,7 @@ describe("Application routes", () => {
       "/",
     );
     expect(screen.getByTestId("application-shell")).toBeTruthy();
-    expect(
-      within(screen.getByRole("navigation", { name: "Global" }))
-        .getAllByRole("link")
-        .filter((link) => link.getAttribute("aria-current") === "page"),
-    ).toHaveLength(0);
+    expect(screen.queryByRole("navigation", { name: "Global" })).toBeNull();
   });
 
   it("keeps unknown engagement paths inside the shell", async () => {

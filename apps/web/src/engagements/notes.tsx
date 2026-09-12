@@ -1,5 +1,5 @@
-import { Button, LoadingRegion, RecoverableError, Skeleton, StaleDataState } from "@blackglass/ui";
-import type { Attachment } from "@blackglass/contracts";
+import { Button, LoadingRegion, RecoverableError, Skeleton, StaleDataState } from "@stonehush/ui";
+import type { Attachment } from "@stonehush/contracts";
 import { useEffect, useId, useRef, useState, type RefObject } from "react";
 
 import { engagementNotesMutationMessage, isNotesRevisionConflict } from "./errors.js";

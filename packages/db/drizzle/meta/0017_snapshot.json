@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "76413355-8a01-4b3a-ad7a-76dbd9145138",
+  "id": "4dc9f913-f91d-4af2-9fc3-d38ecaf1cfec",
   "prevId": "2dac2e06-e8db-4b13-a17e-eca3698cb47e",
   "tables": {
     "action_covered_destinations": {
@@ -818,8 +818,8 @@
         }
       },
       "foreignKeys": {
-        "advisor_turn_belongs_to_engagement": {
-          "name": "advisor_turn_belongs_to_engagement",
+        "advisor_turns_engagement_id_engagements_id_fk": {
+          "name": "advisor_turns_engagement_id_engagements_id_fk",
           "tableFrom": "advisor_turns",
           "tableTo": "engagements",
           "columnsFrom": [
@@ -1872,6 +1872,14 @@
           "notNull": true,
           "autoincrement": false
         },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
         "created_at": {
           "name": "created_at",
           "type": "text",
@@ -1939,6 +1947,10 @@
         "finding_evidence_json": {
           "name": "finding_evidence_json",
           "value": "json_valid(\"findings\".\"evidence_artifact_ids_json\") and length(cast(\"findings\".\"evidence_artifact_ids_json\" as blob)) <= 8192"
+        },
+        "finding_revision": {
+          "name": "finding_revision",
+          "value": "\"findings\".\"revision\" >= 1"
         },
         "finding_created_at": {
           "name": "finding_created_at",
@@ -3427,355 +3439,6 @@
         "settings_updated_at": {
           "name": "settings_updated_at",
           "value": "length(\"settings\".\"updated_at\") >= 20"
-        }
-      }
-    },
-    "evidence_excerpts": {
-      "name": "evidence_excerpts",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "contract_version": {
-          "name": "contract_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "engagement_id": {
-          "name": "engagement_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "run_id": {
-          "name": "run_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "artifact_id": {
-          "name": "artifact_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "artifact_digest": {
-          "name": "artifact_digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "stream": {
-          "name": "stream",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "byte_offset": {
-          "name": "byte_offset",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "byte_length": {
-          "name": "byte_length",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "content": {
-          "name": "content",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "redactions": {
-          "name": "redactions",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "target_note": {
-          "name": "target_note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "evidence_excerpt_engagement_created_idx": {
-          "name": "evidence_excerpt_engagement_created_idx",
-          "columns": [
-            "engagement_id",
-            "created_at",
-            "id"
-          ],
-          "isUnique": false
-        },
-        "evidence_excerpt_run_idx": {
-          "name": "evidence_excerpt_run_idx",
-          "columns": [
-            "engagement_id",
-            "run_id"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "evidence_excerpts_engagement_id_engagements_id_fk": {
-          "name": "evidence_excerpts_engagement_id_engagements_id_fk",
-          "tableFrom": "evidence_excerpts",
-          "tableTo": "engagements",
-          "columnsFrom": [
-            "engagement_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "evidence_excerpt_contract_version": {
-          "name": "evidence_excerpt_contract_version",
-          "value": "\"evidence_excerpts\".\"contract_version\" = 1"
-        },
-        "evidence_excerpt_artifact_id": {
-          "name": "evidence_excerpt_artifact_id",
-          "value": "length(\"evidence_excerpts\".\"artifact_id\") between 1 and 127 and substr(\"evidence_excerpts\".\"artifact_id\", 1, 1) glob '[a-z0-9]' and \"evidence_excerpts\".\"artifact_id\" not glob '*[^a-z0-9-]*'"
-        },
-        "evidence_excerpt_artifact_digest": {
-          "name": "evidence_excerpt_artifact_digest",
-          "value": "length(\"evidence_excerpts\".\"artifact_digest\") = 71 and \"evidence_excerpts\".\"artifact_digest\" glob 'sha256:[0-9a-f]*' and \"evidence_excerpts\".\"artifact_digest\" not glob 'sha256:*[^0-9a-f]*'"
-        },
-        "evidence_excerpt_stream": {
-          "name": "evidence_excerpt_stream",
-          "value": "\"evidence_excerpts\".\"stream\" in ('stdout', 'stderr')"
-        },
-        "evidence_excerpt_range": {
-          "name": "evidence_excerpt_range",
-          "value": "\"evidence_excerpts\".\"byte_offset\" >= 0 and \"evidence_excerpts\".\"byte_length\" between 1 and 8192 and \"evidence_excerpts\".\"byte_offset\" + \"evidence_excerpts\".\"byte_length\" <= 1073741824"
-        },
-        "evidence_excerpt_content_bytes": {
-          "name": "evidence_excerpt_content_bytes",
-          "value": "length(cast(\"evidence_excerpts\".\"content\" as blob)) <= 16384"
-        },
-        "evidence_excerpt_redactions": {
-          "name": "evidence_excerpt_redactions",
-          "value": "\"evidence_excerpts\".\"redactions\" >= 0"
-        },
-        "evidence_excerpt_target_note": {
-          "name": "evidence_excerpt_target_note",
-          "value": "\"evidence_excerpts\".\"target_note\" is null or length(\"evidence_excerpts\".\"target_note\") between 1 and 120"
-        },
-        "evidence_excerpt_created_at": {
-          "name": "evidence_excerpt_created_at",
-          "value": "length(\"evidence_excerpts\".\"created_at\") >= 20"
-        }
-      }
-    },
-    "evidence_attachments": {
-      "name": "evidence_attachments",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "contract_version": {
-          "name": "contract_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "engagement_id": {
-          "name": "engagement_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "filename": {
-          "name": "filename",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "mime": {
-          "name": "mime",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "size_bytes": {
-          "name": "size_bytes",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "digest": {
-          "name": "digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "caption": {
-          "name": "caption",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "target_label": {
-          "name": "target_label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "parent_attachment_id": {
-          "name": "parent_attachment_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "crop_rect_json": {
-          "name": "crop_rect_json",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "content_base64": {
-          "name": "content_base64",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "evidence_attachment_engagement_created_idx": {
-          "name": "evidence_attachment_engagement_created_idx",
-          "columns": [
-            "engagement_id",
-            "created_at",
-            "id"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "evidence_attachments_engagement_id_engagements_id_fk": {
-          "name": "evidence_attachments_engagement_id_engagements_id_fk",
-          "tableFrom": "evidence_attachments",
-          "tableTo": "engagements",
-          "columnsFrom": [
-            "engagement_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "evidence_attachment_parent_fk": {
-          "name": "evidence_attachment_parent_fk",
-          "tableFrom": "evidence_attachments",
-          "tableTo": "evidence_attachments",
-          "columnsFrom": [
-            "parent_attachment_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "evidence_attachment_contract_version": {
-          "name": "evidence_attachment_contract_version",
-          "value": "\"evidence_attachments\".\"contract_version\" = 1"
-        },
-        "evidence_attachment_filename": {
-          "name": "evidence_attachment_filename",
-          "value": "length(\"evidence_attachments\".\"filename\") between 1 and 128 and \"evidence_attachments\".\"filename\" not glob '*[^a-z0-9-]*'"
-        },
-        "evidence_attachment_mime": {
-          "name": "evidence_attachment_mime",
-          "value": "\"evidence_attachments\".\"mime\" in ('image/png', 'image/jpeg', 'image/gif', 'image/webp')"
-        },
-        "evidence_attachment_size_bytes": {
-          "name": "evidence_attachment_size_bytes",
-          "value": "\"evidence_attachments\".\"size_bytes\" between 1 and 2000000"
-        },
-        "evidence_attachment_digest": {
-          "name": "evidence_attachment_digest",
-          "value": "length(\"evidence_attachments\".\"digest\") = 71 and \"evidence_attachments\".\"digest\" glob 'sha256:[0-9a-f]*' and \"evidence_attachments\".\"digest\" not glob 'sha256:*[^0-9a-f]*'"
-        },
-        "evidence_attachment_caption": {
-          "name": "evidence_attachment_caption",
-          "value": "length(\"evidence_attachments\".\"caption\") <= 280"
-        },
-        "evidence_attachment_target_label": {
-          "name": "evidence_attachment_target_label",
-          "value": "\"evidence_attachments\".\"target_label\" is null or length(\"evidence_attachments\".\"target_label\") between 1 and 120"
-        },
-        "evidence_attachment_crop_json": {
-          "name": "evidence_attachment_crop_json",
-          "value": "\"evidence_attachments\".\"crop_rect_json\" is null or (json_valid(\"evidence_attachments\".\"crop_rect_json\") and length(cast(\"evidence_attachments\".\"crop_rect_json\" as blob)) <= 1024)"
-        },
-        "evidence_attachment_content_bytes": {
-          "name": "evidence_attachment_content_bytes",
-          "value": "length(cast(\"evidence_attachments\".\"content_base64\" as blob)) between 1 and 2000000"
-        },
-        "evidence_attachment_created_at": {
-          "name": "evidence_attachment_created_at",
-          "value": "length(\"evidence_attachments\".\"created_at\") >= 20"
         }
       }
     }

@@ -1,5 +1,5 @@
 import { redactAdvisorText } from "./advisor-redact.js";
-import type { Excerpt } from "@blackglass/contracts";
+import type { Excerpt } from "@stonehush/contracts";
 
 /**
  * Pure excerpt helpers for the STONE-3 fast-capture slice. Byte ranges are

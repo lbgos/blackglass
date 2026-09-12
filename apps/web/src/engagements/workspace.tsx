@@ -1,5 +1,5 @@
-import type { Engagement } from "@blackglass/contracts";
-import { ADVISOR_FINDING_IDS_MAX } from "@blackglass/contracts";
+import type { Engagement } from "@stonehush/contracts";
+import { ADVISOR_FINDING_IDS_MAX } from "@stonehush/contracts";
 import {
   Button,
   EmptyState,
@@ -7,7 +7,7 @@ import {
   RecoverableError,
   Skeleton,
   StaleDataState,
-} from "@blackglass/ui";
+} from "@stonehush/ui";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 

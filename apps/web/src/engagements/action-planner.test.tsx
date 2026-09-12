@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { PersistedActionSchema, type PersistedAction } from "@blackglass/contracts";
-import { ThemeProvider } from "@blackglass/ui";
+import { PersistedActionSchema, type PersistedAction } from "@stonehush/contracts";
+import { ThemeProvider } from "@stonehush/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";

@@ -12,7 +12,7 @@ import {
   type ExcerptSearchResponse,
   type ExcerptSourceRef,
   type RunOutputResponse,
-} from "@blackglass/contracts";
+} from "@stonehush/contracts";
 import { queryOptions, skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 export const RUN_OUTPUT_QUERY_ERROR_MESSAGE = "The raw output request failed.";

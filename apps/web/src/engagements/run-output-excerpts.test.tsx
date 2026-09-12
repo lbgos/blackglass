@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { ThemeProvider } from "@blackglass/ui";
+import { ThemeProvider } from "@stonehush/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -169,7 +169,7 @@ describe("run output fast capture", () => {
       expect(screen.getByTestId("raw-output-stdout")).toBeTruthy();
     });
 
-    fireEvent.change(screen.getByLabelText("Search within output"), {
+    fireEvent.change(screen.getByPlaceholderText("error, login, 10.0.0"), {
       target: { value: "line two" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Search" }));

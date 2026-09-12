@@ -16,13 +16,13 @@ import {
   ExcerptSourceListResponseSchema,
   EngagementIdParamsSchema,
   UpdateAttachmentRequestSchema,
-} from "@blackglass/contracts";
+} from "@stonehush/contracts";
 import type {
   EngagementRepository,
   EvidenceGrantRepository,
   ExcerptRepository,
   RunOutputRepository,
-} from "@blackglass/db";
+} from "@stonehush/db";
 import {
   byteOffsetOfCharOffset,
   deriveAttachmentName,
@@ -31,7 +31,7 @@ import {
   maskExcerptText,
   validateExcerptRange,
   windowSnippetFromChars,
-} from "@blackglass/domain";
+} from "@stonehush/domain";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 import type { EvidenceStore } from "./evidence/evidence-store.js";
@@ -616,15 +616,15 @@ export function registerExcerptRoutes(
       const created = excerpts.createAttachment({
         engagementId: params.data.engagementId,
         filename: deriveAttachmentName(
-          body.data.caption === "" ? `${parent.filename}-derived` : body.data.caption,
-          `${parent.filename}-derived`,
+          body.data.caption === "" ? `${parent.value.filename}-derived` : body.data.caption,
+          `${parent.value.filename}-derived`,
         ),
-        mime: parent.mime,
+        mime: parent.value.mime,
         sizeBytes: raw.length,
         digest: sha256Digest(raw),
         caption: body.data.caption ?? "",
-        targetLabel: parent.targetLabel,
-        parentAttachmentId: parent.id,
+        targetLabel: parent.value.targetLabel,
+        parentAttachmentId: parent.value.id,
         cropRectJson: body.data.crop === undefined ? null : JSON.stringify(body.data.crop),
         contentBase64: parentBytes.value.contentBase64,
       });

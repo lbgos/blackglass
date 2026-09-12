@@ -14,13 +14,13 @@ import {
   commandJsonV1CreateActionDigest,
   type ActionMutationError,
   type JsonValue,
-} from "@blackglass/contracts";
+} from "@stonehush/contracts";
 import type {
   ActionRepositoryError,
   EngagementWriteTransaction,
   OperatorCommandRepository,
   RepositoryResult,
-} from "@blackglass/db";
+} from "@stonehush/db";
 import type { FastifyInstance } from "fastify";
 
 import {

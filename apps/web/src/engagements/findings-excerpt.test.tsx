@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { ThemeProvider } from "@blackglass/ui";
+import { ThemeProvider } from "@stonehush/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -195,6 +195,9 @@ describe("findings creation from excerpt", () => {
     await renderWorkspace(`/engagements/${ENGAGEMENT_ID}?tab=findings`);
 
     const picker = (await screen.findByLabelText("Linked excerpt")) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(picker.options.length).toBeGreaterThan(1);
+    });
     fireEvent.change(picker, { target: { value: STAGED_EXCERPT.id } });
     const notes = screen.getByLabelText("Notes Markdown") as HTMLTextAreaElement;
     expect(notes.value).toContain("Source: run run-exce");

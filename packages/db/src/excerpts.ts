@@ -1,4 +1,4 @@
-import type { Attachment, Excerpt } from "@blackglass/contracts";
+import type { Attachment, Excerpt } from "@stonehush/contracts";
 import { randomUUID } from "node:crypto";
 import { and, asc, eq } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";

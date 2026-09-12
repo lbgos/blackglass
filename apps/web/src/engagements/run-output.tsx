@@ -1,6 +1,6 @@
-import type { Excerpt, RunOutputResponse } from "@blackglass/contracts";
-import { formatExcerptSourceLabel, selectionBytesFromText } from "@blackglass/domain";
-import { Button, LoadingRegion, RecoverableError, Skeleton } from "@blackglass/ui";
+import type { Excerpt, RunOutputResponse } from "@stonehush/contracts";
+import { formatExcerptSourceLabel, selectionBytesFromText } from "@stonehush/domain";
+import { Button, LoadingRegion, RecoverableError, Skeleton } from "@stonehush/ui";
 import { useRouterState } from "@tanstack/react-router";
 import { useState } from "react";
 

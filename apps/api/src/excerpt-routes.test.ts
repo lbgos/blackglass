@@ -6,7 +6,7 @@ import path from "node:path";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ExcerptRepository, EngagementRepository, openEngagementDatabase } from "@blackglass/db";
+import { ExcerptRepository, EngagementRepository, openEngagementDatabase } from "@stonehush/db";
 
 import type { EvidenceStore } from "./evidence/evidence-store.js";
 import { registerExcerptRoutes } from "./excerpt-routes.js";
@@ -28,9 +28,9 @@ interface Harness {
   database: ReturnType<typeof openEngagementDatabase>;
   excerpts: ExcerptRepository;
   inject: (options: {
-    method: string;
+    method: "GET" | "POST" | "PATCH";
     url: string;
-    payload?: unknown;
+    payload?: Record<string, unknown>;
   }) => Promise<{ statusCode: number; json(): unknown }>;
   artifacts: Map<string, Buffer>;
   extraArtifacts: { artifactId: string; kind: string }[];
@@ -40,7 +40,7 @@ interface Harness {
 const harnesses: Harness[] = [];
 
 async function createHarness(): Promise<Harness> {
-  const directory = mkdtempSync(path.join(tmpdir(), "blackglass-excerpt-routes-"));
+  const directory = mkdtempSync(path.join(tmpdir(), "stonehush-excerpt-routes-"));
   chmodSync(directory, 0o700);
   const database = openEngagementDatabase({ dataDirectory: directory });
   const excerpts = new ExcerptRepository(database.db);
@@ -73,7 +73,7 @@ async function createHarness(): Promise<Harness> {
             activeScopeRevision: null,
           },
         } as unknown as ReturnType<
-          import("@blackglass/db").EngagementRepository["getEngagement"]
+          import("@stonehush/db").EngagementRepository["getEngagement"]
         >;
       },
     },
@@ -88,7 +88,7 @@ async function createHarness(): Promise<Harness> {
           ok: true as const,
           run: { id: RUN_ID, engagementId: ENGAGEMENT_ID },
         } as unknown as ReturnType<
-          import("@blackglass/db").RunOutputRepository["runForEngagement"]
+          import("@stonehush/db").RunOutputRepository["runForEngagement"]
         >;
       },
       artifactsForRun: (runId: string) => {
@@ -126,7 +126,7 @@ async function createHarness(): Promise<Harness> {
           ok: true as const,
           artifacts: rows,
         } as unknown as ReturnType<
-          import("@blackglass/db").RunOutputRepository["artifactsForRun"]
+          import("@stonehush/db").RunOutputRepository["artifactsForRun"]
         >;
       },
     },
@@ -143,7 +143,7 @@ async function createHarness(): Promise<Harness> {
           digest: sha256(STDOUT_BYTES),
           completeness: "complete",
         } as unknown as ReturnType<
-          import("@blackglass/db").EvidenceGrantRepository["publishedArtifactForEngagement"]
+          import("@stonehush/db").EvidenceGrantRepository["publishedArtifactForEngagement"]
         >;
       },
     },
@@ -194,11 +194,11 @@ async function createHarness(): Promise<Harness> {
     extraArtifacts,
     archived,
     inject: async (options) => {
-      const response = await app.inject({
-        method: options.method,
-        url: options.url,
-        payload: options.payload,
-      });
+      const response = await app.inject(
+        options.payload === undefined
+          ? { method: options.method, url: options.url }
+          : { method: options.method, url: options.url, payload: options.payload },
+      );
       return { statusCode: response.statusCode, json: () => response.json() as unknown };
     },
   };
@@ -253,8 +253,8 @@ describe("excerpt routes", () => {
         runId: RUN_ID,
         artifactId: ARTIFACT_ID,
         stream: "stdout",
-        byteOffset: 32,
-        byteLength: 48,
+        byteOffset: 31,
+        byteLength: 44,
       },
     });
     expect(secret.statusCode).toBe(201);
